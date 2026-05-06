@@ -1,0 +1,11 @@
+# 用户数据
+characters/
+config.json
+*.png
+*.jpg
+*.ico
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
