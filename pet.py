@@ -18,7 +18,8 @@ from PySide6.QtGui import (
     QCursor
 )
 from config import CHARACTER_INFO, load_config, save_config
-from api import APIClient
+from harness_adapter import HarnessPetAdapter
+from hanako_monitor import HanakoMonitor
 
 
 # ─── 对话气泡 ───────────────────────────────────────────
@@ -172,6 +173,16 @@ class PetWindow(QWidget):
         self._walk_timer.start(4000)
         self._is_walking = False
 
+        # ── Hanako 状态监控 ──
+        self._hanako_monitor = HanakoMonitor(on_state_change=self._on_hanako_state)
+        self._hanako_poll_timer = QTimer(self)
+        self._hanako_poll_timer.timeout.connect(self._hanako_monitor.tick)
+        self._hanako_poll_timer.start(800)
+        self._bubble_message = ""    # 当前气泡文字，用于超时隐藏
+        self._bubble_timer = QTimer(self)
+        self._bubble_timer.timeout.connect(self._clear_hanako_bubble)
+        self._bubble_timer.setSingleShot(True)
+
         # ── 帧动画 ──
         self._anim_frames = {}    # {'idle': [QPixmap,...], 'walk': [QPixmap,...]}
         self._anim_frame_tops = {}  # {'idle': [top_y, ...], 'walk': [top_y, ...]}
@@ -191,10 +202,10 @@ class PetWindow(QWidget):
     def _setup_api(self):
         api_cfg = self.config.get("api", {})
         if api_cfg.get("api_key"):
-            self.api_client = APIClient(
-                api_cfg["base_url"],
-                api_cfg["api_key"],
-                api_cfg["model"]
+            self.api_client = HarnessPetAdapter(
+                base_url=api_cfg["base_url"],
+                api_key=api_cfg["api_key"],
+                model=api_cfg["model"],
             )
 
     # ── 窗口设置 ──
@@ -602,6 +613,38 @@ class PetWindow(QWidget):
 
     # ── 右键菜单 ──
 
+    # ── Hanako 状态回调 ──
+
+    def _on_hanako_state(self, anim_name: str, message: str):
+        """Hanako 状态变化时的回调"""
+        # 如果在聊天或行走中，不打断
+        if self._is_thinking or self._is_walking or self.input_widget.isVisible():
+            return
+
+        # 切换动画
+        if anim_name in self._anim_frames:
+            self._set_anim_seq(anim_name)
+        else:
+            self._set_anim_seq('idle')
+
+        # 显示气泡
+        if message:
+            self._bubble_message = message
+            self.bubble.set_text(message)
+            self._reposition_bubble()
+            self.bubble.show()
+            self.bubble.raise_()
+            self._bubble_timer.start(5000)  # 5 秒后自动隐藏
+        else:
+            self._bubble_message = ""
+            self._bubble_timer.stop()
+            self.bubble.hide()
+
+    def _clear_hanako_bubble(self):
+        """超时隐藏气泡"""
+        self.bubble.hide()
+        self._bubble_message = ""
+
     def _show_context_menu(self, pos):
         menu = QMenu(self)
         menu.setStyleSheet("""
@@ -659,6 +702,7 @@ class PetWindow(QWidget):
     # ── 关闭 ──
 
     def closeEvent(self, event):
+        self._hanako_monitor.force_idle()
         pos = self.pos()
         self.config.setdefault("window", {})["x"] = pos.x()
         self.config.setdefault("window", {})["y"] = pos.y()

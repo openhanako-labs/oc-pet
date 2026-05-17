@@ -1,6 +1,7 @@
 # 用户数据
 characters/
 config.json
+hanako-state.json
 *.png
 *.jpg
 *.ico
@@ -9,3 +10,8 @@ config.json
 __pycache__/
 *.pyc
 *.pyo
+
+# 构建产物
+output/
+import-pets/
+启动桌宠_debug.bat
