@@ -3,10 +3,11 @@ import os
 import json
 import math
 import random
+import time
+from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QPushButton, QMenu, QDialog, QFormLayout,
-    QDialogButtonBox, QComboBox, QTextEdit
+    QLineEdit, QPushButton, QMenu, QDialog, QFormLayout
 )
 from PySide6.QtCore import (
     Qt, QTimer, QPoint, QRect, QEvent,
@@ -17,131 +18,131 @@ from PySide6.QtGui import (
     QFontMetrics, QAction, QIcon, QTransform, QImage,
     QCursor
 )
-from config import CHARACTER_INFO, load_config, save_config
-from harness_adapter import HarnessPetAdapter
+from config import CHARACTER_INFO, EXPRESSION_MAP, load_config, save_config
 from hanako_monitor import HanakoMonitor
-
 
 # ─── 对话气泡 ───────────────────────────────────────────
 
 class ChatBubble(QWidget):
-    """头顶对话气泡（半透明，窄版）"""
+    """头顶对话气泡 — 白底圆角阴影 + 淡入动画 + 三角指针"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._text = ""
-        self._padding = 10
-        self._max_width = 180
-        self._bg_color = QColor(15, 15, 25, 220)
-        self._text_color = QColor(230, 230, 240)
-        self._font = QFont("Microsoft YaHei UI", 9)
+        self._padding_h = 14
+        self._padding_v = 10
+        self._max_width = 200
+        self._bg_color = QColor(255, 255, 255, 240)
+        self._text_color = QColor(40, 40, 50)
+        self._shadow_color = QColor(0, 0, 0, 40)
+        self._font = QFont("Microsoft YaHei UI", 10)
         self.setFont(self._font)
         self.setMinimumSize(40, 30)
+
+        # 淡入动画
+        self._fade_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._fade_anim.setDuration(250)
+        self._fade_anim.setStartValue(0.0)
+        self._fade_anim.setEndValue(1.0)
+
+        self._flash_timer = QTimer(self)
+        self._flash_timer.timeout.connect(self._flash_tick)
+        self._flash_count = 0
+        self._bright = False
         self.hide()
 
-    def set_text(self, text: str):
+    def set_text(self, text: str, bright: bool = False):
         self._text = text
+        self._bright = bright
+        if bright:
+            self._bg_color = QColor(255, 235, 200, 245)
+            self._text_color = QColor(80, 40, 10)
+        else:
+            self._bg_color = QColor(255, 255, 255, 240)
+            self._text_color = QColor(40, 40, 50)
         self._update_size()
+        self.update()
+        self.show()
+        self.raise_()
+        # 淡入
+        self.setWindowOpacity(0.0)
+        self._fade_anim.stop()
+        self._fade_anim.start()
+        if bright:
+            self._start_flash()
+
+    def hide_bubble(self):
+        self._fade_anim.stop()
+        self.hide()
+
+    def _start_flash(self):
+        self._flash_count = 0
+        self._flash_timer.start(300)
+
+    def _flash_tick(self):
+        self._flash_count += 1
+        if self._flash_count > 12:
+            self._flash_timer.stop()
+            self._flash_count = 0
         self.update()
 
     def _update_size(self):
         fm = QFontMetrics(self._font)
-        text_w = self._max_width - self._padding * 2
+        text_w = self._max_width - self._padding_h * 2 - 4
         rect = fm.boundingRect(
             QRect(0, 0, text_w, 1000),
             Qt.AlignLeft | Qt.TextWordWrap,
             self._text
         )
-        bw = rect.width() + self._padding * 2 + 14
-        bh = rect.height() + self._padding * 2 + 6
-        self.setFixedSize(max(bw, 40), max(bh, 30))
+        bw = rect.width() + self._padding_h * 2 + 16
+        bh = rect.height() + self._padding_v * 2 + 8
+        self.setFixedSize(max(bw, 50), max(bh, 36))
 
     def paintEvent(self, event):
         if not self._text:
             return
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.TextAntialiasing)
 
         w = self.width()
         h = self.height()
-        r = 10
+        r = 14
+        tri_h = 8
 
-        # 气泡主体
-        path = QPainterPath()
-        path.addRoundedRect(2, 0, w - 12, h - 6, r, r)
-        p.fillPath(path, self._bg_color)
+        flashing = self._flash_timer.isActive()
+        is_on = (self._flash_count % 2 == 0) if flashing else True
 
-        # 小三角（向下指）
-        tri = QPainterPath()
-        cx = w // 2
-        tri.moveTo(cx - 6, h - 6)
-        tri.lineTo(cx, h)
-        tri.lineTo(cx + 6, h - 6)
-        tri.closeSubpath()
-        p.fillPath(tri, self._bg_color)
+        bg = self._bg_color if is_on else QColor(255, 255, 255, 160)
+        tc = self._text_color if is_on else QColor(150, 150, 160)
+
+        body_h = h - tri_h
+
+        # 阴影层
+        shadow_path = QPainterPath()
+        shadow_path.addRoundedRect(2, 2, w - 12, body_h + 2, r, r)
+        p.fillPath(shadow_path, self._shadow_color)
+
+        # 气泡主体 + 三角
+        bubble_path = QPainterPath()
+        bubble_path.addRoundedRect(0, 0, w - 12, body_h, r, r)
+        cx = (w - 12) // 2
+        bubble_path.moveTo(cx - 7, body_h)
+        bubble_path.lineTo(cx, body_h + tri_h)
+        bubble_path.lineTo(cx + 7, body_h)
+        bubble_path.closeSubpath()
+        p.fillPath(bubble_path, bg)
 
         # 文字
-        p.setPen(self._text_color)
+        p.setPen(tc)
         text_rect = QRect(
-            self._padding, self._padding,
-            w - self._padding * 2 - 12,
-            h - self._padding * 2 - 6
+            self._padding_h, self._padding_v,
+            w - self._padding_h * 2 - 14,
+            body_h - self._padding_v * 2
         )
         p.drawText(text_rect, Qt.AlignLeft | Qt.TextWordWrap, self._text)
         p.end()
 
-
 # ─── 设置对话框 ─────────────────────────────────────────
-
-class SettingsDialog(QDialog):
-    def __init__(self, config, parent=None):
-        super().__init__(parent)
-        self.config = config
-        self.setWindowTitle("桌宠设置")
-        self.setFixedSize(400, 350)
-        self._setup_ui()
-
-    def _setup_ui(self):
-        layout = QFormLayout(self)
-        layout.setSpacing(10)
-
-        self.api_url = QLineEdit(self.config.get("api", {}).get("base_url", ""))
-        layout.addRow("API 地址:", self.api_url)
-
-        self.api_key = QLineEdit(self.config.get("api", {}).get("api_key", ""))
-        self.api_key.setEchoMode(QLineEdit.Password)
-        layout.addRow("API Key:", self.api_key)
-
-        self.model = QLineEdit(self.config.get("api", {}).get("model", ""))
-        layout.addRow("模型:", self.model)
-
-        current_char = self.config.get("character", "yuexiye")
-        self.char_combo = QComboBox()
-        for cid, info in CHARACTER_INFO.items():
-            self.char_combo.addItem(info["name"], cid)
-        idx = self.char_combo.findData(current_char)
-        if idx >= 0:
-            self.char_combo.setCurrentIndex(idx)
-        layout.addRow("角色:", self.char_combo)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addRow(buttons)
-
-    def get_updated_config(self):
-        return {
-            "api": {
-                "base_url": self.api_url.text().strip(),
-                "api_key": self.api_key.text().strip(),
-                "model": self.model.text().strip()
-            },
-            "character": self.char_combo.currentData()
-        }
-
-
-# ─── 主窗口 ─────────────────────────────────────────────
 
 class PetWindow(QWidget):
     """透明桌面宠物窗口"""
@@ -149,8 +150,6 @@ class PetWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.config = load_config()
-        self.api_client = None
-        self._setup_api()
 
         # ── 交互状态 ──
         self._drag_start_cursor = QPoint()
@@ -161,7 +160,6 @@ class PetWindow(QWidget):
         self._drag_poll_timer.timeout.connect(self._drag_poll_tick)
 
         self._current_char = self.config.get("character", "yuexiye")
-        self._chat_history = []
         self._is_thinking = False
 
         # ── 动画状态 ──
@@ -191,6 +189,9 @@ class PetWindow(QWidget):
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self._anim_tick)
 
+        # 状态
+        self._visible = True
+
         self._setup_window()
         self._setup_ui()
         self._setup_animation()
@@ -198,15 +199,6 @@ class PetWindow(QWidget):
         self.load_character(self._current_char)
 
     # ── API ──
-
-    def _setup_api(self):
-        api_cfg = self.config.get("api", {})
-        if api_cfg.get("api_key"):
-            self.api_client = HarnessPetAdapter(
-                base_url=api_cfg["base_url"],
-                api_key=api_cfg["api_key"],
-                model=api_cfg["model"],
-            )
 
     # ── 窗口设置 ──
 
@@ -435,7 +427,6 @@ class PetWindow(QWidget):
 
         self.config["character"] = char_id
         save_config(self.config)
-        self._setup_api()
         self._is_thinking = False
 
     def _store_label_pos(self):
@@ -572,77 +563,68 @@ class PetWindow(QWidget):
         self.input_field.clear()
         self.input_widget.hide()
 
-        self.bubble.set_text("...")
+        # 写到 outbox
+        basedir = Path.home() / ".hanako/plugins/hanako-desktop-companion"
+        try:
+            basedir.mkdir(parents=True, exist_ok=True)
+            msg = {"text": text, "character": self._current_char, "time": time.time()}
+            outbox = basedir / "outbox.json"
+            msgs = json.loads(outbox.read_text("utf-8")) if outbox.exists() else []
+            msgs.append(msg)
+            outbox.write_text(json.dumps(msgs, ensure_ascii=False), "utf-8")
+            # 写待处理标记 → Agent 下次回复前检测到
+            (basedir / ".pending").write_text("1", "utf-8")
+        except Exception as e:
+            print(f"Outbox error: {e}")
+
+        self.bubble.set_text("⏳ 发送中...")
         self._reposition_bubble()
         self.bubble.show()
         self.bubble.raise_()
         self._is_thinking = True
-
-        if not self.api_client:
-            self.bubble.set_text("（还没配 API Key——右键设置里配一下）")
-            self._reposition_bubble()
-            self._is_thinking = False
-            QTimer.singleShot(5000, self.bubble.hide)
-            return
-
-        self._pending_message = text
-        QTimer.singleShot(100, self._do_api_call)
-
-    def _do_api_call(self):
-        response = self.api_client.chat(
-            self._current_char,
-            self._pending_message,
-            self._chat_history
-        )
-
-        self._chat_history.append({"role": "user", "content": self._pending_message})
-        self._chat_history.append({"role": "assistant", "content": response})
-
-        self.bubble.set_text(response)
-        self._reposition_bubble()
-        self.bubble.show()
-        self._is_thinking = False
-
-        QTimer.singleShot(15000, self._auto_hide_bubble)
+        QTimer.singleShot(3000, self._auto_hide_bubble)
 
     def _auto_hide_bubble(self):
         if not self._is_thinking:
             self.bubble.hide()
 
-
-
     # ── 右键菜单 ──
 
     # ── Hanako 状态回调 ──
 
-    def _on_hanako_state(self, anim_name: str, message: str):
-        """Hanako 状态变化时的回调"""
-        # 如果在聊天或行走中，不打断
-        if self._is_thinking or self._is_walking or self.input_widget.isVisible():
+    def _on_hanako_state(self, anim_name: str, message: str, emotion: str = "neutral"):
+        """Hanako 状态变化时的回调 — 增强：支持情绪映射"""
+        if not message:
+            if self._is_thinking or self._is_walking or self.input_widget.isVisible():
+                return
+            self._bubble_message = ""
+            self._bubble_timer.stop()
+            self.bubble.hide_bubble()
             return
 
-        # 切换动画
-        if anim_name in self._anim_frames:
+        # 情绪 → 动画序列映射
+        target_anim = EXPRESSION_MAP.get(emotion, anim_name)
+        if target_anim in self._anim_frames:
+            self._set_anim_seq(target_anim)
+        elif anim_name in self._anim_frames:
             self._set_anim_seq(anim_name)
         else:
             self._set_anim_seq('idle')
 
-        # 显示气泡
-        if message:
-            self._bubble_message = message
-            self.bubble.set_text(message)
-            self._reposition_bubble()
-            self.bubble.show()
-            self.bubble.raise_()
-            self._bubble_timer.start(5000)  # 5 秒后自动隐藏
-        else:
-            self._bubble_message = ""
-            self._bubble_timer.stop()
-            self.bubble.hide()
+        # 高亮气泡（开心时）
+        bright = (emotion in ('happy', 'surprised'))
+
+        self._is_thinking = False
+        self._bubble_message = message
+        self.bubble.set_text(message, bright=bright)
+        self._reposition_bubble()
+        self.bubble.show()
+        self.bubble.raise_()
+        self._bubble_timer.start(5000)
 
     def _clear_hanako_bubble(self):
         """超时隐藏气泡"""
-        self.bubble.hide()
+        self.bubble.hide_bubble()
         self._bubble_message = ""
 
     def _show_context_menu(self, pos):
@@ -678,8 +660,11 @@ class PetWindow(QWidget):
             action.triggered.connect(lambda checked, c=cid: self.load_character(c))
 
         menu.addSeparator()
-        settings_action = menu.addAction("设置")
-        settings_action.triggered.connect(self._open_settings)
+
+        menu.addSeparator()
+
+        vis_action = menu.addAction("隐藏桌宠" if self._visible else "显示桌宠")
+        vis_action.triggered.connect(self._toggle_visibility)
 
         menu.addSeparator()
         quit_action = menu.addAction("退出")
@@ -687,17 +672,14 @@ class PetWindow(QWidget):
 
         menu.exec(self.mapToGlobal(pos))
 
-    # ── 设置对话框 ──
-
-    def _open_settings(self):
-        dialog = SettingsDialog(self.config, self)
-        if dialog.exec():
-            new_config = dialog.get_updated_config()
-            self.config.update(new_config)
-            save_config(self.config)
-            self._setup_api()
-            if new_config.get("character") != self._current_char:
-                self.load_character(new_config["character"])
+    def _toggle_visibility(self):
+        self._visible = not self._visible
+        if self._visible:
+            self.show()
+            self._walk_timer.start(4000)
+        else:
+            self._walk_timer.stop()
+            self.hide()
 
     # ── 关闭 ──
 

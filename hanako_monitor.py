@@ -1,111 +1,134 @@
 """
-Hanako 状态监控模块
-轮询 hanako-state.json，将状态变化通过回调通知 PetWindow。
+Hanako 状态监控模块 — 增强版
+
+轮询 TODO 文件 + 通知文件 + 回复文件 + 情绪映射
 """
 
-import os
 import json
+import re
 import time
 from pathlib import Path
 
-# 状态文件路径（放在桌宠目录下，Hanako Agent 会在此写入）
-STATE_FILE = Path(__file__).resolve().parent / "hanako-state.json"
+from config import EXPRESSION_MAP, HANAKO_STATE_MAP
 
-# 状态 → 动画映射
-STATE_TO_ANIM = {
-    "listening": "idle",
-    "thinking": "extra",
-    "working": "extra",
+TODO_FILE = Path.home() / ".hanako/plugin-data/todo/todos.json"
+NOTIFY_FILE = Path.home() / ".hanako/plugins/hanako-desktop-companion/notifications.json"
+RESPONSE_FILE = Path.home() / ".hanako/plugins/hanako-desktop-companion/response.json"
+
+# 情绪关键词 → 表情映射（从回复文本中检测）
+EMOTION_KEYWORDS = {
+    "happy": ["哈", "笑", "开心", "好耶", "太棒了", "嘻嘻", "嘿嘿", "www", "哈哈", "！"],
+    "sad": ["呜", "难过", "伤心", "哭", "呜呜", "sad", "emo"],
+    "angry": ["哼", "气", "怒", "可恶", "混蛋", "烦", "啊啊"],
+    "surprised": ["诶", "欸", "！", "？", "什么", "不会吧", "哇"],
+    "thinking": ["嗯", "让我想想", "思考", "…", "..."],
 }
 
-# 超时：多久没有状态更新视为离线（秒）
 STALE_TIMEOUT = 30
 
 
-def read_state() -> dict | None:
-    """读取状态文件，返回 None 表示文件不存在或损坏"""
-    try:
-        if not STATE_FILE.exists():
-            return None
-        raw = STATE_FILE.read_text(encoding="utf-8").strip()
-        if not raw:
-            return None
-        return json.loads(raw)
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
 class HanakoMonitor:
-    """
-    轮询 Hanako 状态文件的监视器。
-    通过 callback 通知 PetWindow 状态变化。
-    """
-
     def __init__(self, on_state_change=None):
-        """
-        on_state_change(anim_name: str, message: str)
-          anim_name: 要切换的动画序列名（'idle'/'extra'）
-          message:   显示在气泡里的文字（空字符串则不显示）
-        """
         self._on_state_change = on_state_change
         self._current_anim = "idle"
-        self._last_state: dict | None = None
-        self._last_update: float = 0
+        self._last_state = None
+        self._last_update = 0
+        self._last_todo_count = -1
+        # 情绪缓存（用于气泡颜色）
+        self._current_emotion = "neutral"
 
     def tick(self):
-        """每次轮询调用（由 QTimer 驱动），检查状态变化"""
-        state = read_state()
         now = time.time()
 
-        # 没有状态文件 → idle
-        if state is None:
-            self._set_if_changed("idle", "")
-            return
-
-        # 首次读到有效状态 → 直接处理，不判超时
-        if self._last_update == 0:
-            self._last_state = state
-            self._last_update = now
-        else:
-            # 状态过期 → 默认 idle
-            if (now - self._last_update) > STALE_TIMEOUT:
-                self._set_if_changed("idle", "")
-                return
-
-            # 状态相同 → 不触发回调，但更新计时
-            if state == self._last_state:
-                return
-
-        self._last_state = state
-        self._last_update = now
-
-        s = state.get("state", "listening")
-        tool = state.get("tool", "")
-        msg = state.get("message", "")
-
-        anim = STATE_TO_ANIM.get(s, "idle")
-
-        # 构造气泡文字
-        bubble = ""
-        if s == "thinking":
-            bubble = "正在思考…"
-        elif s == "working":
-            if tool:
-                bubble = f"工作中 [{tool}]"
+        # 1. TODO
+        todos = self._read_todos()
+        if len(todos) != self._last_todo_count:
+            self._last_todo_count = len(todos)
+            if todos:
+                lines = [f"📋 {t['text'][:20]}" for t in todos[:2]]
+                if len(todos) > 2:
+                    lines.append(f"⋯ 还有 {len(todos)-2} 条")
+                msg = "\n".join(lines)
             else:
-                bubble = "工作中…"
-        elif msg:
-            bubble = msg
+                msg = ""
+            if msg:
+                self._set_if_changed("idle", msg, emotion="neutral")
 
-        self._set_if_changed(anim, bubble)
+        # 2. 通知
+        for n in self._read_notifications():
+            self._set_if_changed("extra", n.get("text", ""), emotion="neutral")
 
-    def _set_if_changed(self, anim: str, message: str):
-        if anim != self._current_anim or message:
+        # 3. 回复（桌宠消息的回显）—— 增强：检测情绪
+        reply = self._read_response()
+        if reply:
+            emotion = self._detect_emotion(reply)
+            anim = EXPRESSION_MAP.get(emotion, "idle")
+            self._set_if_changed(anim, reply, emotion=emotion)
+
+        # 4. 超时
+        if self._last_update > 0 and (now - self._last_update) > STALE_TIMEOUT:
+            self._set_if_changed("idle", "", emotion="neutral")
+
+    def _detect_emotion(self, text: str) -> str:
+        """从文本中检测情绪。返回 emotion key（happy/sad/angry/surprised/thinking/neutral）"""
+        scores = {k: 0 for k in EMOTION_KEYWORDS}
+        text_lower = text.lower()
+        for emotion, keywords in EMOTION_KEYWORDS.items():
+            for kw in keywords:
+                if kw.lower() in text_lower:
+                    scores[emotion] += 1
+        max_emotion = max(scores, key=scores.get)
+        if scores[max_emotion] > 0:
+            return max_emotion
+        return "neutral"
+
+    def _read_todos(self):
+        try:
+            if not TODO_FILE.exists():
+                return []
+            data = json.loads(TODO_FILE.read_text("utf-8"))
+            return [t for t in data.get("todos", []) if not t.get("done")]
+        except:
+            return []
+
+    def _read_notifications(self):
+        try:
+            if not NOTIFY_FILE.exists():
+                return []
+            notes = json.loads(NOTIFY_FILE.read_text("utf-8"))
+            NOTIFY_FILE.write_text("[]", "utf-8")
+            return notes
+        except:
+            return []
+
+    def _read_response(self):
+        """读取回复文件，有回复时返回文字并清空"""
+        try:
+            if not RESPONSE_FILE.exists():
+                return ""
+            raw = RESPONSE_FILE.read_text("utf-8").strip()
+            if not raw:
+                return ""
+            data = json.loads(raw)
+            reply = data.get("reply", "")
+            if reply:
+                RESPONSE_FILE.write_text("{}", "utf-8")
+            return reply
+        except:
+            return ""
+
+    def _set_if_changed(self, anim, msg, emotion="neutral"):
+        if anim != self._current_anim or msg:
             self._current_anim = anim
+            self._current_emotion = emotion
             if self._on_state_change:
-                self._on_state_change(anim, message)
+                self._on_state_change(anim, msg, emotion=emotion)
 
     def force_idle(self):
-        """强制回到 idle（退出时调用）"""
         self._last_state = None
-        self._set_if_changed("idle", "")
+        self._current_emotion = "neutral"
+        self._set_if_changed("idle", "", emotion="neutral")
+
+    @property
+    def current_emotion(self):
+        return self._current_emotion

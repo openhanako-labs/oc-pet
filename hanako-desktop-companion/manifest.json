@@ -1,0 +1,30 @@
+{
+  "manifestVersion": 1,
+  "id": "hanako-desktop-companion",
+  "name": "Hanako Desktop Companion",
+  "version": "0.3.0",
+  "description": "桌宠消息桥接器：连接 Hanako Agent 与 OC 桌面宠物，双向通信",
+  "minAppVersion": "0.0.0",
+  "trust": "full-access",
+  "activationEvents": ["onStartup"],
+  "contributes": {
+    "tools": [
+      { "source": "tools/companion_outbox.js" },
+      { "source": "tools/companion_send.js" }
+    ],
+    "configuration": {
+      "properties": {
+        "autoCheckOutbox": {
+          "type": "boolean",
+          "default": true,
+          "title": "自动检查桌宠发来的消息"
+        },
+        "checkInterval": {
+          "type": "number",
+          "default": 3000,
+          "title": "消息检查间隔（毫秒）"
+        }
+      }
+    }
+  }
+}
