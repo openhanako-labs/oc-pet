@@ -235,11 +235,28 @@ proactive 规则增加 time_period 字段：
 | Whisper streaming | ~500ms | ~3GB | 备选（多语言） |
 | FunASR | ~150ms | ~500MB | 备选 |
 
-#### LLM 流式回复
+LLM 流式回复
 
-需要确认 agnes API 是否支持 stream=true。
-如果支持：SSE 流式接收，逐句送 TTS。
-如果不支持：降级为整条回复后送 TTS（延迟增加 2-5 秒）。
+agnes API 不支持 streaming。需要设计流式降级接口：
+
+```python
+class LLMStreamer:
+    """LLM 流式接口 - 统一抽象，底层可切换"""
+
+    def stream_chat(self, messages, on_delta=None):
+        """流式调用 LLM，逐句回调 on_delta(text)"""
+        # 实现 A: API 支持 streaming -> SSE 逐 token 回调
+        # 实现 B: API 不支持 -> 整条回复后按句拆分，逐句回调
+        ...
+```
+
+降级策略（agnes 不支持 streaming 时）：
+1. 发送完整请求，等待完整回复
+2. 收到回复后按句号/问号/感叹号拆分
+3. 逐句送入 TTS 队列，实现伪流式效果
+4. 延迟增加 2-5 秒（等 LLM 完整回复），但 TTS 可以逐句播放
+
+接口预留：未来换支持 streaming 的 API 时，只需替换 LLMStreamer 实现。
 
 ```python
 # 流式调用伪代码

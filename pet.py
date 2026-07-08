@@ -38,6 +38,7 @@ from eye_overlay import EyeOverlay
 from startup_screen import StartupScreen
 from character_editor import CharacterEditor
 from proactive_scheduler import ProactiveScheduler
+from avatar.sprite_renderer import SpriteRenderer
 
 # ─── 设置对话框 ─────────────────────────────────────────
 
@@ -147,14 +148,10 @@ class PetWindow(QWidget):
         if not tts_cfg.get("enabled", True):
             self._tts_player.disable()
 
-        # ── 帧动画 ──
-        self._anim_frames = {}    # {'idle': [QPixmap,...], 'walk': [QPixmap,...]}
-        self._anim_frame_tops = {}  # {'idle': [top_y, ...], 'walk': [top_y, ...]}
+        # ── 帧动画状态（在 _setup_ui 后初始化）──
         self._anim_seq = 'idle'
         self._anim_idx = 0
-        self._anim_range = (None, None)  # (start, end): None=全序列（P3 情绪帧区间）
-        self._anim_timer = QTimer(self)
-        self._anim_timer.timeout.connect(self._anim_tick)
+        self._anim_range = (None, None)
         self._facing_right = True  # 当前朝向
 
         # 状态
@@ -163,6 +160,11 @@ class PetWindow(QWidget):
 
         self._setup_window()
         self._setup_ui()
+        # ── 渲染器就绪后，同步动画状态别名 ──
+        self._anim_frames = self._renderer._frames
+        self._anim_frame_tops = self._renderer._frame_tops
+        self._anim_timer = self._renderer._anim_timer
+        self._anim_timer.timeout.connect(self._anim_tick)
         self._setup_animation()
         # ── 记忆存储 ──
         self._mem_store = MemoryStore(self._current_char)
@@ -335,16 +337,9 @@ class PetWindow(QWidget):
         w = max(200, int(200 * self._pet_scale))
         h = max(360, int(360 * self._pet_scale))
         self.setFixedSize(w, h)
-        # 角色图片：按缩放比例保持 180x250 的原始比例
-        cw = max(180, int(180 * self._pet_scale))
-        ch = max(250, int(250 * self._pet_scale))
-        self.char_label.setFixedSize(cw, ch)
-        self.char_label.move(10, int(70 * self._pet_scale))
-        # 瞳孔覆盖物同步缩放
-        self._eye_overlay.setFixedSize(cw, ch)
-        self._eye_overlay.move(10, int(70 * self._pet_scale))
-        # 缩放当前帧
-        self._rescale_current_frame()
+        # 委托给 SpriteRenderer 处理角色尺寸
+        self._renderer.set_scale(self._pet_scale)
+        self._renderer.recalc_geometry(w, h)
         QTimer.singleShot(50, self._store_label_pos)
         QTimer.singleShot(50, self._reposition_status_label)
         QTimer.singleShot(50, self._reposition_bubble)
@@ -384,20 +379,11 @@ class PetWindow(QWidget):
         self.main_layout.setSpacing(0)
         self.main_layout.setAlignment(Qt.AlignCenter)
 
-        # 角色图片（底层）
-        self.char_label = QLabel(self)
-        self.char_label.setAlignment(Qt.AlignCenter)
-        self.char_label.setFixedSize(180, 250)
-        self.char_label.move(10, 70)  # 给头顶气泡留空间
-        self.char_label.lower()
-        self.char_label.installEventFilter(self)
-
-        # 瞳孔跟踪（镶嵌在角色上）
-        self._eye_overlay = EyeOverlay(self)
-        self._eye_overlay.setFixedSize(180, 250)
-        self._eye_overlay.move(10, 70)
-        self._eye_overlay.hide()  # 鼠标进入角色区域时显示
-        self._eye_overlay.raise_()
+        # 角色渲染器（帧精灵 / 未来 Live2D / VRM）
+        self._renderer = SpriteRenderer(self)
+        # 兼容别名（供 pet.py 其他部分使用）
+        self.char_label = self._renderer.label
+        self._eye_overlay = self._renderer.eye_overlay
 
         # 启动画面
         self._startup_screen = StartupScreen(self)
@@ -496,68 +482,24 @@ class PetWindow(QWidget):
             )
 
     def _set_anim_seq(self, seq_name, emotion=None):
-        """切换动画序列并重置帧索引
-
-        Args:
-            seq_name: 序列名 (idle/walk/extra)
-            emotion: 可选情绪名（P3 帧区间：不同情绪映射到 extra 帧的不同子范围）
-        """
-        # P3: emotion → 帧区间映射
-        if emotion and emotion in EXPRESSION_MAP:
-            mapped = EXPRESSION_MAP[emotion]
-            if isinstance(mapped, tuple) and len(mapped) == 3:
-                seq, start, end = mapped
-                if seq in self._anim_frames:
-                    self._anim_seq = seq
-                    self._anim_range = (start, end)
-                    self._anim_idx = start if start is not None else 0
-                    speed = 330 if seq == 'idle' else 250
-                    self._anim_timer.setInterval(speed)
-                    self._show_anim_frame()
-                    return
-        # 无 emotion 或映射失败 = 旧行为
-        if seq_name != self._anim_seq and seq_name in self._anim_frames:
-            self._anim_seq = seq_name
-            self._anim_range = (None, None)
-            self._anim_idx = 0
-            speed = 330 if seq_name == 'idle' else 250  # idle ~3fps, walk 4fps
-            self._anim_timer.setInterval(speed)
-            self._show_anim_frame()
+        """切换动画序列 - 委托给 SpriteRenderer"""
+        self._renderer.play_anim(seq_name, emotion=emotion)
+        self._anim_seq = self._renderer._anim_seq
+        self._anim_idx = self._renderer._anim_idx
+        self._anim_range = self._renderer._anim_range
 
     def _anim_tick(self):
-        """推进到下一帧（P3：帧范围约束）"""
-        frames = self._anim_frames.get(self._anim_seq, [])
-        if len(frames) > 1:
-            start, end = self._anim_range
-            if start is not None and end is not None:
-                # 帧区间模式：在 [start, end] 范围内循环
-                n_frames = end - start + 1
-                self._anim_idx = start + ((self._anim_idx - start + 1) % n_frames)
-            else:
-                # 全序列模式
-                self._anim_idx = (self._anim_idx + 1) % len(frames)
-            self._show_anim_frame()
+        """帧推进 - 委托给 SpriteRenderer"""
+        self._renderer._anim_tick()
+        self._anim_idx = self._renderer._anim_idx
 
     def _show_anim_frame(self):
-        frames = self._anim_frames.get(self._anim_seq, [])
-        if not frames:
-            return
-        pix = frames[self._anim_idx % len(frames)]
-        # 缩放至当前 char_label 大小（保持比例）
-        ls = self.char_label.size()
-        if ls.width() > 0 and ls.height() > 0:
-            pix = pix.scaled(ls.width(), ls.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        if not self._facing_right:
-            pix = pix.transformed(QTransform().scale(-1, 1))
-        self.char_label.setPixmap(pix)
+        """渲染当前帧 - 委托给 SpriteRenderer"""
+        self._renderer._show_frame()
 
     def _get_char_top_y(self):
-        """获取当前帧角色头顶 y 坐标（相对窗口），按缩放倍率调整"""
-        tops = self._anim_frame_tops.get(self._anim_seq, [])
-        if tops:
-            idx = self._anim_idx % len(tops)
-            return self.char_label.y() + int(tops[idx] * self._pet_scale)
-        return self.char_label.y()
+        """获取角色头顶 Y 坐标 - 委托给 SpriteRenderer"""
+        return self._renderer.get_char_top_y()
 
     def _reposition_bubble(self):
         """气泡置于角色头顶上方，根据实际角色内容定位"""
@@ -637,77 +579,32 @@ class PetWindow(QWidget):
     # ── 角色加载 ──
 
     def load_character(self, char_id: str):
-        self._current_char = char_id
+        """加载角色 - 委托给 SpriteRenderer"""
         info = CHARACTER_INFO.get(char_id)
         if not info:
+            print(f"Unknown character: {char_id}")
             return
 
-        char_dir = os.path.join(os.path.dirname(__file__), info["path"])
-        self._anim_frames = {}
-        self._anim_frame_tops = {}
-        target_w, target_h = 180, 250
-
-        def scan_top_y(qpx):
-            """快速扫描 QPixmap 第一个非透明像素的行号"""
-            img = qpx.toImage().convertToFormat(QImage.Format_ARGB32)
-            w = img.width()
-            h = img.height()
-            stride = w * 4
-            raw = bytes(img.constBits())
-            for y in range(h):
-                row_start = y * stride
-                for x in range(w):
-                    if raw[row_start + x * 4 + 3] > 30:
-                        return y
-            return 0
-
-        for seq_name in ['idle', 'walk', 'extra']:
-            seq_dir = os.path.join(char_dir, 'frames', seq_name)
-            frames = []
-            tops = []
-            if os.path.isdir(seq_dir):
-                fnames = sorted([f for f in os.listdir(seq_dir) if f.endswith('.png')])
-                for fn in fnames:
-                    px = QPixmap(os.path.join(seq_dir, fn))
-                    if not px.isNull():
-                        px = px.scaled(target_w, target_h,
-                                       Qt.KeepAspectRatio,
-                                       Qt.SmoothTransformation)
-                        frames.append(px)
-                        tops.append(scan_top_y(px))
-            if frames:
-                self._anim_frames[seq_name] = frames
-                self._anim_frame_tops[seq_name] = tops
-
-        # Fallback: 旧式单图
-        if not self._anim_frames:
-            for fn in ['idle.png', 'stand.png']:
-                p = os.path.join(char_dir, fn)
-                if os.path.exists(p):
-                    px = QPixmap(p)
-                    if not px.isNull():
-                        px = px.scaled(target_w, target_h,
-                                       Qt.KeepAspectRatio,
-                                       Qt.SmoothTransformation)
-                        self._anim_frames['idle'] = [px]
-                        self._anim_frame_tops['idle'] = [scan_top_y(px)]
-                        break
-
-        self._anim_seq = 'idle'
-        self._anim_idx = 0
-        self._show_anim_frame()
-
-        if 'idle' in self._anim_frames:
-            self.char_label.setStyleSheet("")
-        else:
-            self.char_label.setText(f"[{info['name']}]")
-            self.char_label.setStyleSheet("color: #e6e6f0; font-size: 16px;")
-
-        QTimer.singleShot(50, self._store_label_pos)
-
+        self._current_char = char_id
         self.config["character"] = char_id
         save_config(self.config)
-        self._is_thinking = False
+
+        # 委托给渲染器加载帧序列
+        self._renderer.load(char_id)
+        # 同步状态别名
+        self._anim_frames = self._renderer._frames
+        self._anim_frame_tops = self._renderer._frame_tops
+
+        # 更新托盘图标
+        self._tray.setIcon(QIcon(self._make_tray_icon()))
+
+        # 启动画面
+        self._startup_screen.show_for_character(char_id)
+
+        # 重新定位气泡
+        self._reposition_bubble()
+
+        QTimer.singleShot(50, self._store_label_pos)
 
     def _store_label_pos(self):
         self._label_base_pos = self.char_label.pos()
