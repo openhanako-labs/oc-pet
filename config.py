@@ -6,11 +6,58 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
 DEFAULT_CONFIG = {
     "character": "ophelia",
+    "scale": 1.0,
+    "opacity": 1.0,
+    "behavior": "normal",
     "window": {
         "width": 200,
         "height": 300,
         "x": -1,
         "y": -1
+    },
+    "break_reminder": {
+        "enabled": True,
+        "idle_minutes": 15,
+        "gradual": True,
+        "cooldown_minutes": 30
+    },
+    "action_linker": {
+        "enabled": True,
+        "highlight_duration": 30
+    },
+    "tts": {
+        "enabled": True,
+        "volume": 0.8
+    },
+    "proactive": {
+        "enabled": True,
+        "cooldown_minutes": 10,
+        "rules": [
+            {
+                "idle_min": 5,
+                "foreground": ["writing", "development", "browsing"],
+                "prompt": "写了这么久，休息一下吧？",
+                "weight": 0.7
+            },
+            {
+                "idle_min": 15,
+                "foreground": ["gaming", "entertainment"],
+                "prompt": "带我一起玩嘛～",
+                "weight": 0.5
+            },
+            {
+                "idle_min": 30,
+                "foreground": ["communication"],
+                "prompt": "还在忙吗？想和你说说话～",
+                "weight": 0.3
+            },
+            {
+                "idle_min": 60,
+                "foreground": ["*"],
+                "prompt": "好安静啊……你在做什么呢？",
+                "weight": 0.3
+            }
+        ]
     }
 }
 
@@ -25,18 +72,20 @@ CHARACTER_INFO = {
     },
 }
 
-# 情绪 → 帧动画序列映射
-# oc-pet 靠帧序列名切换表情，对应 live2d-deskpet 的 expression 表
+# 情绪 → 帧动画序列映射（P3 连续参数：帧区间）
+# oc-pet 靠帧序列名切换表情，P3 增强后不同情绪映射到同一序列的不同帧子范围
+# 格式: 情绪名 -> (序列名, 起始帧索引, 结束帧索引)
+#          起始/结束为 None 时使用全序列
 EXPRESSION_MAP = {
-    "happy": "extra",       # 开心 → 额外帧（如笑、蹦跳）
-    "sad": "idle",          # 悲伤 → 不做动画（或用特定帧）
-    "angry": "extra",       # 生气 → 额外帧
-    "surprised": "extra",   # 惊讶 → 额外帧
-    "neutral": "idle",      # 中性 → 待机
-    "thinking": "extra",    # 思考中
-    "working": "extra",     # 工作中
-    "listening": "idle",    # 倾听
-    "speaking": "idle",     # 说话 → 用 idle + 气泡闪烁
+    "happy":      ("extra", 0, 1),   # 开心 -> extra[0..1]
+    "angry":      ("extra", 2, 3),   # 生气 -> extra[2..3]
+    "surprised":  ("extra", 4, 5),   # 惊讶 -> extra[4..5]
+    "thinking":   ("extra", 6, 7),   # 思考中 -> extra[6..7]
+    "working":    ("extra", 6, 7),   # 工作中 -> extra[6..7]
+    "neutral":    ("idle",  None, None),  # 中性 -> idle 全序列
+    "sad":        ("idle",  None, None),  # 悲伤 -> idle 全序列
+    "listening":  ("idle",  None, None),  # 倾听 -> idle 全序列
+    "speaking":   ("idle",  None, None),  # 说话 -> idle 全序列
 }
 
 # Hanako 状态 → 桌宠动作
@@ -48,13 +97,24 @@ HANAKO_STATE_MAP = {
 }
 
 def load_config():
+    """加载配置，深度合并默认值（确保新增字段不丢失）"""
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             cfg = json.load(f)
-        merged = DEFAULT_CONFIG.copy()
-        merged.update(cfg)
+        merged = _deep_merge(DEFAULT_CONFIG.copy(), cfg)
         return merged
     return DEFAULT_CONFIG.copy()
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """深度合并：override 的键覆盖 base，但 base 独有的键保留"""
+    result = base.copy()
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
 
 def save_config(cfg):
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:

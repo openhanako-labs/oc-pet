@@ -2,8 +2,15 @@
 """OC 桌面宠物 - 月曦夜 & 奥菲莉娅"""
 import sys
 import os
+import logging
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont
+
+# ── 日志 ──
+logging.basicConfig(
+    level=logging.WARNING,
+    format='[%(levelname)s] %(name)s: %(message)s'
+)
 
 # Add project root to path
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
