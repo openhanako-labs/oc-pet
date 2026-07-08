@@ -39,6 +39,7 @@ from startup_screen import StartupScreen
 from character_editor import CharacterEditor
 from proactive_scheduler import ProactiveScheduler
 from avatar.sprite_renderer import SpriteRenderer
+from perception import PerceptionController
 
 # ─── 设置对话框 ─────────────────────────────────────────
 
@@ -48,7 +49,7 @@ class PetWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.config = load_config()
-        # _is_penetrable 已移除（死代码），统一使用 _mousePassthrough
+        # _is_penetrable 已移除(死代码),统一使用 _mousePassthrough
 
         # ── 交互状态 ──
         self._drag_start_cursor = QPoint()
@@ -57,9 +58,9 @@ class PetWindow(QWidget):
         self._was_click = False
         self._drag_poll_timer = QTimer(self)
         self._drag_poll_timer.timeout.connect(self._drag_poll_tick)
-        self._drag_last_pos = QPoint()   # 上一帧拖拽位置，用于速度计算
+        self._drag_last_pos = QPoint()   # 上一帧拖拽位置,用于速度计算
         self._drag_last_time = 0.0
-        self._vy = 0.0                   # 垂直速度（弹跳用）
+        self._vy = 0.0                   # 垂直速度(弹跳用)
         self._bounce_active = False      # 弹跳模式中
 
         self._current_char = self.config.get("character", "yuexiye")
@@ -86,7 +87,7 @@ class PetWindow(QWidget):
         # ── Hanako 状态监控 ──
         self._hanako_monitor = HanakoMonitor(on_state_change=self._on_hanako_state)
 
-        # ── 桥梁客户端（WebSocket）──
+        # ── 桥梁客户端(WebSocket)──
         self._bridge = BridgeClient()
         self._bridge.on_message = self._on_bridge_message
         self._bridge.on_event = self._on_bridge_event
@@ -94,11 +95,11 @@ class PetWindow(QWidget):
         self._bridge.on_disconnected = self._on_bridge_disconnected
         self._bridge.start()
 
-        # Hanako 状态轮询（仅 TODO + 通知；回复通过 WebSocket）
+        # Hanako 状态轮询(仅 TODO + 通知;回复通过 WebSocket)
         self._hanako_poll_timer = QTimer(self)
         self._hanako_poll_timer.timeout.connect(self._hanako_monitor.tick)
         self._hanako_poll_timer.start(800)
-        self._bubble_message = ""    # 当前气泡文字，用于超时隐藏
+        self._bubble_message = ""    # 当前气泡文字,用于超时隐藏
         self._bubble_timer = QTimer(self)
         self._bubble_timer.timeout.connect(self._clear_hanako_bubble)
         self._bubble_timer.setSingleShot(True)
@@ -132,7 +133,7 @@ class PetWindow(QWidget):
         self._foreground_timer = QTimer(self)
         self._foreground_timer.timeout.connect(self._foreground_tick)
 
-        # ── Proactive 主动对话调度器（P1）──
+        # ── Proactive 主动对话调度器(P1)──
         proactive_cfg = self.config.get("proactive", {})
         self._proactive = ProactiveScheduler(
             character_id=self._current_char,
@@ -141,6 +142,9 @@ class PetWindow(QWidget):
         )
         self._proactive.load_config(proactive_cfg)
 
+        # ── 感知控制器(P2: 时间 + 情绪状态机 + 日程)──
+        self._perception = PerceptionController(self._current_char)
+
         # ── TTS 播放器 ──
         tts_cfg = self.config.get("tts", {})
         self._tts_player = TTSTtsPlayer()
@@ -148,7 +152,7 @@ class PetWindow(QWidget):
         if not tts_cfg.get("enabled", True):
             self._tts_player.disable()
 
-        # ── 帧动画状态（在 _setup_ui 后初始化）──
+        # ── 帧动画状态(在 _setup_ui 后初始化)──
         self._anim_seq = 'idle'
         self._anim_idx = 0
         self._anim_range = (None, None)
@@ -160,7 +164,7 @@ class PetWindow(QWidget):
 
         self._setup_window()
         self._setup_ui()
-        # ── 渲染器就绪后，同步动画状态别名 ──
+        # ── 渲染器就绪后,同步动画状态别名 ──
         self._anim_frames = self._renderer._frames
         self._anim_frame_tops = self._renderer._frame_tops
         self._anim_timer = self._renderer._anim_timer
@@ -176,7 +180,7 @@ class PetWindow(QWidget):
         self._break_timer.start(30000)  # 每 30 秒检查一次空闲
         self._foreground_timer.start(2000)  # 每 2 秒检测前台窗口
 
-        # ── proactive 默认启用（由 config 控制）──
+        # ── proactive 默认启用(由 config 控制)──
         if not proactive_cfg.get("enabled", True):
             self._proactive.disable()
 
@@ -197,7 +201,7 @@ class PetWindow(QWidget):
     # ── 屏幕查询 ──
 
     def _current_screen_geometry(self):
-        """获取当前窗口所在屏幕的可用区域（支持多显示器）"""
+        """获取当前窗口所在屏幕的可用区域(支持多显示器)"""
         screen = self.screen()
         if screen is None:
             screen = QApplication.primaryScreen()
@@ -239,7 +243,7 @@ class PetWindow(QWidget):
         if self._mousePassthrough:
             self.input_widget.hide()
             self.bubble.hide_bubble()
-            # 状态栏提示穿透已启用（3s后恢复）
+            # 状态栏提示穿透已启用(3s后恢复)
             self._status_label.setText("🖱️ 穿透中")
             self._status_label.setStyleSheet("""
                 QLabel {
@@ -284,9 +288,9 @@ class PetWindow(QWidget):
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
 
-    # ── 行为模式（占位） ──
+    # ── 行为模式(占位) ──
     def _switch_behavior_mode(self, mode):
-        """切换行为模式 — 通过 BehaviorParams 完全参数化"""
+        """切换行为模式 - 通过 BehaviorParams 完全参数化"""
         self._behavior_mode = mode
         self.config["behavior"] = mode
         save_config(self.config)
@@ -314,7 +318,7 @@ class PetWindow(QWidget):
             self._toggle_visibility()
 
     def _adjust_scale(self):
-        """缩放 +0.2，钳制 0.3~2.0"""
+        """缩放 +0.2,钳制 0.3~2.0"""
         self._pet_scale = min(2.0, self._pet_scale + 0.2)
         self._recalc_geometry()
 
@@ -333,7 +337,7 @@ class PetWindow(QWidget):
         editor.exec()
 
     def _recalc_geometry(self):
-        """缩放后重算窗口和角色图片尺寸（不改变窗口位置）"""
+        """缩放后重算窗口和角色图片尺寸(不改变窗口位置)"""
         w = max(200, int(200 * self._pet_scale))
         h = max(360, int(360 * self._pet_scale))
         self.setFixedSize(w, h)
@@ -358,7 +362,7 @@ class PetWindow(QWidget):
         self.char_label.setPixmap(pix)
 
     def _adjust_opacity(self):
-        """降低透明度 0.1，钳制 0.2~1.0"""
+        """降低透明度 0.1,钳制 0.2~1.0"""
         self._pet_opacity = max(0.2, self._pet_opacity - 0.1)
         self.setWindowOpacity(self._pet_opacity)
 
@@ -379,9 +383,9 @@ class PetWindow(QWidget):
         self.main_layout.setSpacing(0)
         self.main_layout.setAlignment(Qt.AlignCenter)
 
-        # 角色渲染器（帧精灵 / 未来 Live2D / VRM）
+        # 角色渲染器(帧精灵 / 未来 Live2D / VRM)
         self._renderer = SpriteRenderer(self)
-        # 兼容别名（供 pet.py 其他部分使用）
+        # 兼容别名(供 pet.py 其他部分使用)
         self.char_label = self._renderer.label
         self._eye_overlay = self._renderer.eye_overlay
 
@@ -389,12 +393,12 @@ class PetWindow(QWidget):
         self._startup_screen = StartupScreen(self)
         self._startup_screen.show_for_character(self._current_char)
 
-        # 气泡（顶层）
+        # 气泡(顶层)
         self.bubble = ChatBubble(self)
         self.bubble.move(0, 0)
         self.bubble.raise_()
 
-        # 状态指示器（左下角悬浮）
+        # 状态指示器(左下角悬浮)
         self._status_label = QLabel(self)
         self._status_label.setAlignment(Qt.AlignCenter)
         self._status_label.setFixedSize(68, 20)
@@ -465,7 +469,7 @@ class PetWindow(QWidget):
     # ── 动画 ──
 
     def _setup_animation(self):
-        # 帧动画时钟（idle 默认 4fps，walk 6fps）
+        # 帧动画时钟(idle 默认 4fps,walk 6fps)
         self._anim_timer.start(200)
         # 呼吸浮动
         self._bob_timer = QTimer(self)
@@ -502,7 +506,7 @@ class PetWindow(QWidget):
         return self._renderer.get_char_top_y()
 
     def _reposition_bubble(self):
-        """气泡置于角色头顶上方，根据实际角色内容定位"""
+        """气泡置于角色头顶上方,根据实际角色内容定位"""
         top_y = self._get_char_top_y()
         bw = self.bubble.width()
         bh = self.bubble.height()
@@ -539,12 +543,12 @@ class PetWindow(QWidget):
             a.triggered.connect(lambda checked, m=mode: self._switch_behavior_mode(m))
             self._behavior_actions[mode] = a
 
-        # 动作联动（动态高亮）
+        # 动作联动(动态高亮)
         self._menu.addSeparator()
         self._action_menu_items = {}  # action_id -> QAction
         for action in self._action_linker.actions:
             a = self._menu.addAction(f"{action.emoji} {action.label}", lambda a_id=action.id: self._trigger_action(a_id))
-            a.setVisible(False)  # 默认隐藏，匹配时高亮
+            a.setVisible(False)  # 默认隐藏,匹配时高亮
             self._action_menu_items[action.id] = a
 
         self._menu.addSeparator()
@@ -609,7 +613,7 @@ class PetWindow(QWidget):
     def _store_label_pos(self):
         self._label_base_pos = self.char_label.pos()
 
-    # ── 事件过滤器：统一处理点按/拖拽 ──
+    # ── 事件过滤器:统一处理点按/拖拽 ──
 
     def eventFilter(self, obj, event):
         if obj is self.char_label:
@@ -652,7 +656,7 @@ class PetWindow(QWidget):
                         self._is_dragging = False
                         self._store_label_pos()
 
-                        # ── 弹跳：释放时计算拖拽速度 ──
+                        # ── 弹跳:释放时计算拖拽速度 ──
                         now = time.time()
                         cursor = QCursor.pos()
                         dt = now - self._drag_last_time
@@ -695,7 +699,7 @@ class PetWindow(QWidget):
     # ── 拖拽轮询 ──
 
     def _drag_poll_tick(self):
-        """拖拽时每 16ms 轮询鼠标位置（不掉事件）"""
+        """拖拽时每 16ms 轮询鼠标位置(不掉事件)"""
         if self._is_dragging:
             cursor = QCursor.pos()
             delta = cursor - self._drag_start_cursor
@@ -716,7 +720,7 @@ class PetWindow(QWidget):
         self._set_anim_seq('idle')
 
     def _motion_tick(self):
-        """运动状态机主循环 (500ms/tick) — idle→wander/rest 转换"""
+        """运动状态机主循环 (500ms/tick) - idle→wander/rest 转换"""
         if self._is_dragging or self.input_widget.isVisible() or self._is_walking or self._bounce_active:
             return
 
@@ -742,7 +746,7 @@ class PetWindow(QWidget):
                 self._start_rest(params)
 
     def _start_walk(self, params: BehaviorParams):
-        """开始走动 — 惯性物理驱动"""
+        """开始走动 - 惯性物理驱动"""
         sg = self._current_screen_geometry()
         current_x = self.x()
 
@@ -769,7 +773,7 @@ class PetWindow(QWidget):
         self._physics_timer.start(PHYSICS_INTERVAL)
 
     def _physics_tick(self):
-        """物理引擎 — 惯性运动 / 弹性弹跳 (30ms/tick)"""
+        """物理引擎 - 惯性运动 / 弹性弹跳 (30ms/tick)"""
         sg = self._current_screen_geometry()
 
         # ── 弹跳模式 ──
@@ -803,7 +807,7 @@ class PetWindow(QWidget):
             elif new_y > bottom:
                 new_y = bottom
                 self._vy = -abs(self._vy) * BOUNCE_ELASTICITY
-                # 落地时水平速度也多衰减一点（模拟地面摩擦）
+                # 落地时水平速度也多衰减一点(模拟地面摩擦)
                 self._vx *= 0.85
 
             self.move(int(new_x), int(new_y))
@@ -824,7 +828,7 @@ class PetWindow(QWidget):
                 save_config(self.config)
             return
 
-        # ── 原有：步行模式 ──
+        # ── 原有:步行模式 ──
         if not self._is_walking:
             self._physics_timer.stop()
             return
@@ -861,7 +865,7 @@ class PetWindow(QWidget):
         self.move(int(new_x), self.y())
 
     def _start_rest(self, params: BehaviorParams):
-        """开始休息（不动 + 倒计时）"""
+        """开始休息(不动 + 倒计时)"""
         self._motion_state = "rest"
         self._set_anim_seq('idle')
         self._rest_counter = random.randint(
@@ -902,7 +906,13 @@ class PetWindow(QWidget):
         # ── 关怀提醒重置 ──
         self._break_notifier.reset()
 
-        # ── 用户发新消息 → 立即截停旧 TTS（P2 可中断管线）──
+        # P2: 用户交互 -> 重置情绪状态机
+        try:
+            self._perception.reset_emotion()
+        except Exception:
+            pass
+
+        # ── 用户发新消息 → 立即截停旧 TTS(P2 可中断管线)──
         self._tts_player.stop()
 
         # 写到 outbox
@@ -924,7 +934,7 @@ class PetWindow(QWidget):
         self.bubble.show()
         self.bubble.raise_()
         self._is_thinking = True
-        # 记录用户消息，等待配对回复
+        # 记录用户消息,等待配对回复
         self._pending_user_msg = text
         self._pending_emotion = "neutral"
         self._pending_chat = True
@@ -982,36 +992,43 @@ class PetWindow(QWidget):
         self._status_label.show()
         self._reposition_status_label()
 
-    # ── 空闲时间追踪（idle 超时递进）──
+    # ── 空闲时间追踪(idle 超时递进)──
 
 
     # ── 闲置检测 + 关怀提醒 ──
 
     def _break_check(self):
-        """每 30 秒检查：关怀提醒 + idle 超时"""
+        """每 30 秒检查:关怀提醒 + idle 超时"""
         now = time.time()
         idle_secs = now - self._last_interaction
 
-        # Idle 超时递进（只在无 Agent 互动时触发）
+        # Idle 超时递进(只在无 Agent 互动时触发)
         if self._idle_stage is None and idle_secs >= 300:
             self._idle_stage = "cute"
-            self._show_break_bubble("怎么不理我呀～", emotion="cute")
+            self._show_break_bubble("怎么不理我呀~", emotion="cute")
         elif self._idle_stage == "cute" and idle_secs >= 900:
             self._idle_stage = "sad"
-            self._show_break_bubble("好无聊……", emotion="sad")
+            self._show_break_bubble("好无聊......", emotion="sad")
         elif self._idle_stage == "sad" and idle_secs >= 1800:
             self._idle_stage = "missing"
-            self._show_break_bubble("主人去哪了……", emotion="missing")
+            self._show_break_bubble("主人去哪了......", emotion="missing")
 
-        # 关怀提醒（BreakNotifier）
+        # 关怀提醒(BreakNotifier)
         try:
             self._break_notifier.check()
         except Exception:
             pass
 
-        # Proactive 主动对话（与 BreakNotifier 同频）
+        # Proactive 主动对话(与 BreakNotifier 同频)
         try:
             self._proactive.tick()
+        except Exception:
+            pass
+
+        # 感知系统 tick(情绪衰减 + 日程刷新)
+        try:
+            self._perception.tick_emotion()
+            self._perception.tick_schedule()
         except Exception:
             pass
 
@@ -1028,12 +1045,12 @@ class PetWindow(QWidget):
         self._last_interaction = time.time()
         self._idle_stage = None
         if going is not None:
-            self._show_break_bubble("你回来啦～", emotion="happy")
+            self._show_break_bubble("你回来啦~", emotion="happy")
 
     def _on_proactive_trigger(self, prompt_text: str):
-        """Proactive 调度器触发 → 写入 outbox，让 Agent 生成回复
+        """Proactive 调度器触发 → 写入 outbox,让 Agent 生成回复
 
-        不显示 "发送中" 气泡（避免用户困惑），Agent 回复后自然显示气泡。
+        不显示 "发送中" 气泡(避免用户困惑),Agent 回复后自然显示气泡。
         """
         # 关怀提醒重置
         self._break_notifier.reset()
@@ -1045,7 +1062,7 @@ class PetWindow(QWidget):
                 "text": prompt_text,
                 "character": self._current_char,
                 "time": time.time(),
-                "type": "proactive",  # 标记为主动发起，供 Agent 识别
+                "type": "proactive",  # 标记为主动发起,供 Agent 识别
             }
             outbox = basedir / "outbox.json"
             msgs = json.loads(outbox.read_text("utf-8")) if outbox.exists() else []
@@ -1063,12 +1080,19 @@ class PetWindow(QWidget):
 
 
     def _on_hanako_state(self, anim_name: str, message: str, emotion: str = "neutral", state: str = "idle", audio_path: str = ""):
-        """Hanako 状态变化时的回调 — 增强：支持情绪映射 + 状态指示 + 动作联动 + 记忆写入 + 错误隔离"""
+        """Hanako 状态变化时的回调 - 增强：支持情绪映射 + 状态指示 + 动作联动 + 记忆写入 + 错误隔离"""
         # 总是更新状态指示器
         try:
             self._update_status_indicator(state)
         except Exception:
             pass
+
+        # P2: 触发情绪状态机
+        if emotion and emotion != "neutral":
+            try:
+                self._perception.trigger_emotion(emotion)
+            except Exception:
+                pass
 
         # 1. 消息气泡
         show_text = message.strip()
@@ -1081,7 +1105,7 @@ class PetWindow(QWidget):
             except Exception:
                 pass
 
-        # 2. 动画（P3: 传递 emotion，支持帧区间）
+        # 2. 动画(P3: 传递 emotion,支持帧区间)
         try:
             if anim_name != self._current_anim:
                 safe_anims = ['idle', 'walk', 'extra']
@@ -1099,7 +1123,7 @@ class PetWindow(QWidget):
             except Exception:
                 pass
 
-        # 4. 对话记忆写入（当收到 Agent 回复时）
+        # 4. 对话记忆写入(当收到 Agent 回复时)
         if state == "speaking" and message and self._pending_chat and self._pending_user_msg:
             try:
                 compact_reply = compact_bubble_text(message) if message else message
@@ -1127,7 +1151,7 @@ class PetWindow(QWidget):
 
     def _on_bridge_message(self, msg: dict):
         """收到桥梁推送消息"""
-        # ── 收到新回复 → 截停当前 TTS（P2 可中断管线）──
+        # ── 收到新回复 → 截停当前 TTS(P2 可中断管线)──
         self._tts_player.stop()
 
         msg_type = msg.get("type", "")
@@ -1139,11 +1163,11 @@ class PetWindow(QWidget):
             self._on_hanako_state(anim, reply, emotion=emotion, state="speaking", audio_path=audio_path)
 
     def _on_bridge_connected(self):
-        """桥梁连接成功 — hanako_monitor 停止文件轮询"""
+        """桥梁连接成功 - hanako_monitor 停止文件轮询"""
         self._hanako_monitor.set_ws_connected(True)
 
     def _on_bridge_event(self, event: dict):
-        """收到实时事件（tool_start/text_delta/thinking_start 等）
+        """收到实时事件(tool_start/text_delta/thinking_start 等)
         直接推给 HanakoMonitor 做事件驱动情绪映射。
         移植自 HanakoPro 的 desktop-pet-forward-event IPC。
         """
@@ -1174,7 +1198,7 @@ class PetWindow(QWidget):
             pass
 
     def _clear_hanako_bubble(self):
-        """清除气泡（超时回调）"""
+        """清除气泡(超时回调)"""
         if hasattr(self, 'bubble'):
             try:
                 self.bubble.hide_bubble()
@@ -1192,7 +1216,7 @@ class PetWindow(QWidget):
             self.show()
 
     def _show_context_menu(self, pos):
-        """右键菜单 — 显示前更新动态部分（行为模式勾选、动作联动高亮）"""
+        """右键菜单 - 显示前更新动态部分(行为模式勾选、动作联动高亮)"""
         if not hasattr(self, '_menu'):
             return
 
@@ -1220,7 +1244,7 @@ class PetWindow(QWidget):
         """用户点击动作联动项"""
         basedir = Path.home() / ".hanako/plugins/hanako-desktop-companion"
         self._action_linker.trigger_action(basedir, action_id)
-        self._show_break_bubble(f"{action_id}！", emotion="happy")
+        self._show_break_bubble(f"{action_id}!", emotion="happy")
 
     def _on_break_remind(self, stage: str, msg: str):
         """关怀提醒回调"""
@@ -1275,5 +1299,5 @@ class PetWindow(QWidget):
 
         super().closeEvent(event)
 
-    
+
 

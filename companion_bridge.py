@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness_adapter import HanakoPetAdapter
+from perception import PerceptionController
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,6 +105,10 @@ def main():
         logger.error("适配器初始化失败: %s", e)
         sys.exit(1)
 
+    # 初始化感知控制器
+    perception = PerceptionController(agent_id)
+    perception.tick_schedule()  # 首次刷新日程
+
     last_check = 0
     check_interval = 1.0  # 秒
     running = True
@@ -159,9 +164,10 @@ def main():
 
             logger.info("收到消息 [%s]: %s", character, text[:50])
 
-            # 4. 调用 LLM 生成回复（使用 Hanako 原生适配器）
+            # 4. 调用 LLM 生成回复（使用 Hanako 原生适配器 + 感知上下文）
             try:
-                reply = adapter.chat(message=text, inject_memory=True)
+                perception_ctx = perception.build_context()
+                reply = adapter.chat(message=text, inject_memory=True, extra_context=perception_ctx)
                 if not reply:
                     reply = "…"
                 logger.info("生成回复: %s", reply[:60])

@@ -63,12 +63,13 @@ class HanakoPetAdapter:
     def model_config(self) -> dict:
         return dict(self._model_cfg)
 
-    def chat(self, message: str, inject_memory: bool = True) -> str:
+    def chat(self, message: str, inject_memory: bool = True, extra_context: str = "") -> str:
         """发送消息，返回角色回复。
 
         Args:
             message: 用户消息
             inject_memory: 是否注入记忆上下文
+            extra_context: 额外上下文（时间/情绪/日程等感知信息）
 
         Returns:
             角色回复文本
@@ -86,6 +87,13 @@ class HanakoPetAdapter:
                     "role": "system",
                     "content": f"[以下是你当前的记忆和状态，请自然参考——不要逐字复述，可以作为话题延续的线索]\n{memory_text}",
                 })
+
+        # 注入感知上下文（时间/情绪/日程）
+        if extra_context:
+            messages.append({
+                "role": "system",
+                "content": extra_context,
+            })
 
         # 追加最近对话历史（最多 10 轮）
         for turn in self._history[-10:]:
