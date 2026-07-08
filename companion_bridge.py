@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness_adapter import HanakoPetAdapter
 from perception import PerceptionController
+from tts_bridge import CosyVoiceTTS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,6 +110,14 @@ def main():
     perception = PerceptionController(agent_id)
     perception.tick_schedule()  # 首次刷新日程
 
+    # 初始化 TTS
+    tts = CosyVoiceTTS()
+    spk_info = tts.get_speaker_info(agent_id)
+    if spk_info:
+        logger.info("TTS 就绪 | speaker=%s ref=%s", agent_id, spk_info.get("ref_audio", "?")[-30:])
+    else:
+        logger.warning("TTS: 未找到角色 %s 的参考音频，将降级为默认声音", agent_id)
+
     last_check = 0
     check_interval = 1.0  # 秒
     running = True
@@ -179,18 +188,39 @@ def main():
             emotion = detect_emotion(reply)
             anim = map_emotion_to_anim(emotion)
 
-            # 6. 写入 response.json
+            # 6. TTS 语音合成
+            audio_path = ""
+            try:
+                # 情绪 -> instruct 指令
+                instruct_map = {
+                    "happy": "开心",
+                    "sad": "难过",
+                    "angry": "生气",
+                    "cute": "可爱",
+                    "thinking": "思考",
+                }
+                instruct = instruct_map.get(emotion, "")
+                audio_path = tts.synthesize(reply, character_id=character, instruct=instruct) or ""
+                if audio_path:
+                    logger.info("TTS 生成: %s", os.path.basename(audio_path))
+                else:
+                    logger.warning("TTS 生成失败，无音频")
+            except Exception as e:
+                logger.warning("TTS 异常: %s", e)
+
+            # 7. 写入 response.json
             payload = {
                 "reply": reply,
                 "character": character,
                 "anim": anim,
                 "emotion": emotion,
-                "audioPath": "",
+                "audioPath": audio_path,
                 "ts": time.time(),
                 "status": "ok",
             }
             RESPONSE_FILE.write_text(json.dumps(payload, ensure_ascii=False), "utf-8")
-            logger.info("已写入回复 [%s] anim=%s emotion=%s", character, anim, emotion)
+            logger.info("已写入回复 [%s] anim=%s emotion=%s audio=%s",
+                        character, anim, emotion, bool(audio_path))
 
             # 7. 清空 outbox（已处理）
             OUTBOX_FILE.write_text("[]", "utf-8")
