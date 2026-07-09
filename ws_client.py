@@ -62,8 +62,8 @@ class BridgeClient(QObject):
     支持通过 WS 发送 outbox 消息（替代文件轮询写入）。
     """
 
-    RESPONSE_FILE = Path.home() / ".hanako/plugins/hanako-desktop-companion/response.json"
-    OUTBOX_FILE = Path.home() / ".hanako/plugins/hanako-desktop-companion/outbox.json"
+    from paths import RESPONSE_FILE
+    from paths import OUTBOX_FILE
 
     def __init__(self, ws_url="ws://localhost:19900/companion", parent=None):
         super().__init__(parent)

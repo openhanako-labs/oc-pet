@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness_adapter import HanakoPetAdapter
 from perception import PerceptionController
-from tts_bridge import CosyVoiceTTS
+from tts_bridge import CosyVoiceService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,10 +38,7 @@ logger = logging.getLogger("companion_bridge")
 
 # ── 路径 ───────────────────────────────────────────────
 
-DATA_DIR = Path.home() / ".hanako" / "plugins" / "hanako-desktop-companion"
-OUTBOX_FILE = DATA_DIR / "outbox.json"
-PENDING_FLAG = DATA_DIR / ".pending"
-RESPONSE_FILE = DATA_DIR / "response.json"
+from paths import DATA_DIR, OUTBOX_FILE, RESPONSE_FILE, PENDING_FLAG
 
 # 角色配置路径
 SKILLS_DIR = Path(__file__).parent / "skills" / "public"
@@ -110,13 +107,17 @@ def main():
     perception = PerceptionController(agent_id)
     perception.tick_schedule()  # 首次刷新日程
 
-    # 初始化 TTS
-    tts = CosyVoiceTTS()
+    # 初始化 TTS（常驻服务，随 bridge 启停）
+    tts = CosyVoiceService()
     spk_info = tts.get_speaker_info(agent_id)
     if spk_info:
-        logger.info("TTS 就绪 | speaker=%s ref=%s", agent_id, spk_info.get("ref_audio", "?")[-30:])
+        logger.info("TTS 配置就绪 | speaker=%s ref=%s", agent_id, spk_info.get("ref_audio", "?")[-30:])
     else:
-        logger.warning("TTS: 未找到角色 %s 的参考音频，将降级为默认声音", agent_id)
+        logger.warning("TTS: 未找到角色 %s 的参考音频", agent_id)
+
+    # 预加载 CosyVoice 模型（约 20s，随 bridge 启动）
+    logger.info("预加载 CosyVoice 模型...")
+    tts.preload()
 
     last_check = 0
     check_interval = 1.0  # 秒
@@ -188,10 +189,9 @@ def main():
             emotion = detect_emotion(reply)
             anim = map_emotion_to_anim(emotion)
 
-            # 6. TTS 语音合成
+            # 6. TTS 语音合成（常驻模型，2-3s）
             audio_path = ""
             try:
-                # 情绪 -> instruct 指令
                 instruct_map = {
                     "happy": "开心",
                     "sad": "难过",
@@ -202,13 +202,13 @@ def main():
                 instruct = instruct_map.get(emotion, "")
                 audio_path = tts.synthesize(reply, character_id=character, instruct=instruct) or ""
                 if audio_path:
-                    logger.info("TTS 生成: %s", os.path.basename(audio_path))
+                    logger.info("TTS done: %s", os.path.basename(audio_path))
                 else:
-                    logger.warning("TTS 生成失败，无音频")
+                    logger.warning("TTS failed, no audio")
             except Exception as e:
-                logger.warning("TTS 异常: %s", e)
+                logger.warning("TTS error: %s", e)
 
-            # 7. 写入 response.json
+            # 7. 写入 response.json（文本 + 音频一起返回）
             payload = {
                 "reply": reply,
                 "character": character,
@@ -222,7 +222,7 @@ def main():
             logger.info("已写入回复 [%s] anim=%s emotion=%s audio=%s",
                         character, anim, emotion, bool(audio_path))
 
-            # 7. 清空 outbox（已处理）
+            # 8. 清空 outbox（已处理）
             OUTBOX_FILE.write_text("[]", "utf-8")
             PENDING_FLAG.unlink(missing_ok=True)
 

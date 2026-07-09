@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # ── 数据路径 ──────────────────────────────────────────────
 
 HOME_DIR = Path.home()
-DATA_DIR = HOME_DIR / ".hanako" / "plugins" / "hanako-desktop-companion"
+from paths import DATA_DIR
 OUTBOX_FILE = DATA_DIR / "outbox.json"
 PENDING_FLAG = DATA_DIR / ".pending"
 RESPONSE_FILE = DATA_DIR / "response.json"

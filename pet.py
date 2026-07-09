@@ -4,6 +4,7 @@ import json
 import math
 import random
 import time
+import logging
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout,
@@ -20,7 +21,7 @@ from PySide6.QtGui import (
     QCursor
 )
 from config import CHARACTER_INFO, EXPRESSION_MAP, load_config, save_config
-from hanako_monitor import HanakoMonitor
+from hanako_monitor import HanakoMonitor, compact_bubble_text
 from ws_client import BridgeClient
 from memory_store import MemoryStore
 from behavior import BehaviorParams, BEHAVIOR_MODES
@@ -40,6 +41,8 @@ from character_editor import CharacterEditor
 from proactive_scheduler import ProactiveScheduler
 from avatar.sprite_renderer import SpriteRenderer
 from perception import PerceptionController
+
+logger = logging.getLogger(__name__)
 
 # ─── 设置对话框 ─────────────────────────────────────────
 
@@ -916,7 +919,7 @@ class PetWindow(QWidget):
         self._tts_player.stop()
 
         # 写到 outbox
-        basedir = Path.home() / ".hanako/plugins/hanako-desktop-companion"
+        basedir = Path(__file__).parent / "data"
         try:
             basedir.mkdir(parents=True, exist_ok=True)
             msg = {"text": text, "character": self._current_char, "time": time.time()}
@@ -1055,7 +1058,7 @@ class PetWindow(QWidget):
         # 关怀提醒重置
         self._break_notifier.reset()
 
-        basedir = Path.home() / ".hanako/plugins/hanako-desktop-companion"
+        basedir = Path(__file__).parent / "data"
         try:
             basedir.mkdir(parents=True, exist_ok=True)
             msg = {
@@ -1099,11 +1102,18 @@ class PetWindow(QWidget):
         if show_text:
             try:
                 tts_cfg = self.config.get("tts", {})
-                if tts_cfg.get("enabled", True) and audio_path and os.path.exists(audio_path):
-                    self._tts_player.play(audio_path)
+                if tts_cfg.get("enabled", True) and audio_path:
+                    if os.path.exists(audio_path):
+                        logger.info("Playing TTS: %s", audio_path)
+                        self._tts_player.play(audio_path)
+                    else:
+                        logger.warning("TTS audio not found: %s", audio_path)
+                else:
+                    if not audio_path:
+                        logger.debug("No audio_path in response")
                 self._show_bubble(show_text, emotion=emotion)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("TTS/bubble error: %s", e)
 
         # 2. 动画(P3: 传递 emotion,支持帧区间)
         try:
@@ -1242,7 +1252,7 @@ class PetWindow(QWidget):
 
     def _trigger_action(self, action_id: str):
         """用户点击动作联动项"""
-        basedir = Path.home() / ".hanako/plugins/hanako-desktop-companion"
+        basedir = Path(__file__).parent / "data"
         self._action_linker.trigger_action(basedir, action_id)
         self._show_break_bubble(f"{action_id}!", emotion="happy")
 

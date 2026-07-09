@@ -8,7 +8,7 @@ from PySide6.QtGui import QFont
 
 # ── 日志 ──
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format='[%(levelname)s] %(name)s: %(message)s'
 )
 

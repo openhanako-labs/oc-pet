@@ -14,12 +14,13 @@ import time
 from pathlib import Path
 
 from config import EXPRESSION_MAP, HANAKO_STATE_MAP
+from paths import NOTIFY_FILE, RESPONSE_FILE
 
 logger = logging.getLogger(__name__)
 
 TODO_FILE = Path.home() / ".hanako/plugin-data/todo/todos.json"
-NOTIFY_FILE = Path.home() / ".hanako/plugins/hanako-desktop-companion/notifications.json"
-RESPONSE_FILE = Path.home() / ".hanako/plugins/hanako-desktop-companion/response.json"
+# NOTIFY_FILE imported from paths
+# RESPONSE_FILE imported from paths
 
 # ── 气泡精简算法（移植自 HanakoPro） ─────────────────────
 
@@ -234,6 +235,8 @@ class HanakoMonitor:
         # 状态推断
         self._current_state_name = "idle"
         self._last_response_time = 0
+        self._last_response_ts = 0  # response.json 的最后 ts（用于检测更新）
+        self._last_audio_path = ""  # 最后播放的音频路径
         self._pending_notification_count = 0
 
 
@@ -352,7 +355,9 @@ class HanakoMonitor:
             return []
 
     def _read_response(self):
-        """读取回复文件，有回复时返回文字并清空"""
+        """读取回复文件，有新回复时返回文字。
+        不再清空文件，改用时间戳检测更新（支持先文本后音频的两步写入）。
+        """
         try:
             if not RESPONSE_FILE.exists():
                 return "", ""
@@ -362,12 +367,18 @@ class HanakoMonitor:
             data = json.loads(raw)
             reply = data.get("reply", "")
             audio_path = data.get("audioPath", "")
-            if reply or audio_path:
-                # 先读再清
-                try:
-                    RESPONSE_FILE.write_text("{}", "utf-8")
-                except Exception as e:
-                    logger.warning("failed to clear response: %s", e)
+            ts = data.get("ts", 0)
+
+            # 用时间戳判断是否是新回复
+            if ts <= self._last_response_ts:
+                # 不是新回复，但检查是否有新音频
+                if audio_path and audio_path != self._last_audio_path:
+                    self._last_audio_path = audio_path
+                    return "", audio_path  # 只返回音频，不重复显示文本
+                return "", ""
+
+            self._last_response_ts = ts
+            self._last_audio_path = audio_path
             return reply, audio_path
         except Exception as e:
             logger.warning("_read_response failed: %s", e)
