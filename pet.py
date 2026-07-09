@@ -162,6 +162,8 @@ class PetWindow(QWidget):
         if _voice_available:
             self._voice_input = VoiceInput()
             self._voice_input._on_status = self._on_voice_status
+            # 后台预加载 Whisper 模型
+            preload_whisper()
 
         # ── TTS 播放器 ──
         tts_cfg = self.config.get("tts", {})
