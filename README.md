@@ -1,28 +1,49 @@
 # OC Desktop Pet
 
-基于 PySide6 的透明桌面宠物，支持本地 LLM 对话与 Hanako Agent 双向通信。
+基于 PySide6 的 AI 桌面伴侣，深度集成 Hanako 生态。
 
 ## 功能
 
-- 🎭 **帧精灵动画**：idle / walk / extra 三种动画序列，按情绪自动切换
-- 💬 **对话气泡**：白底圆角 + 阴影 + 淡入动画，情绪高潮时变暖色
-- 🔗 **Hanako 通信**：与 Hanako Agent 双向消息桥接，桌宠直接给 Agent 发消息
-- 😊 **情绪检测**：根据 Agent 回复自动检测情绪（开心/悲伤/生气/惊讶），切换对应动画
-- 👻 **右键菜单**：切换角色、显示/隐藏桌宠、设置 API、退出
-- 🧠 **对话记忆**：本地 JSONL 持久化 + ChromaDB 向量检索（语义记忆）
-- ⚡ **事件驱动**：WebSocket 实时通信替代文件轮询
+### 核心能力
+
+- 💬 **对话** - 读取 Hanako 同一套身份文件（identity.md / ishiki.md），使用同一模型（agnes-2.0-flash）
+- 🔊 **语音输出** - CosyVoice2 零样本克隆，每个角色有独立音色，情绪影响语气
+- 🎤 **语音输入** - Whisper ASR，右键"说话"按钮，push-to-talk
+- 👁️ **实时视觉** - 每 2 分钟截屏，agnes 视觉模型分析你在做什么，注入对话上下文
+- 🧠 **感知系统** - 时间感知 + 情绪状态机（连续衰减）+ 屏幕感知
+- 🗣️ **主动对话** - 规则引擎：空闲时长 + 前台窗口分类 -> 自动搭话
+- 📦 **记忆压缩** - 50 条对话自动压缩，prompt 不膨胀
+- 🔌 **插件面板** - 浏览 Hanako 全部插件 + 快捷发送指令
+- ⚙️ **配置面板** - GUI 设置 TTS / 行为 / 主动对话 / 屏幕感知
+
+### 交互
+
+- 帧精灵动画（idle / walk / extra），瞳孔跟踪鼠标
+- 情绪帧区间映射（happy/angry/surprised/thinking）
+- 4 种行为模式（静默/正常/活跃/黏人）
+- 久坐提醒（三段递进）
+- 前台窗口检测（写作/开发/浏览/游戏/通讯/娱乐）
+- 右键菜单：对话/说话/行为/缩放/角色/穿透/设置/插件
+- 系统托盘
 
 ## 快速开始
 
 ### 1. 安装依赖
 
 ```bash
-pip install PySide6 requests Pillow websockets
+pip install PySide6 PySide6-Addons requests Pillow pyyaml
+pip install sounddevice openai-whisper  # 语音输入（可选）
 ```
 
-### 2. 配置 API
+### 2. 确保 Hanako 已安装
 
-启动后 **右键 → 设置**，填入 API 地址和 Key。不接 Hanako 也能用本地对话。
+桌宠从 Hanako 读取以下文件：
+- `~/.hanako/agents/<角色>/identity.md` - 角色身份
+- `~/.hanako/agents/<角色>/ishiki.md` - 意识/规则
+- `~/.hanako/agents/<角色>/config.yaml` - 模型配置
+- `~/.hanako/provider-catalog.json` - API 地址和密钥
+
+不需要单独配置 API，自动复用 Hanako 的。
 
 ### 3. 启动
 
@@ -30,155 +51,103 @@ pip install PySide6 requests Pillow websockets
 python main.py
 ```
 
-或双击 `start.bat`。
+或双击 `start_pet.bat`。
 
-## Hanako 集成
+首次启动时后台加载 CosyVoice 模型（约 23 秒），期间桌宠显示"正在准备声音..."。
 
-桌宠通过 WebSocket + 文件混合模式与 Hanako Agent 双向通信。
-
-### 安装插件
-
-将 `hanako-desktop-companion/` 目录安装为 Hanako 插件：
-
-1. Hanako 设置 → 插件 → 安装本地插件 → 选择本目录下的 `hanako-desktop-companion/`
-2. 重启 Hanako
-
-### 通信架构（v2.0 事件驱动版）
+## 架构
 
 ```
-桌宠 (pet.py)               WebSocket Server        Hanako Agent
-    │                           │                        │
-    │◄═══════════ WS 推送 ═══════►│                        │
-    │  text_delta/               │                        │
-    │  tool_start/               │                        │
-    │  response                  │                        │
-    │                           │                        │
-    │─ WS 发送 outbox ──────────►│                        │
-    │  {type: "outbox"}           │                        │
-    │                           │                        │
-    │  (WS 断开时回退文件)        │                        │
-    │◄─── 写 outbox.json ────────┼───────────────────────►│  companion_outbox 读取
-    │                           │                        │ Agent 回复
-    │◄───── 写 response.json ────┼───────────────────────►│  companion_send 写入
-    │                           │                        │
-    │ hanako_monitor 轮询        │                        │
-    │ (TODO + 通知)              │                        │
+用户
+  ├─ 打字 ──────────────> ConversationEngine
+  ├─ 右键"说话" ──> Whisper ──> ConversationEngine
+  │                              │
+  │                    ┌─────────┴─────────┐
+  │                    │  LLM (agnes)      │
+  │                    │  + Hanako 身份    │
+  │                    │  + 时间/屏幕感知   │
+  │                    │  + 记忆注入       │
+  │                    └─────────┬─────────┘
+  │                              │
+  │                    ┌─────────┴─────────┐
+  │                    │  CosyVoice TTS   │
+  │                    │  (零样本克隆)      │
+  │                    └─────────┬─────────┘
+  │                              │
+  └─ 桌宠窗口 <──────── 回调：气泡 + 语音
 ```
 
-### 实时事件推送
+单进程架构，所有组件在一个 `python main.py` 进程内运行。
 
-WS Server 向桌宠推送的事件类型：
-
-| 事件类型 | 用途 | 情绪映射 |
-|---------|------|---------|
-| `thinking_start` | Agent 开始思考 | 思考中 |
-| `thinking_delta` | Agent 思考更新 | 思考中 |
-| `text_delta` | Agent 文字输出 | 回复中 |
-| `mood_text` | 情绪化文本 | 回复中 |
-| `tool_start` | 执行工具 | 执行中/编辑中/浏览中 |
-| `tool_end` | 工具完成 | 成功→开心 / 失败→生气 |
-| `vision_progress` | 视觉处理中 | 观察中 |
-| `file_write_prepare` | 文件写入中 | 编辑中 |
-| `turn_end` | 回合结束 | 待机中 |
-
-### 文件说明
+## 文件说明
 
 | 文件 | 作用 |
 |------|------|
 | `main.py` | 启动入口 |
-| `pet.py` | 主窗口：动画、气泡、拖拽、右键菜单、Hanako 状态回调、记忆写入 |
-| `config.py` | 配置：角色信息、情绪映射、Hanako 状态映射 |
-| `hanako_monitor.py` | Hanako 监控：轮询 TODO/通知、WS 事件驱动情绪映射 |
-| `ws_server.py` | **WebSocket 服务器**（端口 19900） |
-| `ws_client.py` | **WebSocket 客户端**（桌宠 → WS Server） |
-| `memory_store.py` | **对话记忆存储**（JSONL + ChromaDB 向量） |
-| `harness_adapter.py` | LLM 适配器：读取角色设定，调用 Chat API |
-| `hanako-desktop-companion/` | Hanako 插件源码（消息桥接工具 + HTTP API） |
-
-## 对话记忆系统
-
-### 架构
-
-```
-对话结束 ──▶ MemoryStore.add()
-               │
-               ├──▶ memory.jsonl（源真理，追加写，不可变）
-               │
-               └──▶ ChromaDB 向量索引（语义检索，首次启用时下载 ~79MB ONNX 模型）
-```
-
-### 记忆条目
-
-```json
-{
-  "user_msg": "你最喜欢的食物是什么？",
-  "bot_reply": "炸牛排！夜之城最好的炸牛排",
-  "summary": "你最喜欢的食物是什么？",
-  "timestamp": "2026-05-29T...",
-  "emotion": "happy",
-  "confidence": 0.7,
-  "source": "dialogue"
-}
-```
-
-### 搜索方式
-
-- **关键词搜索** `search(keyword)`：匹配 user_msg + summary（本地，即时）
-- **语义搜索** `search_semantic(query)`：匹配向量嵌入（需要 ChromaDB 模型）
-- **格式化输出** `format_recent(n)` / `format_semantic(query)`：生成可注入 prompt 的文本
-
-### 自动写入
-
-Agent 回复完成后，`_on_hanako_state` 回调自动将对话写入记忆（JSONL 层即时写入，ChromaDB 异步同步）。
-
-## 目录结构
-
-```
-oc-pet/
-├── main.py                 # 启动入口
-├── pet.py                  # 主窗口（动画/气泡/拖拽/菜单/记忆写入）
-├── config.py               # 配置（角色/情绪/状态映射）
-├── hanako_monitor.py       # Hanako 监控（轮询 + WS 事件驱动）
-├── ws_server.py            # WebSocket 服务器（端口 19900）
-├── ws_client.py            # WebSocket 客户端
-├── memory_store.py         # 对话记忆存储（JSONL + ChromaDB）
-├── harness_adapter.py      # LLM 适配器
-├── api.py                  # 本地对话 API
-├── config.json             # 用户配置
-├── start.bat               # 启动脚本（自动启动 WS 服务器）
-├── hanako-desktop-companion/  # Hanako 插件
-│   ├── manifest.json
-│   ├── tools/
-│   │   ├── companion_outbox.js
-│   │   └── companion_send.js
-│   └── routes/
-│       └── api.js
-├── characters/
-│   ├── yuexiye/frames/     # 帧精灵
-│   └── ophelia/frames/     # 帧精灵
-└── skills/public/          # 角色设定
-```
-
-## 操作
-
-| 操作 | 效果 |
-|------|------|
-| 左键点击角色 | 打开输入框，发送本地对话 |
-| 输入文字按回车 | 发送消息 |
-| 拖拽空白区域 | 移动窗口 |
-| 右键 | 切换角色 / 隐藏桌宠 / 设置 / 退出 |
+| `pet.py` | 主窗口：渲染、交互、菜单、状态管理 |
+| `conversation_engine.py` | 对话引擎：LLM + TTS 后台线程 |
+| `harness_adapter.py` | LLM 适配器：读 Hanako 配置，调 API |
+| `hanako_context.py` | Hanako 上下文读取器：身份/模型/记忆 |
+| `tts_bridge.py` | CosyVoice 常驻 TTS 服务 |
+| `tts_player.py` | QMediaPlayer 音频播放 |
+| `voice_input.py` | Whisper ASR 语音输入 |
+| `screen_watcher.py` | 屏幕截屏 + 视觉模型分析 |
+| `perception.py` | 感知系统：时间/情绪/日程 |
+| `proactive_scheduler.py` | 主动对话规则引擎 |
+| `memory_store.py` | 对话记忆（JSONL + 压缩） |
+| `memory_compressor.py` | 记忆压缩引擎 |
+| `avatar/base.py` | AvatarRenderer 抽象接口 |
+| `avatar/sprite_renderer.py` | 帧精灵渲染器 |
+| `settings_dialog.py` | 配置面板 GUI |
+| `plugin_panel.py` | 插件浏览面板 |
+| `paths.py` | 路径常量集中管理 |
+| `config.py` | 配置管理 + 情绪映射 |
+| `config.json` | 用户配置（不提交，在 .gitignore） |
+| `data/` | 运行时数据（outbox/response，不提交） |
+| `characters/` | 角色帧精灵资源（不提交） |
 
 ## 自定义
 
-- 换角色图：替换 `characters/角色名/frames/` 下的 PNG
-- 改角色设定：编辑 `skills/public/角色名/SKILL.md`
-- 调动画速度：修改 `pet.py` 里的 `_frame_timer` 间隔
+| 操作 | 方法 |
+|------|------|
+| 换角色图 | 替换 `characters/<角色>/frames/` 下的 PNG |
+| 改行为模式 | 右键 -> 行为 -> 选择模式 |
+| 调 TTS 音量 | 右键 -> 设置 -> 语音输出 |
+| 调主动对话规则 | 编辑 `config.json` 的 `proactive.rules` |
+| 加 TTS 参考音频 | 编辑 CosyVoice 的 `speaker_refs.json` |
+| 换模型 | 在 Hanako 设置里改，桌宠自动跟随 |
+
+## 技术栈
+
+| 组件 | 技术 |
+|------|------|
+| GUI | PySide6 (Qt6) |
+| LLM | agnes-2.0-flash (OpenAI 兼容 API) |
+| TTS | CosyVoice2 (零样本克隆) |
+| ASR | OpenAI Whisper (base) |
+| 视觉 | agnes-2.0-flash vision (image input) |
+| 记忆 | JSONL + 压缩引擎 |
+| 截屏 | Pillow ImageGrab |
 
 ## 开发日志
 
-### v2.0（2026-05-29）
+### v3.0（2026-07-08）
 
-- **WebSocket 实时通信**：新建 `ws_server.py`，`ws_client.py` 新增 WS 发送，`hanako_monitor.py` 改为事件驱动模式
-- **对话记忆系统**：`memory_store.py` 重写，JSONL 持久化 + ChromaDB 向量检索，`pet.py` 集成记忆写入
-- **ChromaDB 模型下载**：受网络限制（~20 KiB/s），首次启动时自动下载 all-MiniLM-L6-v2 ONNX 模型（~79MB），下载完成后自动启用语义搜索
-- **Graceful degradation**：ChromaDB 不可用时静默降级到关键词搜索
+- Hanako 原生集成：读取同一套身份/模型/API 配置
+- 单进程架构：ConversationEngine 合并 bridge + pet
+- 语音输出：CosyVoice2 常驻服务，零样本克隆
+- 语音输入：Whisper ASR，push-to-talk
+- 实时视觉：截屏 + agnes 视觉模型分析
+- 感知系统：时间感知 + 情绪状态机
+- LLM 情绪检测：回复带 [emotion:xxx] 标签
+- 配置面板 + 插件面板
+- Avatar 渲染层抽象（预留 Live2D/VRM）
+- 清理：移除 ws_server/ws_client/hanako-desktop-companion
+
+### v1.0（2026-07-07）
+
+- TTS 可中断管线
+- 情绪帧区间映射
+- Proactive 主动对话
+- 记忆压缩引擎
+- NEKO 架构整合方案
