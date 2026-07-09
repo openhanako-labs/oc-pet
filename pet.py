@@ -22,7 +22,6 @@ from PySide6.QtGui import (
 )
 from config import CHARACTER_INFO, EXPRESSION_MAP, load_config, save_config
 from hanako_monitor import HanakoMonitor, compact_bubble_text
-from ws_client import BridgeClient
 from memory_store import MemoryStore
 from behavior import BehaviorParams, BEHAVIOR_MODES
 from behavior import (
@@ -98,15 +97,7 @@ class PetWindow(QWidget):
         # ── Hanako 状态监控 ──
         self._hanako_monitor = HanakoMonitor(on_state_change=self._on_hanako_state)
 
-        # ── 桥梁客户端(WebSocket)──
-        self._bridge = BridgeClient()
-        self._bridge.on_message = self._on_bridge_message
-        self._bridge.on_event = self._on_bridge_event
-        self._bridge.on_connected = self._on_bridge_connected
-        self._bridge.on_disconnected = self._on_bridge_disconnected
-        self._bridge.start()
-
-        # Hanako 状态轮询(仅 TODO + 通知;回复通过 WebSocket)
+        # Hanako 状态轮询(文件桥接模式)
         self._hanako_poll_timer = QTimer(self)
         self._hanako_poll_timer.timeout.connect(self._hanako_monitor.tick)
         self._hanako_poll_timer.start(800)
@@ -1238,105 +1229,6 @@ class PetWindow(QWidget):
         self._last_interaction = time.time()
 
 
-    # ── 桥梁回调 ──
-
-    def _on_bridge_message(self, msg: dict):
-        """收到桥梁推送消息"""
-        # ── 收到新回复 → 截停当前 TTS(P2 可中断管线)──
-        self._tts_player.stop()
-
-        msg_type = msg.get("type", "")
-        if msg_type == "response":
-            reply = msg.get("reply", "")
-            anim = msg.get("anim", "idle")
-            emotion = msg.get("emotion", "neutral")
-            audio_path = msg.get("audioPath", "")
-            self._on_hanako_state(anim, reply, emotion=emotion, state="speaking", audio_path=audio_path)
-
-    def _on_bridge_connected(self):
-        """桥梁连接成功 - hanako_monitor 停止文件轮询"""
-        self._hanako_monitor.set_ws_connected(True)
-
-    def _on_bridge_event(self, event: dict):
-        """收到实时事件(tool_start/text_delta/thinking_start 等)
-        直接推给 HanakoMonitor 做事件驱动情绪映射。
-        移植自 HanakoPro 的 desktop-pet-forward-event IPC。
-        """
-        self._hanako_monitor.push_event(event)
-
-    def _on_bridge_disconnected(self):
-        """桥梁断开"""
-        self._hanako_monitor.set_ws_connected(False)
-
-
-
-
-    # ── 气泡控制 ──
-
-    def _show_bubble(self, text: str, emotion: str = "neutral"):
-        """显示消息气泡"""
-        if not text or not hasattr(self, 'bubble'):
-            return
-        try:
-            self._is_thinking = False
-            self._bubble_message = text
-            self.bubble.set_text(text, bright=(emotion == "happy"))
-            self._reposition_bubble()
-            self.bubble.show()
-            self.bubble.raise_()
-            self._bubble_timer.start(6000)  # 6 秒后自动隐藏
-        except Exception:
-            pass
-
-    def _clear_hanako_bubble(self):
-        """清除气泡(超时回调)"""
-        if hasattr(self, 'bubble'):
-            try:
-                self.bubble.hide_bubble()
-            except Exception:
-                pass
-            self._bubble_message = ""
-
-    # ── 托盘 + 菜单 ──
-
-    def _toggle_visibility(self):
-        """切换显示/隐藏"""
-        if self.isVisible():
-            self.hide()
-        else:
-            self.show()
-
-    def _show_context_menu(self, pos):
-        """右键菜单 - 显示前更新动态部分(行为模式勾选、动作联动高亮)"""
-        if not hasattr(self, '_menu'):
-            return
-
-        # 更新行为模式勾选
-        for mode, a in self._behavior_actions.items():
-            a.setChecked(mode == self._behavior_mode)
-
-        # 更新动作联动高亮
-        highlighted = self._action_linker.highlighted_actions
-        for aid, a in self._action_menu_items.items():
-            if aid in highlighted:
-                a.setVisible(True)
-            else:
-                a.setVisible(False)
-
-        # 更新穿透按钮状态
-        self._passthrough_action.setChecked(self._mousePassthrough)
-
-        try:
-            self._menu.popup(self.mapToGlobal(pos))
-        except Exception:
-            pass
-
-    def _trigger_action(self, action_id: str):
-        """用户点击动作联动项"""
-        basedir = Path(__file__).parent / "data"
-        self._action_linker.trigger_action(basedir, action_id)
-        self._show_break_bubble(f"{action_id}!", emotion="happy")
-
     def _on_break_remind(self, stage: str, msg: str):
         """关怀提醒回调"""
         self._show_break_bubble(msg, emotion="cute")
@@ -1370,11 +1262,6 @@ class PetWindow(QWidget):
             except Exception:
                 pass
 
-        if hasattr(self, '_bridge'):
-            try:
-                self._bridge.stop()
-            except Exception:
-                pass
 
         if hasattr(self, '_tray_icon'):
             try:
