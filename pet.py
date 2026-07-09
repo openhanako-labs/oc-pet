@@ -44,6 +44,14 @@ from perception import PerceptionController
 
 logger = logging.getLogger(__name__)
 
+# 延迟导入语音输入（依赖 sounddevice + whisper）
+try:
+    from voice_input import VoiceInput, preload_whisper
+    _voice_available = True
+except ImportError:
+    _voice_available = False
+    logger.info("VoiceInput not available (install sounddevice + whisper)")
+
 # ─── 设置对话框 ─────────────────────────────────────────
 
 class PetWindow(QWidget):
@@ -147,6 +155,13 @@ class PetWindow(QWidget):
 
         # ── 感知控制器(P2: 时间 + 情绪状态机 + 日程)──
         self._perception = PerceptionController(self._current_char)
+
+        # ── 语音输入（ASR）──
+        self._voice_input = None
+        self._voice_recording = False
+        if _voice_available:
+            self._voice_input = VoiceInput()
+            self._voice_input._on_status = self._on_voice_status
 
         # ── TTS 播放器 ──
         tts_cfg = self.config.get("tts", {})
@@ -534,6 +549,7 @@ class PetWindow(QWidget):
 
         # 基础操作
         self._menu.addAction("💬 对话", self._toggle_input)
+        self._voice_action = self._menu.addAction("🎤 说话", self._toggle_voice)
 
         # 行为模式子菜单
         self._behavior_submenu = self._menu.addMenu("🚶 行为")
@@ -576,6 +592,69 @@ class PetWindow(QWidget):
         else:
             self.input_widget.show()
             self.input_field.setFocus()
+
+    def _toggle_voice(self):
+        """切换语音录音"""
+        if not self._voice_input:
+            self._show_bubble("语音输入不可用", emotion="neutral")
+            return
+
+        if not self._voice_recording:
+            # 开始录音
+            if self._voice_input.start():
+                self._voice_recording = True
+                self._voice_action.setText("⏹ 停止")
+            else:
+                self._show_bubble("录音启动失败", emotion="neutral")
+        else:
+            # 停止录音 -> 识别 -> 发送
+            self._voice_action.setText("🎤 说话")
+            self._voice_recording = False
+
+            # 在后台线程识别，避免阻塞 UI
+            import threading
+            def _do_asr():
+                text = self._voice_input.stop()
+                if text:
+                    # 写入 outbox（同 _send_message 逻辑）
+                    basedir = Path(__file__).parent / "data"
+                    try:
+                        basedir.mkdir(parents=True, exist_ok=True)
+                        msg = {"text": text, "character": self._current_char, "time": time.time()}
+                        outbox = basedir / "outbox.json"
+                        msgs = json.loads(outbox.read_text("utf-8")) if outbox.exists() else []
+                        msgs.append(msg)
+                        outbox.write_text(json.dumps(msgs, ensure_ascii=False), "utf-8")
+                        (basedir / ".pending").write_text("1", "utf-8")
+                        logger.info("Voice input sent: %s", text[:30])
+                    except Exception as e:
+                        logger.warning("Voice outbox error: %s", e)
+
+                    # 显示气泡提示
+                    self.bubble.set_text(f"🎤 {text[:30]}")
+                    self._reposition_bubble()
+                    self.bubble.show()
+                    QTimer.singleShot(3000, self._auto_hide_bubble)
+
+                    # 截停 TTS
+                    self._tts_player.stop()
+                    self._break_notifier.reset()
+                    self._is_thinking = True
+                else:
+                    self._show_bubble("没听清...", emotion="neutral")
+
+            t = threading.Thread(target=_do_asr, daemon=True)
+            t.start()
+
+    def _on_voice_status(self, msg: str):
+        """语音输入状态回调"""
+        if msg:
+            self._show_bubble(msg, emotion="thinking")
+        else:
+            try:
+                self.bubble.hide_bubble()
+            except Exception:
+                pass
 
     def _open_character_editor(self):
         """打开角色编辑器"""
