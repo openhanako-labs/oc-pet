@@ -1260,6 +1260,40 @@ class PetWindow(QWidget):
         """显示关怀/闲置提醒气泡"""
         self._show_bubble(text, emotion=emotion)
 
+    def _show_bubble(self, text: str, emotion: str = "neutral"):
+        """显示消息气泡"""
+        if not text or not hasattr(self, 'bubble'):
+            return
+        try:
+            self._is_thinking = False
+            self._bubble_message = text
+            self.bubble.set_text(text, bright=(emotion == "happy"))
+            self._reposition_bubble()
+            self.bubble.show()
+            self.bubble.raise_()
+            self._bubble_timer.start(6000)
+        except Exception:
+            pass
+
+    def _show_context_menu(self, pos):
+        """右键菜单"""
+        if not hasattr(self, '_menu'):
+            return
+        # 更新动态部分
+        if hasattr(self, '_behavior_actions'):
+            for mode, a in self._behavior_actions.items():
+                a.setChecked(mode == self._behavior_mode)
+        if hasattr(self, '_action_menu_items') and hasattr(self, '_action_linker'):
+            highlighted = self._action_linker.highlighted_actions
+            for aid, a in self._action_menu_items.items():
+                a.setVisible(aid in highlighted)
+        if hasattr(self, '_passthrough_action'):
+            self._passthrough_action.setChecked(self._mousePassthrough)
+        try:
+            self._menu.popup(self.mapToGlobal(pos))
+        except Exception:
+            pass
+
 
 
     def _on_hanako_state(self, anim_name: str, message: str, emotion: str = "neutral", state: str = "idle", audio_path: str = ""):
