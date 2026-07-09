@@ -1080,6 +1080,15 @@ class PetWindow(QWidget):
             except Exception:
                 pass
 
+    def _clear_hanako_bubble(self):
+        """清除气泡（超时回调）"""
+        if hasattr(self, 'bubble'):
+            try:
+                self.bubble.hide_bubble()
+            except Exception:
+                pass
+            self._bubble_message = ""
+
     def _on_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str):
         """对话引擎回复回调 - 在主线程中执行"""
         # 截停旧 TTS
