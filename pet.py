@@ -583,6 +583,7 @@ class PetWindow(QWidget):
         self._passthrough_action.setCheckable(True)
         self._passthrough_action.setChecked(self._mousePassthrough)
         self._menu.addAction("⚙️ 设置", self._open_settings)
+        self._menu.addAction("🔌 插件", self._open_plugin_panel)
 
         self._menu.addSeparator()
         self._menu.addAction("❌ 退出", self.close)
@@ -674,6 +675,24 @@ class PetWindow(QWidget):
             logger.info("配置已保存")
             # 应用即时生效的设置
             self._apply_settings()
+
+    def _open_plugin_panel(self):
+        """打开插件面板"""
+        from plugin_panel import PluginPanel
+        panel = PluginPanel(on_send_command=self._send_plugin_command, parent=self)
+        panel.exec()
+
+    def _send_plugin_command(self, text: str):
+        """从插件面板发送指令到对话引擎"""
+        if self._engine:
+            self._engine.send(text, character=self._current_char)
+            self._tts_player.stop()
+            self.bubble.set_text("⏳ 思考中...")
+            self._reposition_bubble()
+            self.bubble.show()
+            self.bubble.raise_()
+            self._is_thinking = True
+            self._pending_chat = True
 
     def _apply_settings(self):
         """应用配置变更"""
