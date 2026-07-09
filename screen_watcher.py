@@ -27,10 +27,8 @@ DEFAULT_INTERVAL = 120  # 默认截屏间隔（秒）
 SCREENSHOT_SCALE = 4    # 缩小倍率（减小 base64 体积）
 JPEG_QUALITY = 50       # JPEG 压缩质量
 
-# 视觉模型 API（复用 agnes provider）
-AGNES_API = "https://apihub.agnes-ai.com/v1/chat/completions"
-AGNES_KEY = "sk-2QRJEolAdfXlLQEqGHx7MGGD7zsYTKjumb7KAgm9KDtooRll"
-AGNES_MODEL = "agnes-2.0-flash"
+# 视觉模型 API（从 Hanako context 动态读取）
+from hanako_context import HanakoContext
 
 VISION_PROMPT = "用一句话简短描述用户当前在屏幕上做什么（不超过20字）"
 
@@ -107,15 +105,26 @@ class ScreenWatcher:
         logger.info("Screenshot: %s, %dKB base64", new_size, len(b64) // 1024)
 
         # 3. 调视觉模型
+        # 从 Hanako context 读取 API 配置
+        ctx = HanakoContext()
+        cfg = ctx.read_model_config()
+        api_url = cfg.get("base_url", "") + "/chat/completions"
+        api_key = cfg.get("api_key", "")
+        model = cfg.get("model", "")
+
+        if not api_url or not api_key:
+            logger.warning("No API config for vision")
+            return
+
         try:
             resp = requests.post(
-                AGNES_API,
+                api_url,
                 headers={
-                    "Authorization": f"Bearer {AGNES_KEY}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": AGNES_MODEL,
+                    "model": model,
                     "messages": [{
                         "role": "user",
                         "content": [
