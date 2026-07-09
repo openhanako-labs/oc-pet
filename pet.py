@@ -577,11 +577,12 @@ class PetWindow(QWidget):
         self._menu.addAction("🔍 放大", self._zoom_in)
         self._menu.addAction("🔍 缩小", self._zoom_out)
 
-        # 角色 / 穿透
+        # 角色 / 穿透 / 设置
         self._menu.addAction("🎨 角色", self._open_character_editor)
         self._passthrough_action = self._menu.addAction("🔍 穿透", self._toggle_passthrough)
         self._passthrough_action.setCheckable(True)
         self._passthrough_action.setChecked(self._mousePassthrough)
+        self._menu.addAction("⚙️ 设置", self._open_settings)
 
         self._menu.addSeparator()
         self._menu.addAction("❌ 退出", self.close)
@@ -662,6 +663,45 @@ class PetWindow(QWidget):
         from character_editor import CharacterEditor
         editor = CharacterEditor(self._current_char, parent=self)
         editor.exec()
+
+    def _open_settings(self):
+        """打开配置面板"""
+        from settings_dialog import SettingsDialog
+        dialog = SettingsDialog(self.config, parent=self)
+        if dialog.exec():
+            self.config = dialog.get_config()
+            save_config(self.config)
+            logger.info("配置已保存")
+            # 应用即时生效的设置
+            self._apply_settings()
+
+    def _apply_settings(self):
+        """应用配置变更"""
+        # TTS
+        tts_cfg = self.config.get("tts", {})
+        if tts_cfg.get("enabled", True):
+            self._tts_player.enable()
+        else:
+            self._tts_player.disable()
+        self._tts_player.set_volume(tts_cfg.get("volume", 0.8))
+
+        # 行为模式
+        self._switch_behavior_mode(self.config.get("behavior", "normal"))
+
+        # 久坐提醒
+        br_cfg = self.config.get("break_reminder", {})
+        if br_cfg.get("enabled", True):
+            self._break_notifier.enable()
+        else:
+            self._break_notifier.disable()
+
+        # 主动对话
+        pro_cfg = self.config.get("proactive", {})
+        if pro_cfg.get("enabled", True):
+            self._proactive.enable()
+        else:
+            self._proactive.disable()
+        self._proactive.load_config(pro_cfg)
 
     # ── 角色加载 ──
 
