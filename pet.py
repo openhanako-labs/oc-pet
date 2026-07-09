@@ -336,6 +336,19 @@ class PetWindow(QWidget):
         if reason == QSystemTrayIcon.DoubleClick:
             self._toggle_visibility()
 
+    def _toggle_visibility(self):
+        """切换显示/隐藏"""
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
+
+    def _trigger_action(self, action_id: str):
+        """用户点击动作联动项"""
+        basedir = Path(__file__).parent / "data"
+        self._action_linker.trigger_action(basedir, action_id)
+        self._show_break_bubble(f"{action_id}!", emotion="happy")
+
     def _adjust_scale(self):
         """缩放 +0.2,钳制 0.3~2.0"""
         self._pet_scale = min(2.0, self._pet_scale + 0.2)
@@ -1405,9 +1418,9 @@ class PetWindow(QWidget):
                 pass
 
 
-        if hasattr(self, '_tray_icon'):
+        if hasattr(self, '_tray'):
             try:
-                self._tray_icon.hide()
+                self._tray.hide()
             except Exception:
                 pass
 
