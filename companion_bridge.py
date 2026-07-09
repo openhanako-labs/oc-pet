@@ -116,8 +116,22 @@ def main():
         logger.warning("TTS: 未找到角色 %s 的参考音频", agent_id)
 
     # 预加载 CosyVoice 模型（约 20s，随 bridge 启动）
+    # 先写一个加载提示给 pet
+    loading_payload = {
+        "reply": "正在准备声音...",
+        "character": agent_id,
+        "anim": "idle",
+        "emotion": "thinking",
+        "audioPath": "",
+        "ts": time.time(),
+        "status": "loading",
+    }
+    RESPONSE_FILE.write_text(json.dumps(loading_payload, ensure_ascii=False), "utf-8")
     logger.info("预加载 CosyVoice 模型...")
     tts.preload()
+
+    # 模型就绪，清除加载提示
+    RESPONSE_FILE.write_text("{}", "utf-8")
 
     last_check = 0
     check_interval = 1.0  # 秒
