@@ -19,6 +19,7 @@ import time
 from harness_adapter import HanakoPetAdapter
 from perception import PerceptionController
 from tts_bridge import CosyVoiceService
+from screen_watcher import ScreenWatcher
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class ConversationEngine:
         self._adapter = None
         self._tts = None
         self._perception = PerceptionController(character_id)
+        self._screen = ScreenWatcher(interval=120)  # 每 2 分钟截屏一次
         self._queue: list[dict] = []
         self._lock = threading.Lock()
         self._running = False
@@ -81,6 +83,7 @@ class ConversationEngine:
     def stop(self):
         """停止引擎"""
         self._running = False
+        self._screen.stop()
         with self._lock:
             self._queue.clear()
 
@@ -106,6 +109,9 @@ class ConversationEngine:
         # 刷新日程
         self._perception.tick_schedule()
 
+        # 启动屏幕感知
+        self._screen.start()
+
         logger.info("对话引擎启动完成")
 
         while self._running:
@@ -129,7 +135,7 @@ class ConversationEngine:
 
         # 1. LLM 回复
         try:
-            perception_ctx = self._perception.build_context()
+            perception_ctx = self._perception.build_context() + "\n" + self._screen.get_context()
             reply, emotion = self._adapter.chat(
                 message=text, inject_memory=True, extra_context=perception_ctx
             )
