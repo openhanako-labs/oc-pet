@@ -122,7 +122,13 @@ class PluginPanel(QDialog):
                 continue
             try:
                 m = json.loads(manifest.read_text("utf-8"))
-                tools_raw = m.get("contributes", {}).get("tools", [])
+                # 安全获取 tools
+                contributes = m.get("contributes", {})
+                if not isinstance(contributes, dict):
+                    contributes = {}
+                tools_raw = contributes.get("tools", [])
+                if not isinstance(tools_raw, list):
+                    tools_raw = []
                 tools = []
                 for t in tools_raw:
                     src = t.get("source", "")
