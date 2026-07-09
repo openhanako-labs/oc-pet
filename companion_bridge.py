@@ -191,16 +191,16 @@ def main():
             # 4. 调用 LLM 生成回复（使用 Hanako 原生适配器 + 感知上下文）
             try:
                 perception_ctx = perception.build_context()
-                reply = adapter.chat(message=text, inject_memory=True, extra_context=perception_ctx)
+                reply, emotion = adapter.chat(message=text, inject_memory=True, extra_context=perception_ctx)
                 if not reply:
                     reply = "…"
-                logger.info("生成回复: %s", reply[:60])
+                logger.info("生成回复: %s [emotion:%s]", reply[:60], emotion)
             except Exception as e:
                 logger.error("LLM 调用失败: %s", e)
                 reply = "…（信号不太好，你再说一遍？）"
+                emotion = "neutral"
 
-            # 5. 情绪检测
-            emotion = detect_emotion(reply)
+            # 5. 动画映射
             anim = map_emotion_to_anim(emotion)
 
             # 6. TTS 语音合成（常驻模型，2-3s）

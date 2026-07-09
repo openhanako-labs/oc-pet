@@ -77,7 +77,7 @@ class HanakoPetAdapter:
         if not self._base_url or not self._api_key:
             return "…（模型未配置，请在 Hanako 设置中配置模型后重试）"
 
-        messages = [{"role": "system", "content": self._system_prompt}]
+        messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] 在回复末尾添加情绪标签，格式 [emotion:xxx]，xxx 为 happy/angry/sad/surprised/thinking/neutral 之一。例如：你好呀。[emotion:happy]"}]
 
         # 注入记忆
         if inject_memory:
@@ -105,11 +105,19 @@ class HanakoPetAdapter:
             resp = self._call_api(messages)
             text = resp.strip() or "…"
 
+            # 解析情绪标签
+            emotion = "neutral"
+            import re
+            em_match = re.search(r'\[emotion:(\w+)\]', text)
+            if em_match:
+                emotion = em_match.group(1)
+                text = re.sub(r'\s*\[emotion:\w+\]\s*$', '', text).strip()
+
             # 保存到历史
             self._history.append({"role": "user", "content": message.strip()})
             self._history.append({"role": "assistant", "content": text})
 
-            return text
+            return text, emotion
         except requests.exceptions.Timeout:
             return "...（网络有点慢，你再说一遍？）"
         except requests.exceptions.ConnectionError:
