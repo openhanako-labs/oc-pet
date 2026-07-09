@@ -1113,12 +1113,18 @@ class PetWindow(QWidget):
         self._tts_player.stop()
 
         # 显示气泡
-        if reply and reply.strip() and reply.strip() != '…':
+        if reply and reply.strip() and reply.strip() not in ("\u2026", "..."):
             try:
                 compact = compact_bubble_text(reply)
             except Exception:
                 compact = reply
             self._show_bubble(compact or reply, emotion=emotion)
+        else:
+            # 空回复也要清除"思考中"气泡
+            try:
+                self.bubble.hide_bubble()
+            except Exception:
+                pass
 
         # 播放音频
         if audio_path and os.path.exists(audio_path):
