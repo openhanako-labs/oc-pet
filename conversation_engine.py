@@ -150,9 +150,9 @@ class ConversationEngine:
         # 2. 动画映射
         anim = map_emotion_to_anim(emotion)
 
-        # 3. TTS 合成
+        # 3. TTS 合成（跳过空回复）
         audio_path = ""
-        if self._tts and self._tts_ready:
+        if self._tts and self._tts_ready and reply.strip() and reply.strip() not in ("\u2026", "..."):
             try:
                 instruct_map = {
                     "happy": "开心", "sad": "难过", "angry": "生气",
@@ -166,6 +166,8 @@ class ConversationEngine:
                     logger.warning("TTS failed, no audio")
             except Exception as e:
                 logger.warning("TTS error: %s", e)
+        else:
+            logger.info("TTS skipped: empty reply")
 
         # 4. 回调
         self.on_reply(reply, emotion, anim, audio_path)

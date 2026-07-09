@@ -1103,12 +1103,16 @@ class PetWindow(QWidget):
             self._bubble_message = ""
 
     def _on_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str):
-        """对话引擎回复回调 - 在主线程中执行"""
+        """对话引擎回复回调 - 从后台线程调用，用 QTimer 转到主线程执行"""
+        QTimer.singleShot(0, lambda: self._do_engine_reply(reply, emotion, anim, audio_path))
+
+    def _do_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str):
+        """在主线程中处理引擎回复"""
         # 截停旧 TTS
         self._tts_player.stop()
 
         # 显示气泡
-        if reply:
+        if reply and reply.strip() and reply.strip() != '…':
             try:
                 compact = compact_bubble_text(reply)
             except Exception:
@@ -1156,7 +1160,11 @@ class PetWindow(QWidget):
         self._last_interaction = time.time()
 
     def _on_engine_status(self, msg: str):
-        """引擎状态提示"""
+        """引擎状态提示 - 从后台线程调用，转到主线程"""
+        QTimer.singleShot(0, lambda: self._do_engine_status(msg))
+
+    def _do_engine_status(self, msg: str):
+        """在主线程中处理引擎状态"""
         if msg:
             self._show_bubble(msg, emotion="thinking")
         else:

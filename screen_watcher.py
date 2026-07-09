@@ -133,7 +133,7 @@ class ScreenWatcher:
                              "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
                         ]
                     }],
-                    "max_tokens": 200,
+                    "max_tokens": 1000,
                     "temperature": 0.3,
                 },
                 timeout=30,
