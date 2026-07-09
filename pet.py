@@ -144,6 +144,7 @@ class PetWindow(QWidget):
             on_proactive=self._on_proactive_trigger,
         )
         self._proactive.load_config(proactive_cfg)
+        self._proactive_grace = time.time() + 120  # 启动后 2 分钟内不触发主动对话
 
         # ── 感知控制器(P2: 时间 + 情绪状态机 + 日程)──
         self._perception = PerceptionController(self._current_char)
@@ -1244,7 +1245,8 @@ class PetWindow(QWidget):
 
         # Proactive 主动对话(与 BreakNotifier 同频)
         try:
-            self._proactive.tick()
+            if time.time() > self._proactive_grace:
+                self._proactive.tick()
         except Exception:
             pass
 
