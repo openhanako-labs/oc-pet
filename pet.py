@@ -40,6 +40,7 @@ from character_editor import CharacterEditor
 from proactive_scheduler import ProactiveScheduler
 from avatar.sprite_renderer import SpriteRenderer
 from perception import PerceptionController
+from conversation_engine import ConversationEngine
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,13 @@ class PetWindow(QWidget):
 
         # ── 感知控制器(P2: 时间 + 情绪状态机 + 日程)──
         self._perception = PerceptionController(self._current_char)
+
+        # ── 对话引擎（合并 bridge，单进程）──
+        self._engine = ConversationEngine(self._current_char)
+        self._engine.on_reply = self._on_engine_reply
+        self._engine.on_status = self._on_engine_status
+        self._engine.on_tts_ready = lambda: logger.info("Engine TTS ready")
+        self._engine.start()
 
         # ── 语音输入（ASR）──
         self._voice_input = None
@@ -990,36 +998,87 @@ class PetWindow(QWidget):
         # ── 用户发新消息 → 立即截停旧 TTS(P2 可中断管线)──
         self._tts_player.stop()
 
-        # 写到 outbox
-        basedir = Path(__file__).parent / "data"
-        try:
-            basedir.mkdir(parents=True, exist_ok=True)
-            msg = {"text": text, "character": self._current_char, "time": time.time()}
-            outbox = basedir / "outbox.json"
-            msgs = json.loads(outbox.read_text("utf-8")) if outbox.exists() else []
-            msgs.append(msg)
-            outbox.write_text(json.dumps(msgs, ensure_ascii=False), "utf-8")
-            # 写待处理标记 → Agent 下次回复前检测到
-            (basedir / ".pending").write_text("1", "utf-8")
-        except Exception as e:
-            print(f"Outbox error: {e}")
+        # 通过对话引擎发送（异步）
+        if self._engine:
+            self._engine.send(text, character=self._current_char)
 
-        self.bubble.set_text("⏳ 发送中...")
+        self.bubble.set_text("⏳ 思考中...")
         self._reposition_bubble()
         self.bubble.show()
         self.bubble.raise_()
         self._is_thinking = True
-        # 记录用户消息,等待配对回复
         self._pending_user_msg = text
         self._pending_emotion = "neutral"
         self._pending_chat = True
-        QTimer.singleShot(3000, self._auto_hide_bubble)
 
     def _auto_hide_bubble(self):
         """发送中气泡超时隐藏"""
         self._is_thinking = False
         self._bubble_message = ""
         if hasattr(self, 'bubble'):
+            try:
+                self.bubble.hide_bubble()
+            except Exception:
+                pass
+
+    def _on_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str):
+        """对话引擎回复回调 - 在主线程中执行"""
+        # 截停旧 TTS
+        self._tts_player.stop()
+
+        # 显示气泡
+        if reply:
+            try:
+                compact = compact_bubble_text(reply)
+            except Exception:
+                compact = reply
+            self._show_bubble(compact or reply, emotion=emotion)
+
+        # 播放音频
+        if audio_path and os.path.exists(audio_path):
+            tts_cfg = self.config.get("tts", {})
+            if tts_cfg.get("enabled", True):
+                logger.info("Playing TTS: %s", audio_path)
+                self._tts_player.play(audio_path)
+
+        # 动画
+        try:
+            self._set_anim_seq(anim, emotion=emotion)
+        except Exception:
+            pass
+
+        # 触发情绪状态机
+        if emotion and emotion != "neutral":
+            try:
+                self._perception.trigger_emotion(emotion)
+            except Exception:
+                pass
+
+        # 记忆写入
+        if reply and self._pending_chat and self._pending_user_msg:
+            try:
+                self._mem_store.add(
+                    user_msg=self._pending_user_msg,
+                    bot_reply=reply,
+                    emotion=emotion,
+                    confidence=0.85,
+                    source="dialogue",
+                )
+            except Exception as e:
+                logger.warning("Memory store failed: %s", e)
+            self._pending_user_msg = ""
+            self._pending_chat = False
+
+        # 重置 idle
+        self._is_thinking = False
+        self._idle_stage = None
+        self._last_interaction = time.time()
+
+    def _on_engine_status(self, msg: str):
+        """引擎状态提示"""
+        if msg:
+            self._show_bubble(msg, emotion="thinking")
+        else:
             try:
                 self.bubble.hide_bubble()
             except Exception:
@@ -1123,30 +1182,11 @@ class PetWindow(QWidget):
             self._show_break_bubble("你回来啦~", emotion="happy")
 
     def _on_proactive_trigger(self, prompt_text: str):
-        """Proactive 调度器触发 → 写入 outbox,让 Agent 生成回复
-
-        不显示 "发送中" 气泡(避免用户困惑),Agent 回复后自然显示气泡。
-        """
-        # 关怀提醒重置
+        """Proactive 调度器触发 -> 通过引擎发送"""
         self._break_notifier.reset()
-
-        basedir = Path(__file__).parent / "data"
-        try:
-            basedir.mkdir(parents=True, exist_ok=True)
-            msg = {
-                "text": prompt_text,
-                "character": self._current_char,
-                "time": time.time(),
-                "type": "proactive",  # 标记为主动发起,供 Agent 识别
-            }
-            outbox = basedir / "outbox.json"
-            msgs = json.loads(outbox.read_text("utf-8")) if outbox.exists() else []
-            msgs.append(msg)
-            outbox.write_text(json.dumps(msgs, ensure_ascii=False), "utf-8")
-            (basedir / ".pending").write_text("1", "utf-8")
+        if self._engine:
+            self._engine.send(prompt_text, character=self._current_char)
             logger.info("Proactive message sent: %s", prompt_text)
-        except Exception as e:
-            logger.warning("Proactive outbox error: %s", e)
 
     def _show_break_bubble(self, text: str, emotion: str = "neutral"):
         """显示关怀/闲置提醒气泡"""
@@ -1272,6 +1312,12 @@ class PetWindow(QWidget):
         if hasattr(self, '_mem_store'):
             try:
                 self._mem_store.close()
+            except Exception:
+                pass
+
+        if hasattr(self, '_engine'):
+            try:
+                self._engine.stop()
             except Exception:
                 pass
 
