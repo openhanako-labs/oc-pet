@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import (
     Qt, QTimer, QPoint, QRect, QEvent,
-    QPropertyAnimation, QEasingCurve
+    QPropertyAnimation, QEasingCurve, Signal
 )
 from PySide6.QtGui import (
     QPixmap, QPainter, QFont, QColor, QPen, QPainterPath,
@@ -56,6 +56,10 @@ except ImportError:
 
 class PetWindow(QWidget):
     """透明桌面宠物窗口"""
+
+    # 跨线程信号：后台线程 -> 主线程
+    engine_reply_signal = Signal(str, str, str, str)  # reply, emotion, anim, audio_path
+    engine_status_signal = Signal(str)  # status message
 
     def __init__(self):
         super().__init__()
@@ -154,6 +158,9 @@ class PetWindow(QWidget):
         self._engine.on_reply = self._on_engine_reply
         self._engine.on_status = self._on_engine_status
         self._engine.on_tts_ready = lambda: logger.info("Engine TTS ready")
+        # 连接跨线程信号
+        self.engine_reply_signal.connect(self._do_engine_reply)
+        self.engine_status_signal.connect(self._do_engine_status)
         self._engine.start()
 
         # ── 语音输入（ASR）──
@@ -1104,8 +1111,10 @@ class PetWindow(QWidget):
             self._bubble_message = ""
 
     def _on_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str):
-        """对话引擎回复回调 - 从后台线程调用，用 QTimer 转到主线程执行"""
-        QTimer.singleShot(0, lambda: self._do_engine_reply(reply, emotion, anim, audio_path))
+        """对话引擎回复回调 - 从后台线程调用，通过信号转到主线程"""
+        # 从 Python threading.Thread 调 QTimer.singleShot 不可靠
+        # 用 Signal 发射，Qt 会自动跨线程投递到主线程
+        self.engine_reply_signal.emit(reply, emotion, anim, audio_path)
 
     def _do_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str):
         """在主线程中处理引擎回复"""
@@ -1167,8 +1176,8 @@ class PetWindow(QWidget):
         self._last_interaction = time.time()
 
     def _on_engine_status(self, msg: str):
-        """引擎状态提示 - 从后台线程调用，转到主线程"""
-        QTimer.singleShot(0, lambda: self._do_engine_status(msg))
+        """引擎状态提示 - 从后台线程调用，通过信号转到主线程"""
+        self.engine_status_signal.emit(msg)
 
     def _do_engine_status(self, msg: str):
         """在主线程中处理引擎状态"""

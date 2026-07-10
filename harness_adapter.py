@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -167,7 +168,17 @@ class HanakoPetAdapter:
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"].strip()
+        choices = data.get("choices", [])
+        if not choices:
+            logger.warning("API returned no choices: %s", json.dumps(data, ensure_ascii=False)[:200])
+            return ""
+        content = choices[0].get("message", {}).get("content", "")
+        finish = choices[0].get("finish_reason", "")
+        if not content:
+            logger.warning("API returned empty content | finish=%s | usage=%s", finish, data.get("usage", {}))
+            return ""
+        logger.info("API OK | finish=%s | usage=%s", finish, data.get("usage", {}))
+        return content.strip()
 
     def _call_anthropic(self, messages: list[dict]) -> str:
         """调用 Anthropic 兼容 API"""

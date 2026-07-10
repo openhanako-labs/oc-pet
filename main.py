@@ -26,6 +26,15 @@ def main():
     font = QFont("Microsoft YaHei UI", 10)
     app.setFont(font)
     
+    # 清除旧的 response.json，避免启动时播放上次的回复
+    try:
+        from paths import RESPONSE_FILE
+        if RESPONSE_FILE.exists():
+            RESPONSE_FILE.unlink()
+            logging.info("Cleared old response.json")
+    except Exception:
+        pass
+    
     window = PetWindow()
     window.show()
     
