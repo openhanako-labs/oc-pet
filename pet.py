@@ -37,9 +37,9 @@ from tts_player import TTSTtsPlayer
 from eye_overlay import EyeOverlay
 from startup_screen import StartupScreen
 from character_editor import CharacterEditor
-from proactive_scheduler import ProactiveScheduler
+from perception import PerceptionController, ProactiveScheduler
 from avatar.sprite_renderer import SpriteRenderer
-from perception import PerceptionController
+
 from conversation_engine import ConversationEngine
 
 logger = logging.getLogger(__name__)
