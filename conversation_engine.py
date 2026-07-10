@@ -34,11 +34,11 @@ class ConversationEngine:
     生命周期：随 pet 启动而启动，随 pet 关闭而关闭。
     """
 
-    def __init__(self, character_id: str = "ophelia"):
+    def __init__(self, character_id: str = "ophelia", perception: PerceptionController = None):
         self._character_id = character_id
         self._adapter = None
         self._tts = None
-        self._perception = PerceptionController(character_id)
+        self._perception = perception or PerceptionController(character_id)  # 外部注入优先
         self._queue: list[dict] = []
         self._lock = threading.Lock()
         self._running = False
@@ -171,10 +171,14 @@ class ConversationEngine:
         self.on_reply(reply, emotion, anim, audio_path)
 
     def switch_character(self, character_id: str):
-        """切换角色"""
+        """切换角色 - 清空队列和历史"""
+        with self._lock:
+            self._queue.clear()
         self._character_id = character_id
         try:
             self._adapter = HanakoPetAdapter(agent_id=character_id)
+            if hasattr(self._adapter, '_history'):
+                self._adapter._history.clear()
             logger.info("角色切换: %s", character_id)
         except Exception as e:
             logger.error("角色切换失败: %s", e)

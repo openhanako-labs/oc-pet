@@ -320,7 +320,7 @@ class ProactiveScheduler:
         # 系统空闲时间检测（Windows GetLastInputInfo）
         import ctypes
         class LASTINPUTINFO(ctypes.Structure):
-            fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
         lii = LASTINPUTINFO()
         lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
         ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii))

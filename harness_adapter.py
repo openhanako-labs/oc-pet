@@ -116,7 +116,6 @@ class HanakoPetAdapter:
 
             # 解析情绪标签
             emotion = "neutral"
-            import re
             em_match = re.search(r'\[emotion:(\w+)\]', text)
             if em_match:
                 emotion = em_match.group(1)

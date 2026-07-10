@@ -79,10 +79,16 @@ class TTSTtsPlayer:
             logger.warning("Failed to play audio: %s", e)
 
     def stop(self):
-        """停止当前播放"""
+        """停止当前播放并释放资源"""
         if self._player:
             try:
                 self._player.stop()
+                self._player.deleteLater()
+            except Exception:
+                pass
+        if self._audio_output:
+            try:
+                self._audio_output.deleteLater()
             except Exception:
                 pass
         self._player = None

@@ -144,7 +144,7 @@ class PetWindow(QWidget):
         self._perception = PerceptionController(self._current_char)
 
         # ── 对话引擎（合并 bridge，单进程）──
-        self._engine = ConversationEngine(self._current_char)
+        self._engine = ConversationEngine(self._current_char, perception=self._perception)
         self._engine.on_reply = self._on_engine_reply
         self._engine.on_status = self._on_engine_status
         self._engine.on_tts_ready = lambda: logger.info("Engine TTS ready")
