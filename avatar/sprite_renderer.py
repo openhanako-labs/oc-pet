@@ -75,6 +75,8 @@ class SpriteRenderer(AvatarRenderer):
         # 帧数据
         self._frames: dict[str, list[QPixmap]] = {}
         self._frame_tops: dict[str, list[int]] = {}
+        self._seq_fps: dict[str, int] = {}
+        self._emotion_ranges: dict[str, tuple[int, int]] = {}
         self._anim_seq: str = 'idle'
         self._anim_idx: int = 0
         self._anim_range: tuple[Optional[int], Optional[int]] = (None, None)
@@ -93,21 +95,110 @@ class SpriteRenderer(AvatarRenderer):
     # ── 生命周期 ──
 
     def load(self, character_id: str) -> bool:
-        """从 characters/<id>/frames/ 加载帧序列"""
+        """加载角色 - 优先读 pet.json (spritesheet 模式)，回退到分帧文件"""
         self._character_id = character_id
         self._frames = {}
         self._frame_tops = {}
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        char_dir = os.path.join(base_dir, "characters", character_id, "frames")
+        char_dir = os.path.join(base_dir, "characters", character_id)
 
-        if not os.path.isdir(char_dir):
-            logger.warning("Character directory not found: %s", char_dir)
-            self._fallback_load(character_id)
+        # 优先：pet.json spritesheet 模式
+        pet_json_path = os.path.join(char_dir, "pet.json")
+        if os.path.exists(pet_json_path):
+            if self._load_from_pet_json(char_dir, pet_json_path):
+                return True
+            logger.warning("pet.json load failed, falling back to frames/")
+
+        # 回退：分帧 PNG 文件夹模式
+        frames_dir = os.path.join(char_dir, "frames")
+        if os.path.isdir(frames_dir):
+            return self._load_from_frames_dir(frames_dir)
+
+        logger.warning("Character directory not found: %s", char_dir)
+        self._fallback_load(character_id)
+        return False
+
+    def _load_from_pet_json(self, char_dir: str, json_path: str) -> bool:
+        """从 pet.json 加载 spritesheet"""
+        try:
+            import json
+            meta = json.loads(open(json_path, encoding='utf-8').read())
+
+            ss = meta.get('spritesheet', {})
+            src = ss.get('src', 'spritesheet.png')
+            frame_w = ss.get('frameWidth', 0)
+            frame_h = ss.get('frameHeight', 0)
+            self._scale = ss.get('scale', 1.0)
+
+            sheet_path = os.path.join(char_dir, src)
+            if not os.path.exists(sheet_path):
+                logger.warning("Spritesheet not found: %s", sheet_path)
+                return False
+
+            sheet = QPixmap(sheet_path)
+            if sheet.isNull():
+                logger.warning("Failed to load spritesheet: %s", sheet_path)
+                return False
+
+            cols = sheet.width() // frame_w if frame_w > 0 else 1
+            rows = sheet.height() // frame_h if frame_h > 0 else 1
+            total = cols * rows
+
+            # 切割所有帧
+            all_frames = []
+            all_tops = []
+            for idx in range(total):
+                col = idx % cols
+                row = idx // cols
+                x = col * frame_w
+                y = row * frame_h
+                pix = sheet.copy(x, y, frame_w, frame_h)
+                if not pix.isNull():
+                    all_frames.append(pix)
+                    all_tops.append(scan_top_y(pix))
+
+            if not all_frames:
+                return False
+
+            # 映射动画序列
+            anims = meta.get('animations', {})
+            for seq_name, seq_cfg in anims.items():
+                start = seq_cfg.get('start', 0)
+                count = seq_cfg.get('count', 0)
+                if count > 0:
+                    self._frames[seq_name] = all_frames[start:start + count]
+                    self._frame_tops[seq_name] = all_tops[start:start + count]
+                    fps = seq_cfg.get('fps', 3)
+                    self._seq_fps[seq_name] = fps
+                    logger.info("Loaded %s: %d frames (from spritesheet)", seq_name, count)
+
+            # 情绪帧映射
+            emotions = meta.get('emotions', {})
+            self._emotion_ranges = {}
+            for emo, emo_cfg in emotions.items():
+                start = emo_cfg.get('start', 0)
+                count = emo_cfg.get('count', 0)
+                if count > 0:
+                    self._emotion_ranges[emo] = (start, start + count - 1)
+
+            if not self._frames:
+                return False
+
+            self._anim_seq = 'idle'
+            self._anim_idx = 0
+            self._anim_range = (None, None)
+            self._show_frame()
+            return True
+
+        except Exception as e:
+            logger.warning("pet.json load error: %s", e)
             return False
 
+    def _load_from_frames_dir(self, frames_dir: str) -> bool:
+        """从 characters/<id>/frames/ 加载帧序列"""
         for seq_name in ("idle", "walk", "extra"):
-            seq_dir = os.path.join(char_dir, seq_name)
+            seq_dir = os.path.join(frames_dir, seq_name)
             if not os.path.isdir(seq_dir):
                 continue
             files = sorted(
@@ -134,7 +225,7 @@ class SpriteRenderer(AvatarRenderer):
                 logger.info("Loaded %s: %d frames", seq_name, len(frames))
 
         if not self._frames:
-            self._fallback_load(character_id)
+            self._fallback_load(self._character_id)
             return False
 
         self._anim_seq = 'idle'

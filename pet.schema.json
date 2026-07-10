@@ -1,0 +1,32 @@
+{
+  "id": "ophelia",
+  "name": "奥菲莉娅",
+  "version": "1.0",
+  "description": "幽蓝微光的裂隙阅读者",
+
+  "spritesheet": {
+    "src": "spritesheet.png",
+    "frameWidth": 331,
+    "frameHeight": 568,
+    "scale": 0.5
+  },
+
+  "animations": {
+    "idle":  { "start": 0,  "count": 4, "fps": 3   },
+    "walk":  { "start": 4,  "count": 4, "fps": 4   },
+    "extra": { "start": 8,  "count": 8, "fps": 3   }
+  },
+
+  "emotions": {
+    "happy":     { "start": 8,  "count": 2 },
+    "angry":     { "start": 10, "count": 2 },
+    "surprised": { "start": 12, "count": 2 },
+    "thinking":  { "start": 14, "count": 2 }
+  },
+
+  "voice": {
+    "refAudio": "",
+    "refText": "",
+    "instruct": "温柔"
+  }
+}

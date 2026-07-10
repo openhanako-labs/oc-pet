@@ -118,28 +118,6 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(pro_group)
 
-        # ── 久坐提醒 ──
-        br_group = QGroupBox("久坐提醒")
-        br_layout = QFormLayout(br_group)
-
-        self.br_enabled = QCheckBox("启用久坐提醒")
-        self.br_enabled.setChecked(config.get("break_reminder", {}).get("enabled", True))
-        br_layout.addRow(self.br_enabled)
-
-        self.br_idle = QSpinBox()
-        self.br_idle.setRange(5, 120)
-        self.br_idle.setSuffix(" 分钟")
-        self.br_idle.setValue(config.get("break_reminder", {}).get("idle_minutes", 15))
-        br_layout.addRow("触发空闲", self.br_idle)
-
-        self.br_cooldown = QSpinBox()
-        self.br_cooldown.setRange(5, 120)
-        self.br_cooldown.setSuffix(" 分钟")
-        self.br_cooldown.setValue(config.get("break_reminder", {}).get("cooldown_minutes", 30))
-        br_layout.addRow("提醒冷却", self.br_cooldown)
-
-        layout.addWidget(br_group)
-
         # ── 屏幕感知 ──
         screen_group = QGroupBox("屏幕感知")
         screen_layout = QFormLayout(screen_group)
@@ -188,11 +166,6 @@ class SettingsDialog(QDialog):
         # 主动对话
         c.setdefault("proactive", {})["enabled"] = self.pro_enabled.isChecked()
         c["proactive"]["cooldown_minutes"] = self.pro_cooldown.value()
-
-        # 久坐提醒
-        c.setdefault("break_reminder", {})["enabled"] = self.br_enabled.isChecked()
-        c["break_reminder"]["idle_minutes"] = self.br_idle.value()
-        c["break_reminder"]["cooldown_minutes"] = self.br_cooldown.value()
 
         # 屏幕感知
         c.setdefault("screen", {})["enabled"] = self.screen_enabled.isChecked()

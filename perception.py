@@ -317,8 +317,15 @@ class ProactiveScheduler:
         if now < self._cooldown_until:
             return None
 
-        from break_notifier import _get_idle_seconds
-        idle_sec = _get_idle_seconds()
+        # 系统空闲时间检测（Windows GetLastInputInfo）
+        import ctypes
+        class LASTINPUTINFO(ctypes.Structure):
+            fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii))
+        millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+        idle_sec = millis / 1000.0
         if idle_sec < 180:
             return None
 

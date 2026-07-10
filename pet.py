@@ -22,7 +22,7 @@ from PySide6.QtGui import (
 )
 from config import CHARACTER_INFO, EXPRESSION_MAP, load_config, save_config
 from hanako_monitor import HanakoMonitor, compact_bubble_text
-from memory_store import MemoryStore
+
 from behavior import BehaviorParams, BEHAVIOR_MODES
 from behavior import (
     PHYSICS_INTERVAL, INERTIA_FACTOR, INTENT_FACTOR,
@@ -30,7 +30,7 @@ from behavior import (
     BOUNCE_ELASTICITY, BOUNCE_FRICTION, BOUNCE_GRAVITY, BOUNCE_MIN_SPEED
 )
 from bubble import ChatBubble
-from break_notifier import BreakNotifier
+
 from action_linker import ActionLinker
 from foreground_watcher import ForegroundWatcher
 from tts_player import TTSTtsPlayer
@@ -111,17 +111,7 @@ class PetWindow(QWidget):
         self._bubble_timer.timeout.connect(self._clear_hanako_bubble)
         self._bubble_timer.setSingleShot(True)
 
-        # ── 关怀提醒 ──
-        br_cfg = self.config.get("break_reminder", {})
-        self._break_notifier = BreakNotifier(
-            character_id=self._current_char,
-            idle_minutes=br_cfg.get("idle_minutes", 15),
-            gradual=br_cfg.get("gradual", True),
-            cooldown_minutes=br_cfg.get("cooldown_minutes", 30),
-        )
-        if not br_cfg.get("enabled", True):
-            self._break_notifier.disable()
-        self._break_notifier.on_remind = self._on_break_remind
+        # ── 空闲检查定时器 ──
         self._break_timer = QTimer(self)
         self._break_timer.timeout.connect(self._break_check)
 
@@ -197,8 +187,6 @@ class PetWindow(QWidget):
         self._anim_timer = self._renderer._anim_timer
         self._anim_timer.timeout.connect(self._anim_tick)
         self._setup_animation()
-        # ── 记忆存储 ──
-        self._mem_store = MemoryStore(self._current_char)
 
         self._setup_menu()
         self._setup_tray()
@@ -355,7 +343,7 @@ class PetWindow(QWidget):
         """用户点击动作联动项"""
         basedir = Path(__file__).parent / "data"
         self._action_linker.trigger_action(basedir, action_id)
-        self._show_break_bubble(f"{action_id}!", emotion="happy")
+        self._show_bubble(f"{action_id}!", emotion="happy")
 
     def _adjust_scale(self):
         """缩放 +0.2,钳制 0.3~2.0"""
@@ -662,7 +650,6 @@ class PetWindow(QWidget):
 
                     # 截停 TTS
                     self._tts_player.stop()
-                    self._break_notifier.reset()
                     self._is_thinking = True
                 else:
                     self._show_bubble("没听清...", emotion="neutral")
@@ -727,13 +714,6 @@ class PetWindow(QWidget):
 
         # 行为模式
         self._switch_behavior_mode(self.config.get("behavior", "normal"))
-
-        # 久坐提醒
-        br_cfg = self.config.get("break_reminder", {})
-        if br_cfg.get("enabled", True):
-            self._break_notifier.enable()
-        else:
-            self._break_notifier.disable()
 
         # 主动对话
         pro_cfg = self.config.get("proactive", {})
@@ -1066,9 +1046,6 @@ class PetWindow(QWidget):
         self.input_field.clear()
         self.input_widget.hide()
 
-        # ── 关怀提醒重置 ──
-        self._break_notifier.reset()
-
         # P2: 用户交互 -> 重置情绪状态机
         try:
             self._perception.reset_emotion()
@@ -1155,18 +1132,8 @@ class PetWindow(QWidget):
             except Exception:
                 pass
 
-        # 记忆写入
-        if reply and self._pending_chat and self._pending_user_msg:
-            try:
-                self._mem_store.add(
-                    user_msg=self._pending_user_msg,
-                    bot_reply=reply,
-                    emotion=emotion,
-                    confidence=0.85,
-                    source="dialogue",
-                )
-            except Exception as e:
-                logger.warning("Memory store failed: %s", e)
+        # 重置状态
+        if self._pending_chat:
             self._pending_user_msg = ""
             self._pending_chat = False
 
@@ -1237,28 +1204,20 @@ class PetWindow(QWidget):
     # ── 闲置检测 + 关怀提醒 ──
 
     def _break_check(self):
-        """每 30 秒检查:关怀提醒 + idle 超时"""
+        """每 30 秒检查: idle 感知 + proactive 主动对话"""
         now = time.time()
         idle_secs = now - self._last_interaction
 
-        # Idle 超时递进(只在无 Agent 互动时触发)
-        if self._idle_stage is None and idle_secs >= 300:
-            self._idle_stage = "cute"
-            self._show_break_bubble("怎么不理我呀~", emotion="cute")
-        elif self._idle_stage == "cute" and idle_secs >= 900:
-            self._idle_stage = "sad"
-            self._show_break_bubble("好无聊......", emotion="sad")
-        elif self._idle_stage == "sad" and idle_secs >= 1800:
-            self._idle_stage = "missing"
-            self._show_break_bubble("主人去哪了......", emotion="missing")
+        # idle 回归检测（用户回来时打招呼）
+        if self._idle_stage is not None and idle_secs < 10:
+            going = self._idle_stage
+            self._idle_stage = None
+            if going is not None:
+                self._show_bubble("你回来啦~", emotion="happy")
+        elif self._idle_stage is None and idle_secs >= 300:
+            self._idle_stage = "idle"
 
-        # 关怀提醒(BreakNotifier)
-        try:
-            self._break_notifier.check()
-        except Exception:
-            pass
-
-        # Proactive 主动对话(与 BreakNotifier 同频)
+        # Proactive 主动对话
         try:
             if time.time() > self._proactive_grace:
                 self._proactive.tick()
@@ -1285,18 +1244,13 @@ class PetWindow(QWidget):
         self._last_interaction = time.time()
         self._idle_stage = None
         if going is not None:
-            self._show_break_bubble("你回来啦~", emotion="happy")
+            self._show_bubble("你回来啦~", emotion="happy")
 
     def _on_proactive_trigger(self, prompt_text: str):
         """Proactive 调度器触发 -> 通过引擎发送"""
-        self._break_notifier.reset()
         if self._engine:
             self._engine.send(prompt_text, character=self._current_char)
             logger.info("Proactive message sent: %s", prompt_text)
-
-    def _show_break_bubble(self, text: str, emotion: str = "neutral"):
-        """显示关怀/闲置提醒气泡"""
-        self._show_bubble(text, emotion=emotion)
 
     def _show_bubble(self, text: str, emotion: str = "neutral"):
         """显示消息气泡"""
@@ -1385,20 +1339,8 @@ class PetWindow(QWidget):
             except Exception:
                 pass
 
-        # 4. 对话记忆写入(当收到 Agent 回复时)
-        if state == "speaking" and message and self._pending_chat and self._pending_user_msg:
-            try:
-                compact_reply = compact_bubble_text(message) if message else message
-                self._mem_store.add(
-                    user_msg=self._pending_user_msg,
-                    bot_reply=compact_reply or message,
-                    emotion=emotion,
-                    confidence=0.85,
-                    source="dialogue",
-                )
-                logger.debug("Memory stored: %d entries", self._mem_store.count())
-            except Exception as e:
-                logger.warning("Memory store failed: %s", e)
+        # 4. 重置状态(当收到 Agent 回复时)
+        if state == "speaking" and message and self._pending_chat:
             # 重置跟踪
             self._pending_user_msg = ""
             self._pending_emotion = "neutral"
@@ -1408,10 +1350,6 @@ class PetWindow(QWidget):
         self._idle_stage = None
         self._last_interaction = time.time()
 
-
-    def _on_break_remind(self, stage: str, msg: str):
-        """关怀提醒回调"""
-        self._show_break_bubble(msg, emotion="cute")
 
     # ── 窗口关闭清理 ──
 
@@ -1446,12 +1384,6 @@ class PetWindow(QWidget):
         if hasattr(self, '_tray'):
             try:
                 self._tray.hide()
-            except Exception:
-                pass
-
-        if hasattr(self, '_mem_store'):
-            try:
-                self._mem_store.close()
             except Exception:
                 pass
 
