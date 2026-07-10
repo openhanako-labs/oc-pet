@@ -70,7 +70,7 @@ class TimePerception:
 # ════════════════════════════════════════════════════════════
 
 class EmotionStateMachine:
-    """情绪状态机 - 连续感知，强度衰减"""
+    """情绪状态机 - 连续感知，强度衰减（线程安全）"""
 
     DECAY_RATE = 0.08       # 每分钟衰减 8%
     THRESHOLD_HIGH = 0.5
@@ -81,47 +81,55 @@ class EmotionStateMachine:
         self._intensity: float = 0.0
         self._last_trigger: float = 0.0
         self._history: list[dict] = []
+        self._lock = threading.Lock()
 
     def trigger(self, emotion: str, intensity: float = 1.0):
         if not emotion or emotion == "neutral":
             return
-        self._current = emotion
-        self._intensity = min(1.0, max(0.0, intensity))
-        self._last_trigger = time.time()
-        self._history.append({"emotion": emotion, "intensity": self._intensity, "time": datetime.now().isoformat()})
-        if len(self._history) > 10:
-            self._history.pop(0)
+        with self._lock:
+            self._current = emotion
+            self._intensity = min(1.0, max(0.0, intensity))
+            self._last_trigger = time.time()
+            self._history.append({"emotion": emotion, "intensity": self._intensity, "time": datetime.now().isoformat()})
+            if len(self._history) > 10:
+                self._history.pop(0)
 
     def tick(self):
-        if self._current == "neutral":
-            return
-        elapsed = time.time() - self._last_trigger
-        decay = self.DECAY_RATE * (elapsed / 60.0)
-        self._intensity = max(0.0, self._intensity - decay)
-        if self._intensity <= self.THRESHOLD_LOW:
-            self._current = "neutral"
-            self._intensity = 0.0
+        with self._lock:
+            if self._current == "neutral":
+                return
+            elapsed = time.time() - self._last_trigger
+            decay = self.DECAY_RATE * (elapsed / 60.0)
+            self._intensity = max(0.0, self._intensity - decay)
+            if self._intensity <= self.THRESHOLD_LOW:
+                self._current = "neutral"
+                self._intensity = 0.0
 
     def reset(self):
-        self._current = "neutral"
-        self._intensity = 0.0
-        self._last_trigger = time.time()
+        with self._lock:
+            self._current = "neutral"
+            self._intensity = 0.0
+            self._last_trigger = time.time()
 
     @property
     def current(self) -> str:
-        return self._current
+        with self._lock:
+            return self._current
 
     @property
     def intensity(self) -> float:
-        return self._intensity
+        with self._lock:
+            return self._intensity
 
     def should_show_emotion(self) -> bool:
-        return self._intensity > self.THRESHOLD_LOW
+        with self._lock:
+            return self._intensity > self.THRESHOLD_LOW
 
     def format_for_prompt(self) -> str:
-        if self._current == "neutral":
-            return ""
-        return f"[当前情绪：{self._current}（强度 {self._intensity:.0%}）]"
+        with self._lock:
+            if self._current == "neutral":
+                return ""
+            return f"[当前情绪：{self._current}（强度 {self._intensity:.0%}）]"
 
 
 # ════════════════════════════════════════════════════════════
@@ -176,13 +184,23 @@ VISION_PROMPT = "用一句话简短描述用户当前在屏幕上做什么（不
 
 
 class ScreenPerception:
-    """屏幕感知 - 后台定时截屏 + 视觉模型分析"""
+    """屏幕感知 - 后台定时截屏 + 视觉模型分析
+
+    优化：
+    - 变化检测：对比上一帧 hash，相同则跳过 API 调用
+    - 失败退避：连续失败时拉长间隔
+    """
+
+    MAX_CONSECUTIVE_FAILURES = 3
 
     def __init__(self, interval: int = 120):
         self._interval = interval
+        self._base_interval = interval
         self._running = False
         self._thread = None
         self._last_description: str = ""
+        self._last_frame_hash: str = ""
+        self._consecutive_failures: int = 0
         self._lock = threading.Lock()
         self.on_update: callable = lambda desc: None
 
@@ -219,11 +237,20 @@ class ScreenPerception:
                 time.sleep(1)
 
     def _capture_and_analyze(self):
+        import hashlib as _hashlib
         from hanako_context import HanakoContext
 
         img = ImageGrab.grab()
         new_size = (img.width // SCREENSHOT_SCALE, img.height // SCREENSHOT_SCALE)
         img = img.resize(new_size)
+
+        # 变化检测：对比上一帧 hash
+        frame_hash = _hashlib.md5(img.tobytes()).hexdigest()
+        if frame_hash == self._last_frame_hash:
+            logger.debug("Screen unchanged, skipping API call")
+            return
+        self._last_frame_hash = frame_hash
+
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=JPEG_QUALITY)
         b64 = base64.b64encode(buf.getvalue()).decode()
@@ -257,16 +284,28 @@ class ScreenPerception:
                 if content:
                     with self._lock:
                         self._last_description = content
+                    self._consecutive_failures = 0
+                    self._interval = self._base_interval  # 恢复正常间隔
                     logger.info("Screen analysis: %s", content[:50])
                     self.on_update(content)
                 else:
                     logger.warning("Vision API returned empty content")
+                    self._consecutive_failures += 1
             else:
                 logger.warning("Vision API error: %d", resp.status_code)
+                self._consecutive_failures += 1
         except requests.exceptions.Timeout:
             logger.warning("Vision API timeout")
+            self._consecutive_failures += 1
         except Exception as e:
             logger.warning("Vision analysis failed: %s", e)
+            self._consecutive_failures += 1
+
+        # 失败退避：连续失败时拉长间隔
+        if self._consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
+            self._interval = self._base_interval * 3
+            logger.warning("ScreenPerception backoff: interval=%ds (failures=%d)",
+                         self._interval, self._consecutive_failures)
 
 
 # ════════════════════════════════════════════════════════════

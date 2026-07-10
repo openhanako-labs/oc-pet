@@ -1390,6 +1390,9 @@ class PetWindow(QWidget):
         if hasattr(self, '_engine'):
             try:
                 self._engine.stop()
+                # 等后台线程退出，避免 TTS 文件被截断
+                if self._engine._thread and self._engine._thread.is_alive():
+                    self._engine._thread.join(timeout=3)
             except Exception:
                 pass
 
