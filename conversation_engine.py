@@ -49,6 +49,7 @@ class ConversationEngine:
         self.on_reply: callable = lambda reply, emotion, anim, audio_path: None
         self.on_status: callable = lambda msg: None  # 状态提示
         self.on_tts_ready: callable = lambda: None  # TTS 加载完成
+        self.on_tts_done: callable = lambda audio_path: None  # TTS 合成完成（异步）
 
     @property
     def tts_ready(self) -> bool:
@@ -125,7 +126,7 @@ class ConversationEngine:
                 time.sleep(0.2)
 
     def _process_message(self, msg: dict):
-        """处理一条消息：LLM -> TTS -> 回调"""
+        """处理一条消息：LLM -> 回调文字 -> TTS 异步合成"""
         text = msg["text"]
         character = msg["character"]
 
@@ -148,27 +149,36 @@ class ConversationEngine:
         # 2. 动画映射
         anim = map_emotion_to_anim(emotion)
 
-        # 3. TTS 合成（跳过空回复）
-        audio_path = ""
+        # 3. 先回调文字（UI 立即显示，不等 TTS）
+        self.on_reply(reply, emotion, anim, "")
+
+        # 4. TTS 异步合成（不阻塞队列）
         if self._tts and self._tts_ready and reply.strip() and reply.strip() not in ("\u2026", "..."):
-            try:
-                instruct_map = {
-                    "happy": "开心", "sad": "难过", "angry": "生气",
-                    "cute": "可爱", "thinking": "思考",
-                }
-                instruct = instruct_map.get(emotion, "")
-                audio_path = self._tts.synthesize(reply, character_id=character, instruct=instruct) or ""
-                if audio_path:
-                    logger.info("TTS done: %s", os.path.basename(audio_path))
-                else:
-                    logger.warning("TTS failed, no audio")
-            except Exception as e:
-                logger.warning("TTS error: %s", e)
+            t = threading.Thread(
+                target=self._synthesize_tts,
+                args=(reply, character, emotion),
+                daemon=True,
+            )
+            t.start()
         else:
             logger.info("TTS skipped: empty reply")
 
-        # 4. 回调
-        self.on_reply(reply, emotion, anim, audio_path)
+    def _synthesize_tts(self, text: str, character: str, emotion: str):
+        """在独立线程中合成 TTS，完成后回调"""
+        try:
+            instruct_map = {
+                "happy": "开心", "sad": "难过", "angry": "生气",
+                "cute": "可爱", "thinking": "思考",
+            }
+            instruct = instruct_map.get(emotion, "")
+            audio_path = self._tts.synthesize(text, character_id=character, instruct=instruct) or ""
+            if audio_path:
+                logger.info("TTS done: %s", os.path.basename(audio_path))
+                self.on_tts_done(audio_path)
+            else:
+                logger.warning("TTS failed, no audio")
+        except Exception as e:
+            logger.warning("TTS error: %s", e)
 
     def switch_character(self, character_id: str):
         """切换角色 - 清空队列和历史"""

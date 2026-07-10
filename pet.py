@@ -60,6 +60,7 @@ class PetWindow(QWidget):
     # 跨线程信号：后台线程 -> 主线程
     engine_reply_signal = Signal(str, str, str, str)  # reply, emotion, anim, audio_path
     engine_status_signal = Signal(str)  # status message
+    tts_done_signal = Signal(str)  # audio_path
 
     def __init__(self):
         super().__init__()
@@ -148,9 +149,11 @@ class PetWindow(QWidget):
         self._engine.on_reply = self._on_engine_reply
         self._engine.on_status = self._on_engine_status
         self._engine.on_tts_ready = lambda: logger.info("Engine TTS ready")
+        self._engine.on_tts_done = self._on_tts_done
         # 连接跨线程信号
         self.engine_reply_signal.connect(self._do_engine_reply)
         self.engine_status_signal.connect(self._do_engine_status)
+        self.tts_done_signal.connect(self._do_tts_done)
         self._engine.start()
 
         # ── 语音输入（ASR）──
@@ -1112,12 +1115,7 @@ class PetWindow(QWidget):
             except Exception:
                 pass
 
-        # 播放音频
-        if audio_path and os.path.exists(audio_path):
-            tts_cfg = self.config.get("tts", {})
-            if tts_cfg.get("enabled", True):
-                logger.info("Playing TTS: %s", audio_path)
-                self._tts_player.play(audio_path)
+        # 音频播放已移至 _do_tts_done（异步回调）
 
         # 动画
         try:
@@ -1155,6 +1153,18 @@ class PetWindow(QWidget):
                 self.bubble.hide_bubble()
             except Exception:
                 pass
+
+    def _on_tts_done(self, audio_path: str):
+        """TTS 合成完成 - 从后台线程调用，通过信号转到主线程"""
+        self.tts_done_signal.emit(audio_path)
+
+    def _do_tts_done(self, audio_path: str):
+        """在主线程中播放 TTS 音频"""
+        if audio_path and os.path.exists(audio_path):
+            tts_cfg = self.config.get("tts", {})
+            if tts_cfg.get("enabled", True):
+                logger.info("Playing TTS: %s", audio_path)
+                self._tts_player.play(audio_path)
 
     # ── 右键菜单 ──
 
