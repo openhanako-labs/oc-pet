@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -42,6 +43,13 @@ class ConversationEngine:
         self._queue: list[dict] = []
         self._lock = threading.Lock()
         self._running = False
+
+        # 工具系统
+        from .tool_registry import ToolRegistry
+        from .tool_executor import ToolExecutor
+        self._tool_registry = ToolRegistry()
+        self._tool_executor = ToolExecutor()
+        self._tools: list[dict] = []  # OpenAI 格式工具列表
         self._thread = None
         self._tts_ready = False
 
@@ -110,6 +118,12 @@ class ConversationEngine:
         self._perception.tick()
         self._perception.start_screen(interval=120)
 
+        # 发现插件工具
+        self._tool_registry.discover()
+        self._tools = self._tool_registry.get_tools()
+        if self._tools:
+            logger.info("Plugin tools available: %d", len(self._tools))
+
         logger.info("对话引擎启动完成")
 
         while self._running:
@@ -125,18 +139,27 @@ class ConversationEngine:
                 time.sleep(0.2)
 
     def _process_message(self, msg: dict):
-        """处理一条消息：LLM -> 回调文字 -> TTS 异步合成"""
+        """处理一条消息：LLM -> 工具调用（可选）-> 回调文字 -> TTS"""
         text = msg["text"]
         character = msg["character"]
 
         logger.info("处理消息 [%s]: %s", character, text[:50])
 
-        # 1. LLM 回复
+        # 1. LLM 回复（可能返回 tool_calls）
         try:
             perception_ctx = self._perception.build_context()
             reply, emotion = self._adapter.chat(
-                message=text, inject_memory=True, extra_context=perception_ctx
+                message=text, inject_memory=True,
+                extra_context=perception_ctx,
+                tools=self._tools if self._tools else None,
             )
+
+            # 处理 tool_calls
+            if isinstance(reply, dict) and reply.get("tool_calls"):
+                reply, emotion = self._handle_tool_calls(
+                    reply, text, character, perception_ctx
+                )
+
             if not reply:
                 reply = "…"
             logger.info("LLM 回复: %s [emotion:%s]", reply[:60], emotion)
@@ -179,6 +202,60 @@ class ConversationEngine:
 
         # 4. 回调（文字 + 音频一起）
         self.on_reply(reply, emotion, anim, audio_path)
+
+    def _handle_tool_calls(self, resp: dict, user_text: str, character: str, perception_ctx: str) -> tuple:
+        """处理 LLM 的 tool_calls：执行工具 → 结果回传 → 再次调用 LLM"""
+        tool_calls = resp["tool_calls"]
+        assistant_message = resp["message"]
+
+        # 将 assistant 消息（含 tool_calls）加入历史
+        self._adapter._history.append({
+            "role": "assistant",
+            "content": assistant_message.get("content", ""),
+            "tool_calls": tool_calls,
+        })
+
+        # 逐个执行工具
+        for tc in tool_calls:
+            func = tc.get("function", {})
+            tool_name = func.get("name", "")
+            tool_id = tc.get("id", "")
+
+            # 解析参数
+            try:
+                args = json.loads(func.get("arguments", "{}"))
+            except json.JSONDecodeError:
+                args = {}
+
+            logger.info("Tool call: %s(%s)", tool_name, json.dumps(args, ensure_ascii=False)[:100])
+
+            # 查找并执行工具
+            tool_def = self._tool_registry.get_tool(tool_name)
+            if tool_def:
+                result = self._tool_executor.execute(tool_def, args)
+            else:
+                result = f"工具 '{tool_name}' 不存在"
+
+            logger.info("Tool result: %s", result[:100])
+
+            # 将工具结果加入历史
+            self._adapter._history.append({
+                "role": "tool",
+                "tool_call_id": tool_id,
+                "content": result,
+            })
+
+        # 再次调用 LLM，让模型基于工具结果生成最终回复
+        try:
+            reply, emotion = self._adapter.chat(
+                message="",  # 空消息，因为历史已经包含了用户消息和工具结果
+                inject_memory=False,
+                extra_context=perception_ctx,
+            )
+            return reply or "…", emotion or "neutral"
+        except Exception as e:
+            logger.error("LLM follow-up failed: %s", e)
+            return "工具执行完成", "neutral"
 
     def switch_character(self, character_id: str):
         """切换角色 - 清空队列和历史"""

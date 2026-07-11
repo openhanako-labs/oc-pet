@@ -117,16 +117,17 @@ class HanakoPetAdapter:
     def model_config(self) -> dict:
         return dict(self._model_cfg)
 
-    def chat(self, message: str, inject_memory: bool = True, extra_context: str = "") -> str:
+    def chat(self, message: str, inject_memory: bool = True, extra_context: str = "", tools: list = None) -> tuple:
         """发送消息,返回角色回复。
 
         Args:
             message: 用户消息
             inject_memory: 是否注入记忆上下文
             extra_context: 额外上下文(时间/情绪/日程等感知信息)
+            tools: OpenAI 格式的工具列表
 
         Returns:
-            角色回复文本
+            (reply, emotion) 或 (tool_calls, None) 如果 LLM 调用了工具
         """
         if not self._base_url or not self._api_key:
             return "...(模型未配置,请在设置中配置模型)", "neutral"
@@ -156,7 +157,14 @@ class HanakoPetAdapter:
         messages.append({"role": "user", "content": message.strip()})
 
         try:
-            resp = self._call_api(messages)
+            resp = self._call_api(messages, tools=tools)
+
+            # 检查是否是 tool_calls 响应
+            if isinstance(resp, dict) and resp.get("tool_calls"):
+                # 保存用户消息到历史
+                self._history.append({"role": "user", "content": message.strip()})
+                return resp, None  # 返回 tool_calls 给调用方处理
+
             text = resp.strip() if resp and resp.strip() else ""
 
             if not text:
@@ -189,7 +197,7 @@ class HanakoPetAdapter:
             logger.warning("Chat failed: %s", e)
             return "(出了点岔子)", "neutral"
 
-    def _call_api(self, messages: list[dict]) -> str:
+    def _call_api(self, messages: list[dict], tools: list = None):
         """调用 LLM API
 
         支持两种 API 类型:
@@ -199,9 +207,9 @@ class HanakoPetAdapter:
         if self._api_type == "anthropic-messages":
             return self._call_anthropic(messages)
         else:
-            return self._call_openai(messages)
+            return self._call_openai(messages, tools=tools)
 
-    def _call_openai(self, messages: list[dict]) -> str:
+    def _call_openai(self, messages: list[dict], tools: list = None):
         """调用 OpenAI 兼容 API"""
         url = f"{self._base_url.rstrip('/')}/chat/completions"
         resp = requests.post(
@@ -215,6 +223,7 @@ class HanakoPetAdapter:
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 8192,
+                **({"tools": tools} if tools else {}),
             },
             timeout=60,
         )
@@ -224,8 +233,17 @@ class HanakoPetAdapter:
         if not choices:
             logger.warning("API returned no choices: %s", json.dumps(data, ensure_ascii=False)[:200])
             return ""
-        content = choices[0].get("message", {}).get("content", "")
+
+        message = choices[0].get("message", {})
         finish = choices[0].get("finish_reason", "")
+
+        # 检查 tool_calls
+        tool_calls = message.get("tool_calls")
+        if tool_calls:
+            logger.info("LLM requested %d tool call(s) | finish=%s", len(tool_calls), finish)
+            return {"tool_calls": tool_calls, "message": message}
+
+        content = message.get("content", "")
         if not content:
             logger.warning("API returned empty content | finish=%s | usage=%s", finish, data.get("usage", {}))
             return ""
