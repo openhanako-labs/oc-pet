@@ -42,8 +42,9 @@ def main():
 
     # 如果 config 里没有 agents 列表（首次运行），自动添加
     if not manager.agents:
-        # 优先用内置 default 角色（项目自带）
         from pathlib import Path
+
+        # 1. 优先用内置 default 角色
         default_char = Path(__file__).parent / "characters" / "default"
         if default_char.exists():
             manager._config.setdefault("agents", []).append({
@@ -55,7 +56,7 @@ def main():
             })
             manager._save_config()
         else:
-            # 没有内置角色，用 Hanako agent
+            # 2. 扫描 Hanako agents
             discovered = manager.discover_agents()
             for agent in discovered:
                 if agent["id"] == "ophelia":
@@ -66,6 +67,19 @@ def main():
                     if agent.get("has_sprites"):
                         manager.add_agent(agent["id"])
                         break
+
+            # 3. 兜底：用月薪喵
+            if not manager.agents:
+                yuexinmiao = Path(__file__).parent / "characters" / "yuexinmiao"
+                if yuexinmiao.exists():
+                    manager._config.setdefault("agents", []).append({
+                        "id": "yuexinmiao",
+                        "enabled": True,
+                        "position": {"x": -1, "y": -1},
+                        "scale": 1.0,
+                        "builtin": True,
+                    })
+                    manager._save_config()
 
     manager.launch_all()
 
