@@ -590,7 +590,6 @@ class SettingsDialog(QDialog):
                     "LLM_API_KEY": self.llm_key,
                     "TTS_BASE_URL": self.tts_url,
                     "TTS_API_KEY": self.tts_key,
-                    "TTS_MODEL": self.tts_model,
                     "TTS_VOICE": self.tts_voice,
                     "ASR_BASE_URL": self.asr_url,
                     "ASR_API_KEY": self.asr_key,
@@ -598,7 +597,13 @@ class SettingsDialog(QDialog):
                 if key in mapping:
                     mapping[key].setText(val)
                 elif key == "LLM_MODEL" and val:
+                    # 先精确匹配，再按 model_id 前缀匹配
                     idx = self.llm_model.findText(val)
+                    if idx < 0:
+                        for i in range(self.llm_model.count()):
+                            if self.llm_model.itemText(i).startswith(val):
+                                idx = i
+                                break
                     if idx >= 0:
                         self.llm_model.setCurrentIndex(idx)
                     else:
@@ -618,6 +623,12 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
 
+    @staticmethod
+    def _strip_provider_suffix(text: str) -> str:
+        """去掉 'model_id  [provider]' 后缀，返回纯 model_id"""
+        import re
+        return re.sub(r"\s{2,}\[\w+\]\s*$", "", text).strip()
+
     def _save_env(self):
         from env_config import ENV_PATH
         lines = [
@@ -627,7 +638,7 @@ class SettingsDialog(QDialog):
             "# LLM",
             f"LLM_BASE_URL={self.llm_url.text().strip()}",
             f"LLM_API_KEY={self.llm_key.text().strip()}",
-            f"LLM_MODEL={self.llm_model.currentText().strip()}",
+            f"LLM_MODEL={self._strip_provider_suffix(self.llm_model.currentText())}",
             "",
             "# TTS API",
             f"TTS_BASE_URL={self.tts_url.text().strip()}",
