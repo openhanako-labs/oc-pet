@@ -192,8 +192,8 @@ class SettingsDialog(QDialog):
         tts_layout.addRow(self.tts_enabled)
 
         self.tts_provider = QComboBox()
-        self.tts_provider.addItems(["本地 CosyVoice", "API 调用"])
-        tts_prov_map = {"cosyvoice": 0, "api": 1}
+        self.tts_provider.addItems(["本地 CosyVoice", "MIMO TTS", "API 调用"])
+        tts_prov_map = {"cosyvoice": 0, "mimo": 1, "api": 2}
         self.tts_provider.setCurrentIndex(tts_prov_map.get(config.get("tts", {}).get("provider", "cosyvoice"), 0))
         tts_layout.addRow("TTS 引擎", self.tts_provider)
 
@@ -681,7 +681,7 @@ class SettingsDialog(QDialog):
 
         # TTS
         c.setdefault("tts", {})["enabled"] = self.tts_enabled.isChecked()
-        c["tts"]["provider"] = ["cosyvoice", "api"][self.tts_provider.currentIndex()]
+        c["tts"]["provider"] = ["cosyvoice", "mimo", "api"][self.tts_provider.currentIndex()]
         c["tts"]["volume"] = self.tts_volume.value() / 100
 
         # 主动对话

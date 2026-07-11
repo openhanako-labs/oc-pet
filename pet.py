@@ -677,7 +677,19 @@ class PetWindow(QWidget):
         """根据配置创建 TTS provider，失败返回 None"""
         provider = self.config.get("tts", {}).get("provider", "cosyvoice")
         try:
-            if provider == "api":
+            if provider == "mimo":
+                from tts_provider.mimo_tts import MimoTtsProvider
+                from env_config import get_tts_api_config
+                mimo = MimoTtsProvider()
+                cfg = get_tts_api_config()
+                mimo.configure(
+                    base_url=cfg.get("base_url", ""),
+                    api_key=cfg.get("api_key", ""),
+                    model=cfg.get("model", ""),
+                    voice=cfg.get("voice", "default_zh"),
+                )
+                return mimo
+            elif provider == "api":
                 from tts_provider.api_tts import ApiTtsProvider
                 return ApiTtsProvider()
             else:
