@@ -63,10 +63,16 @@ class PetWindow(QWidget):
     engine_status_signal = Signal(str)  # status message
     voice_status_signal = Signal(str)  # voice input status
 
-    def __init__(self):
+    def __init__(self, agent_id: str = "ophelia", sprite_dir: str = None,
+                 position: dict = None, scale: float = 1.0,
+                 on_position_change: callable = None,
+                 pet_manager=None):
         super().__init__()
         self.config = load_config()
-        # _is_penetrable 已移除(死代码),统一使用 _mousePassthrough
+        self._agent_id = agent_id
+        self._sprite_dir = sprite_dir  # None = 用默认 characters/ 目录
+        self._on_position_change = on_position_change  # 位置变化回调
+        self._pet_manager = pet_manager  # 多桌宠管理器引用
 
         # ── 交互状态 ──
         self._drag_start_cursor = QPoint()
@@ -80,10 +86,10 @@ class PetWindow(QWidget):
         self._vy = 0.0                   # 垂直速度(弹跳用)
         self._bounce_active = False      # 弹跳模式中
 
-        self._current_char = self.config.get("character", "yuexiye")
+        self._current_char = agent_id
         self._is_thinking = False
 
-        self._pet_scale = self.config.get("scale", 1.0)
+        self._pet_scale = scale
         self._pet_opacity = self.config.get("opacity", 1.0)
         self._behavior_mode = self.config.get("behavior", "normal")
 
@@ -265,7 +271,7 @@ class PetWindow(QWidget):
         self._apply_penetration()
         self.setFixedSize(200, 360)
 
-        win_cfg = self.config.get("window", {})
+        win_cfg = position or self.config.get("window", {})
         if win_cfg.get("x", -1) >= 0 and win_cfg.get("y", -1) >= 0:
             self.move(win_cfg["x"], win_cfg["y"])
         else:
@@ -688,7 +694,7 @@ class PetWindow(QWidget):
     def _open_settings(self):
         """打开配置面板"""
         from settings_dialog import SettingsDialog
-        dialog = SettingsDialog(self.config, parent=self)
+        dialog = SettingsDialog(self.config, pet_manager=self._pet_manager, parent=self)
         if dialog.exec():
             self.config = dialog.get_config()
             save_config(self.config)
@@ -739,17 +745,10 @@ class PetWindow(QWidget):
 
     def load_character(self, char_id: str):
         """加载角色 - 委托给 SpriteRenderer"""
-        info = CHARACTER_INFO.get(char_id)
-        if not info:
-            print(f"Unknown character: {char_id}")
-            return
-
         self._current_char = char_id
-        self.config["character"] = char_id
-        save_config(self.config)
 
-        # 委托给渲染器加载帧序列
-        self._renderer.load(char_id)
+        # 委托给渲染器加载帧序列，优先使用 sprite_dir
+        self._renderer.load(char_id, sprite_dir=self._sprite_dir)
         # 同步状态别名
         self._anim_frames = self._renderer._frames
         self._anim_frame_tops = self._renderer._frame_tops
@@ -831,6 +830,8 @@ class PetWindow(QWidget):
                         self.config.setdefault("window", {})["x"] = pos.x()
                         self.config.setdefault("window", {})["y"] = pos.y()
                         save_config(self.config)
+                        if self._on_position_change:
+                            self._on_position_change(pos.x(), pos.y())
                     elif self._was_click:
                         self._toggle_chat()
                         self._motion_state = "idle"
@@ -1017,6 +1018,8 @@ class PetWindow(QWidget):
         self.config.setdefault("window", {})["x"] = pos.x()
         self.config.setdefault("window", {})["y"] = pos.y()
         save_config(self.config)
+        if self._on_position_change:
+            self._on_position_change(pos.x(), pos.y())
         params = self._get_behavior_params()
         self._motion._start_rest(params)
 

@@ -106,14 +106,18 @@ class SpriteRenderer(AvatarRenderer):
 
     # ── 生命周期 ──
 
-    def load(self, character_id: str) -> bool:
-        """加载角色 - 优先读 pet.json (spritesheet 模式)，回退到分帧文件"""
+    def load(self, character_id: str, sprite_dir: str = None) -> bool:
+        """加载角色 - 优先用 sprite_dir，回退到 characters/ 目录"""
         self._character_id = character_id
         self._frames = {}
         self._frame_tops = {}
 
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        char_dir = os.path.join(base_dir, "characters", character_id)
+        # 优先使用传入的 sprite_dir
+        if sprite_dir and os.path.isdir(sprite_dir):
+            char_dir = sprite_dir
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            char_dir = os.path.join(base_dir, "characters", character_id)
 
         # 优先：pet.json spritesheet 模式
         pet_json_path = os.path.join(char_dir, "pet.json")

@@ -1,15 +1,17 @@
 """配置面板 - GUI 设置对话框
 
-从 config.json 读取配置，修改后保存。
-右键菜单 -> "⚙️ 设置" 打开。
-
 可配置项：
-  - TTS：开关、音量
+  - Agent 管理：启用/禁用桌宠、新增/移除
+  - TTS：开关、音量、引擎
   - 行为模式：静默/正常/活跃/黏人
+  - 鼠标交互：开关
   - 主动对话：开关、冷却时间
   - 屏幕感知：开关、截屏间隔
-  - 语音输入：开关
-  - API 配置：LLM/TTS/ASR 的 base_url/api_key/model
+  - 语音输入：引擎选择
+  - 记忆注入：预算模式、上限
+  - 窗口：透明度、缩放
+  - 久坐提醒：开关、间隔
+  - API 配置：LLM/TTS/ASR
 """
 from __future__ import annotations
 
@@ -17,10 +19,9 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QCheckBox, QSlider, QSpinBox, QComboBox,
     QPushButton, QLabel, QGroupBox, QTabWidget, QWidget,
-    QLineEdit, QTextEdit
+    QLineEdit, QListWidget, QListWidgetItem, QAbstractItemView,
+    QMessageBox
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
@@ -55,25 +56,120 @@ QPushButton {
 QPushButton:hover { background: #4a4478; }
 QPushButton#save { background: #3a5844; }
 QPushButton#save:hover { background: #4a7844; }
+QPushButton#danger { background: #583a3a; }
+QPushButton#danger:hover { background: #784444; }
+QListWidget {
+    background: #252330; color: #d4cec4;
+    border: 1px solid #3a3450; border-radius: 4px;
+}
+QListWidget::item { padding: 4px 8px; }
+QListWidget::item:selected { background: #3a3458; }
 """
 
 
 class SettingsDialog(QDialog):
     """配置面板"""
 
-    def __init__(self, config: dict, parent=None):
+    def __init__(self, config: dict, pet_manager=None, parent=None):
         super().__init__(parent)
         self._config = config
-        self._result = None
+        self._pet_manager = pet_manager
         self.setWindowTitle("设置")
-        self.setMinimumSize(420, 520)
+        self.setMinimumSize(460, 600)
         self.setStyleSheet(STYLE)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
 
-        # ── TTS 语音 ──
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
+
+        # ── Tab 1: 基础设置 ──
+        basic_tab = QWidget()
+        basic_layout = QVBoxLayout(basic_tab)
+        basic_layout.setContentsMargins(8, 8, 8, 8)
+        basic_layout.setSpacing(6)
+
+        # Agent 管理
+        if pet_manager:
+            agent_group = QGroupBox("桌宠管理")
+            agent_layout = QVBoxLayout(agent_group)
+
+            self._agent_list = QListWidget()
+            self._agent_list.setMinimumHeight(120)
+            self._refresh_agent_list()
+            agent_layout.addWidget(self._agent_list)
+
+            agent_btns = QHBoxLayout()
+            self._add_agent_btn = QPushButton("+ 添加")
+            self._add_agent_btn.clicked.connect(self._add_agent)
+            agent_btns.addWidget(self._add_agent_btn)
+
+            self._remove_agent_btn = QPushButton("- 移除")
+            self._remove_agent_btn.setObjectName("danger")
+            self._remove_agent_btn.clicked.connect(self._remove_agent)
+            agent_btns.addWidget(self._remove_agent_btn)
+
+            self._toggle_agent_btn = QPushButton("启用/禁用")
+            self._toggle_agent_btn.clicked.connect(self._toggle_agent)
+            agent_btns.addWidget(self._toggle_agent_btn)
+
+            agent_layout.addLayout(agent_btns)
+            basic_layout.addWidget(agent_group)
+
+        # 行为模式
+        beh_group = QGroupBox("行为模式")
+        beh_layout = QFormLayout(beh_group)
+
+        self.behavior = QComboBox()
+        self.behavior.addItems(["静默 (quiet)", "正常 (normal)", "活跃 (active)", "黏人 (cling)"])
+        beh_map = {"quiet": 0, "normal": 1, "active": 2, "cling": 3}
+        self.behavior.setCurrentIndex(beh_map.get(config.get("behavior", "normal"), 1))
+        beh_layout.addRow("模式", self.behavior)
+
+        basic_layout.addWidget(beh_group)
+
+        # 窗口
+        win_group = QGroupBox("窗口")
+        win_layout = QFormLayout(win_group)
+
+        self.opacity = QSlider(Qt.Horizontal)
+        self.opacity.setRange(20, 100)
+        self.opacity.setValue(int(config.get("opacity", 1.0) * 100))
+        self._opacity_label = QLabel(f"{self.opacity.value()}%")
+        self.opacity.valueChanged.connect(lambda v: self._opacity_label.setText(f"{v}%"))
+        op_row = QHBoxLayout()
+        op_row.addWidget(self.opacity)
+        op_row.addWidget(self._opacity_label)
+        win_layout.addRow("透明度", op_row)
+
+        self.scale = QSlider(Qt.Horizontal)
+        self.scale.setRange(50, 200)
+        self.scale.setValue(int(config.get("scale", 1.0) * 100))
+        self._scale_label = QLabel(f"{self.scale.value()}%")
+        self.scale.valueChanged.connect(lambda v: self._scale_label.setText(f"{v}%"))
+        sc_row = QHBoxLayout()
+        sc_row.addWidget(self.scale)
+        sc_row.addWidget(self._scale_label)
+        win_layout.addRow("缩放", sc_row)
+
+        self.mouse_interaction = QCheckBox("鼠标交互（视线跟随 + 反应）")
+        self.mouse_interaction.setChecked(config.get("mouse_interaction", True))
+        win_layout.addRow(self.mouse_interaction)
+
+        basic_layout.addWidget(win_group)
+
+        basic_layout.addStretch()
+        tabs.addTab(basic_tab, "基础")
+
+        # ── Tab 2: 功能设置 ──
+        func_tab = QWidget()
+        func_layout = QVBoxLayout(func_tab)
+        func_layout.setContentsMargins(8, 8, 8, 8)
+        func_layout.setSpacing(6)
+
+        # TTS
         tts_group = QGroupBox("语音输出")
         tts_layout = QFormLayout(tts_group)
 
@@ -97,21 +193,9 @@ class SettingsDialog(QDialog):
         vol_row.addWidget(self.tts_vol_label)
         tts_layout.addRow("音量", vol_row)
 
-        layout.addWidget(tts_group)
+        func_layout.addWidget(tts_group)
 
-        # ── 行为模式 ──
-        beh_group = QGroupBox("行为模式")
-        beh_layout = QFormLayout(beh_group)
-
-        self.behavior = QComboBox()
-        self.behavior.addItems(["静默 (quiet)", "正常 (normal)", "活跃 (active)", "黏人 (cling)"])
-        beh_map = {"quiet": 0, "normal": 1, "active": 2, "cling": 3}
-        self.behavior.setCurrentIndex(beh_map.get(config.get("behavior", "normal"), 1))
-        beh_layout.addRow("模式", self.behavior)
-
-        layout.addWidget(beh_group)
-
-        # ── 主动对话 ──
+        # 主动对话
         pro_group = QGroupBox("主动对话")
         pro_layout = QFormLayout(pro_group)
 
@@ -125,9 +209,9 @@ class SettingsDialog(QDialog):
         self.pro_cooldown.setValue(config.get("proactive", {}).get("cooldown_minutes", 10))
         pro_layout.addRow("冷却时间", self.pro_cooldown)
 
-        layout.addWidget(pro_group)
+        func_layout.addWidget(pro_group)
 
-        # ── 屏幕感知 ──
+        # 屏幕感知
         screen_group = QGroupBox("屏幕感知")
         screen_layout = QFormLayout(screen_group)
 
@@ -141,9 +225,31 @@ class SettingsDialog(QDialog):
         self.screen_interval.setValue(config.get("screen", {}).get("interval", 120))
         screen_layout.addRow("截屏间隔", self.screen_interval)
 
-        layout.addWidget(screen_group)
+        func_layout.addWidget(screen_group)
 
-        # ── ASR 语音输入 ──
+        # 久坐提醒
+        break_group = QGroupBox("久坐提醒")
+        break_layout = QFormLayout(break_group)
+
+        self.break_enabled = QCheckBox("启用久坐提醒")
+        self.break_enabled.setChecked(config.get("break_reminder", {}).get("enabled", True))
+        break_layout.addRow(self.break_enabled)
+
+        self.break_idle = QSpinBox()
+        self.break_idle.setRange(5, 120)
+        self.break_idle.setSuffix(" 分钟")
+        self.break_idle.setValue(config.get("break_reminder", {}).get("idle_minutes", 15))
+        break_layout.addRow("空闲阈值", self.break_idle)
+
+        self.break_cooldown = QSpinBox()
+        self.break_cooldown.setRange(5, 120)
+        self.break_cooldown.setSuffix(" 分钟")
+        self.break_cooldown.setValue(config.get("break_reminder", {}).get("cooldown_minutes", 30))
+        break_layout.addRow("提醒间隔", self.break_cooldown)
+
+        func_layout.addWidget(break_group)
+
+        # ASR
         asr_group = QGroupBox("语音输入")
         asr_layout = QFormLayout(asr_group)
 
@@ -153,56 +259,87 @@ class SettingsDialog(QDialog):
         self.asr_provider.setCurrentIndex(asr_prov_map.get(config.get("asr", {}).get("provider", "whisper_local"), 0))
         asr_layout.addRow("ASR 引擎", self.asr_provider)
 
-        layout.addWidget(asr_group)
+        func_layout.addWidget(asr_group)
 
-        # ── API 配置 ──
+        # 记忆注入
+        mem_group = QGroupBox("记忆注入")
+        mem_layout = QFormLayout(mem_group)
+
+        mem_mode = config.get("memory", {}).get("budget_mode", "auto")
+        self.mem_mode = QComboBox()
+        self.mem_mode.addItems(["自动（按模型上下文 1%）", "手动指定"])
+        self.mem_mode.setCurrentIndex(0 if mem_mode == "auto" else 1)
+        mem_layout.addRow("预算模式", self.mem_mode)
+
+        self.mem_budget = QSpinBox()
+        self.mem_budget.setRange(200, 20000)
+        self.mem_budget.setSuffix(" 字符")
+        self.mem_budget.setSingleStep(200)
+        self.mem_budget.setValue(config.get("memory", {}).get("budget_chars", 3000))
+        self.mem_budget.setEnabled(mem_mode != "auto")
+        self.mem_mode.currentIndexChanged.connect(
+            lambda idx: self.mem_budget.setEnabled(idx == 1)
+        )
+        mem_layout.addRow("记忆上限", self.mem_budget)
+
+        self.mem_hint = QLabel("agnes-2.0-flash (1M tokens) → 自动预算 6000 字符")
+        self.mem_hint.setStyleSheet("color: #666688; font-size: 10px;")
+        mem_layout.addRow(self.mem_hint)
+
+        func_layout.addWidget(mem_group)
+
+        func_layout.addStretch()
+        tabs.addTab(func_tab, "功能")
+
+        # ── Tab 3: API 配置 ──
+        api_tab = QWidget()
+        api_layout = QVBoxLayout(api_tab)
+        api_layout.setContentsMargins(8, 8, 8, 8)
+
         api_group = QGroupBox("API 配置（留空 = 用 Hanako 默认）")
-        api_layout = QFormLayout(api_group)
+        api_form = QFormLayout(api_group)
 
-        # LLM
         self.llm_url = QLineEdit()
-        self.llm_url.setPlaceholderText("https://apihub.agnes-ai.com/v1（留空用 Hanako）")
-        api_layout.addRow("LLM 地址", self.llm_url)
+        self.llm_url.setPlaceholderText("留空用 Hanako")
+        api_form.addRow("LLM 地址", self.llm_url)
 
         self.llm_key = QLineEdit()
         self.llm_key.setEchoMode(QLineEdit.Password)
-        self.llm_key.setPlaceholderText("sk-...（留空用 Hanako）")
-        api_layout.addRow("LLM Key", self.llm_key)
+        self.llm_key.setPlaceholderText("留空用 Hanako")
+        api_form.addRow("LLM Key", self.llm_key)
 
         self.llm_model = QLineEdit()
-        self.llm_model.setPlaceholderText("agnes-2.0-flash（留空用 Hanako）")
-        api_layout.addRow("LLM 模型", self.llm_model)
+        self.llm_model.setPlaceholderText("留空用 Hanako")
+        api_form.addRow("LLM 模型", self.llm_model)
 
-        # TTS API
         self.tts_url = QLineEdit()
-        self.tts_url.setPlaceholderText("https://api.openai.com/v1")
-        api_layout.addRow("TTS 地址", self.tts_url)
+        self.tts_url.setPlaceholderText("TTS API 地址")
+        api_form.addRow("TTS 地址", self.tts_url)
 
         self.tts_key = QLineEdit()
         self.tts_key.setEchoMode(QLineEdit.Password)
-        self.tts_key.setPlaceholderText("sk-...")
-        api_layout.addRow("TTS Key", self.tts_key)
+        self.tts_key.setPlaceholderText("TTS Key")
+        api_form.addRow("TTS Key", self.tts_key)
 
         self.tts_voice = QLineEdit()
         self.tts_voice.setPlaceholderText("alloy")
-        api_layout.addRow("TTS 音色", self.tts_voice)
+        api_form.addRow("TTS 音色", self.tts_voice)
 
-        # ASR API
         self.asr_url = QLineEdit()
-        self.asr_url.setPlaceholderText("https://api.openai.com/v1")
-        api_layout.addRow("ASR 地址", self.asr_url)
+        self.asr_url.setPlaceholderText("ASR API 地址")
+        api_form.addRow("ASR 地址", self.asr_url)
 
         self.asr_key = QLineEdit()
         self.asr_key.setEchoMode(QLineEdit.Password)
-        self.asr_key.setPlaceholderText("sk-...")
-        api_layout.addRow("ASR Key", self.asr_key)
+        self.asr_key.setPlaceholderText("ASR Key")
+        api_form.addRow("ASR Key", self.asr_key)
 
-        layout.addWidget(api_group)
+        api_layout.addWidget(api_group)
+        api_layout.addStretch()
+        tabs.addTab(api_tab, "API")
 
         # 加载已有 .env 值
         self._load_env_to_ui()
-
-        layout.addStretch()
 
         # ── 按钮 ──
         btn_row = QHBoxLayout()
@@ -219,8 +356,79 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(btn_row)
 
+    # ── Agent 管理 ──
+
+    def _refresh_agent_list(self):
+        """刷新 agent 列表"""
+        if not self._pet_manager:
+            return
+        self._agent_list.clear()
+        for agent in self._pet_manager.agents:
+            agent_id = agent["id"]
+            enabled = agent.get("enabled", True)
+            status = "✅" if enabled else "❌"
+            has_sprites = self._pet_manager._has_sprites(agent_id)
+            sprite_tag = "🎨" if has_sprites else "⬜"
+            # 从 discovered 列表获取名称
+            name = agent_id
+            for d in self._pet_manager.discover_agents():
+                if d["id"] == agent_id:
+                    name = d["name"]
+                    break
+            self._agent_list.addItem(f"{status} {sprite_tag} {name} ({agent_id})")
+
+    def _add_agent(self):
+        """新增 agent"""
+        if not self._pet_manager:
+            return
+        discovered = self._pet_manager.discover_agents()
+        existing_ids = {a["id"] for a in self._pet_manager.agents}
+        available = [d for d in discovered if d["id"] not in existing_ids]
+        if not available:
+            QMessageBox.information(self, "提示", "所有 agent 都已添加")
+            return
+
+        # 简单选择对话框
+        from PySide6.QtWidgets import QInputDialog
+        items = [f"{d['name']} ({d['id']})" for d in available]
+        item, ok = QInputDialog.getItem(self, "添加桌宠", "选择 Agent:", items, 0, False)
+        if ok and item:
+            idx = items.index(item)
+            agent_id = available[idx]["id"]
+            self._pet_manager.add_agent(agent_id)
+            self._refresh_agent_list()
+
+    def _remove_agent(self):
+        """移除选中的 agent"""
+        if not self._pet_manager:
+            return
+        row = self._agent_list.currentRow()
+        if row < 0:
+            return
+        agent = self._pet_manager.agents[row]
+        reply = QMessageBox.question(
+            self, "确认", f"移除 {agent['id']} 的桌宠？\n（不会删除 Hanako agent 本身）",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self._pet_manager.remove_agent(agent["id"])
+            self._refresh_agent_list()
+
+    def _toggle_agent(self):
+        """切换 agent 启用状态"""
+        if not self._pet_manager:
+            return
+        row = self._agent_list.currentRow()
+        if row < 0:
+            return
+        agent = self._pet_manager.agents[row]
+        new_state = not agent.get("enabled", True)
+        self._pet_manager.set_enabled(agent["id"], new_state)
+        self._refresh_agent_list()
+
+    # ── .env 读写 ──
+
     def _load_env_to_ui(self):
-        """从 .env 文件加载已有值到输入框"""
         from env_config import ENV_PATH
         if not ENV_PATH.exists():
             return
@@ -248,7 +456,6 @@ class SettingsDialog(QDialog):
             pass
 
     def _save_env(self):
-        """将 API 配置写入 .env 文件"""
         from env_config import ENV_PATH
         lines = [
             "# OC Desktop Pet - API 配置",
@@ -272,18 +479,24 @@ class SettingsDialog(QDialog):
         ]
         ENV_PATH.write_text("\n".join(lines) + "\n", "utf-8")
 
+    # ── 保存 ──
+
     def _save(self):
-        """收集所有设置写入 config"""
         c = self._config
+
+        # 行为
+        beh_idx = self.behavior.currentIndex()
+        c["behavior"] = ["quiet", "normal", "active", "cling"][beh_idx]
+
+        # 窗口
+        c["opacity"] = self.opacity.value() / 100
+        c["scale"] = self.scale.value() / 100
+        c["mouse_interaction"] = self.mouse_interaction.isChecked()
 
         # TTS
         c.setdefault("tts", {})["enabled"] = self.tts_enabled.isChecked()
         c["tts"]["provider"] = ["cosyvoice", "api"][self.tts_provider.currentIndex()]
         c["tts"]["volume"] = self.tts_volume.value() / 100
-
-        # 行为
-        beh_idx = self.behavior.currentIndex()
-        c["behavior"] = ["quiet", "normal", "active", "cling"][beh_idx]
 
         # 主动对话
         c.setdefault("proactive", {})["enabled"] = self.pro_enabled.isChecked()
@@ -293,14 +506,22 @@ class SettingsDialog(QDialog):
         c.setdefault("screen", {})["enabled"] = self.screen_enabled.isChecked()
         c["screen"]["interval"] = self.screen_interval.value()
 
+        # 久坐提醒
+        c.setdefault("break_reminder", {})["enabled"] = self.break_enabled.isChecked()
+        c["break_reminder"]["idle_minutes"] = self.break_idle.value()
+        c["break_reminder"]["cooldown_minutes"] = self.break_cooldown.value()
+
         # ASR
         c.setdefault("asr", {})["provider"] = ["whisper_local", "api"][self.asr_provider.currentIndex()]
 
-        # 保存 .env（API 凭据）
+        # 记忆注入
+        c.setdefault("memory", {})["budget_mode"] = "auto" if self.mem_mode.currentIndex() == 0 else "manual"
+        c["memory"]["budget_chars"] = self.mem_budget.value()
+
+        # API .env
         self._save_env()
 
         self.accept()
 
     def get_config(self) -> dict:
-        """获取修改后的 config"""
         return self._config
