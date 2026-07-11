@@ -62,6 +62,7 @@ class PetWindow(QWidget):
     engine_reply_signal = Signal(str, str, str, str)  # reply, emotion, anim, audio_path
     engine_status_signal = Signal(str)  # status message
     voice_status_signal = Signal(str)  # voice input status
+    screen_emotion_signal = Signal(str, float)  # emotion, intensity
 
     def __init__(self, agent_id: str = "ophelia", sprite_dir: str = None,
                  position: dict = None, scale: float = 1.0,
@@ -198,6 +199,7 @@ class PetWindow(QWidget):
         self.engine_reply_signal.connect(self._do_engine_reply)
         self.engine_status_signal.connect(self._do_engine_status)
         self.voice_status_signal.connect(self._do_voice_status)
+        self.screen_emotion_signal.connect(self._do_screen_emotion)
         self._engine.start()
 
         # ── 语音输入（ASR）──
@@ -1405,10 +1407,13 @@ class PetWindow(QWidget):
         self._renderer.reset_gaze()
 
     def _on_screen_emotion(self, emotion: str, intensity: float):
-        """屏幕内容触发的情绪"""
+        """屏幕内容触发的情绪（从后台线程调用，通过信号转主线程）"""
+        self.screen_emotion_signal.emit(emotion, intensity)
+
+    def _do_screen_emotion(self, emotion: str, intensity: float):
+        """在主线程处理屏幕情绪"""
         try:
             self._perception.trigger_emotion(emotion, intensity)
-            # 切换对应动画
             anim_map = {
                 'happy': 'waving', 'surprised': 'jumping',
                 'thinking': 'running', 'sad': 'failed',

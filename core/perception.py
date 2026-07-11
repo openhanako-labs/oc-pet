@@ -402,7 +402,7 @@ class ProactiveScheduler:
         ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii))
         millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
         idle_sec = millis / 1000.0
-        if idle_sec < 180:
+        if idle_sec < 60:
             return None
 
         category = "other"
