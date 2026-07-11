@@ -60,6 +60,7 @@ class PetWindow(QWidget):
     # 跨线程信号：后台线程 -> 主线程
     engine_reply_signal = Signal(str, str, str, str)  # reply, emotion, anim, audio_path
     engine_status_signal = Signal(str)  # status message
+    voice_status_signal = Signal(str)  # voice input status
 
     def __init__(self):
         super().__init__()
@@ -150,6 +151,7 @@ class PetWindow(QWidget):
         # 连接跨线程信号
         self.engine_reply_signal.connect(self._do_engine_reply)
         self.engine_status_signal.connect(self._do_engine_status)
+        self.voice_status_signal.connect(self._do_voice_status)
         self._engine.start()
 
         # ── 语音输入（ASR）──
@@ -607,37 +609,28 @@ class PetWindow(QWidget):
             def _do_asr():
                 text = self._voice_input.stop()
                 if text:
-                    # 写入 outbox（同 _send_message 逻辑）
-                    basedir = Path(__file__).parent / "data"
-                    try:
-                        basedir.mkdir(parents=True, exist_ok=True)
-                        msg = {"text": text, "character": self._current_char, "time": time.time()}
-                        outbox = basedir / "outbox.json"
-                        msgs = json.loads(outbox.read_text("utf-8")) if outbox.exists() else []
-                        msgs.append(msg)
-                        outbox.write_text(json.dumps(msgs, ensure_ascii=False), "utf-8")
-                        (basedir / ".pending").write_text("1", "utf-8")
-                        logger.info("Voice input sent: %s", text[:30])
-                    except Exception as e:
-                        logger.warning("Voice outbox error: %s", e)
-
-                    # 显示气泡提示
-                    self.bubble.set_text(f"🎤 {text[:30]}")
-                    self._reposition_bubble()
-                    self.bubble.show()
-                    QTimer.singleShot(3000, self._auto_hide_bubble)
-
+                    # 通过引擎发送
+                    self._engine.send(text, character=self._current_char)
+                    logger.info("Voice input sent: %s", text[:30])
+                    # 显示提示 + 思考状态
+                    self.voice_status_signal.emit(f"🎤 {text[:30]}")
                     # 截停 TTS
                     self._tts_player.stop()
                     self._is_thinking = True
+                    self._pending_chat = True
+                    self._pending_user_msg = text
                 else:
-                    self._show_bubble("没听清...", emotion="neutral")
+                    self.voice_status_signal.emit("没听清...")
 
             t = threading.Thread(target=_do_asr, daemon=True)
             t.start()
 
     def _on_voice_status(self, msg: str):
-        """语音输入状态回调"""
+        """语音输入状态 - 从后台线程，通过信号转主线程"""
+        self.voice_status_signal.emit(msg)
+
+    def _do_voice_status(self, msg: str):
+        """在主线程处理语音状态"""
         if msg:
             self._show_bubble(msg, emotion="thinking")
         else:

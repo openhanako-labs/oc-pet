@@ -13,6 +13,18 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+
+# 确保 ffmpeg 可用（whisper 依赖）
+try:
+    import imageio_ffmpeg
+    _ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    os.environ.setdefault('FFMPEG_BINARY', _ffmpeg)
+    # 把 ffmpeg 目录加到 PATH
+    _ffmpeg_dir = os.path.dirname(_ffmpeg)
+    if _ffmpeg_dir not in os.environ.get('PATH', ''):
+        os.environ['PATH'] = _ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
+except Exception:
+    pass
 import threading
 import time
 import wave
