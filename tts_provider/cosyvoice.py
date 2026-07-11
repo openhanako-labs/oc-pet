@@ -90,16 +90,16 @@ class CosyVoiceProvider(TTSProvider):
             return self._synthesize_sft(text, instruct, output_path)
 
         try:
-            chunks = self._model.inference_zero_shot(
-                text, ref_text, ref_audio, stream=False,
-                speed=1.0
+            import soundfile as sf
+            result = self._model.inference_zero_shot(
+                text, ref_text, ref_audio, stream=False
             )
-            for chunk in chunks:
-                if "tts_audio" in chunk:
-                    import torchaudio
-                    torchaudio.save(str(output_path), chunk["tts_audio"], 24000)
-                    logger.info("TTS done: %s", output_path.name)
-                    return str(output_path)
+            for item in result:
+                audio = item['tts_speech']
+                arr = audio.squeeze().cpu().numpy()
+                sf.write(str(output_path), arr, self._model.sample_rate)
+                logger.info("TTS done: %s", output_path.name)
+                return str(output_path)
             logger.warning("TTS: no output from model (zero-shot returned empty)")
             return self._synthesize_sft(text, instruct, output_path)
         except Exception as e:
@@ -108,18 +108,23 @@ class CosyVoiceProvider(TTSProvider):
 
     def _synthesize_sft(self, text, instruct, output_path):
         try:
-            kwargs = {}
+            import soundfile as sf
+            # 动态获取可用 speaker
+            spk_list = list(self._model.frontend.spk2info.keys())
+            if not spk_list:
+                logger.warning("TTS: no SFT speakers available")
+                return None
+            spk = spk_list[0]
             if instruct:
-                kwargs["instruct_text"] = instruct
-            chunks = self._model.inference_sft(
-                text, "中文女", stream=False, speed=1.0, **kwargs
-            )
-            for chunk in chunks:
-                if "tts_audio" in chunk:
-                    import torchaudio
-                    torchaudio.save(str(output_path), chunk["tts_audio"], 24000)
-                    logger.info("TTS done (SFT): %s", output_path.name)
-                    return str(output_path)
+                result = self._model.inference_instruct(text, spk, instruct, stream=False)
+            else:
+                result = self._model.inference_sft(text, spk, stream=False)
+            for item in result:
+                audio = item['tts_speech']
+                arr = audio.squeeze().cpu().numpy()
+                sf.write(str(output_path), arr, self._model.sample_rate)
+                logger.info("TTS done (SFT): %s", output_path.name)
+                return str(output_path)
             logger.warning("TTS: no output from SFT model")
             return None
         except Exception as e:

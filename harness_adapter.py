@@ -32,7 +32,7 @@ class HanakoPetAdapter:
         self.agent_id = agent_id
         self._context = HanakoContext(agent_id)
 
-        # 读取模型配置 - .env 优先，回退到 Hanako
+        # 读取模型配置 - .env 优先,回退到 Hanako
         from env_config import get_llm_config
         env_llm = get_llm_config()
         if env_llm:
@@ -88,7 +88,7 @@ class HanakoPetAdapter:
         if not self._base_url or not self._api_key:
             return "...(模型未配置,请在 Hanako 设置中配置模型后重试)"
 
-        messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] 在回复末尾添加情绪标签,格式 [emotion:xxx],xxx 为 happy/angry/sad/surprised/thinking/neutral 之一。例如:你好呀。[emotion:happy]"}]
+        messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] 1. 回复简短自然，不超过 2 句话。2. 在回复末尾添加情绪标签，格式 [emotion:xxx]，xxx 为 happy/angry/sad/surprised/thinking/neutral 之一。例如：你好呀。[emotion:happy]"}]
 
         # 注入记忆
         if inject_memory:
@@ -118,7 +118,7 @@ class HanakoPetAdapter:
 
             if not text:
                 logger.warning("LLM returned empty: %s", repr(resp[:100] if resp else None))
-                text = "（……想不起来要说什么了）"
+                text = "(......想不起来要说什么了)"
                 emotion = "thinking"
                 self._history.append({"role": "user", "content": message.strip()})
                 self._history.append({"role": "assistant", "content": text})
@@ -138,13 +138,13 @@ class HanakoPetAdapter:
             return text, emotion
         except requests.exceptions.Timeout:
             logger.warning("LLM timeout")
-            return "（网络有点慢，你再说一遍？）", "neutral"
+            return "(网络有点慢,你再说一遍?)", "neutral"
         except requests.exceptions.ConnectionError:
             logger.warning("LLM connection error")
-            return "（连不上——检查一下网络配置吧）", "sad"
+            return "(连不上--检查一下网络配置吧)", "sad"
         except Exception as e:
             logger.warning("Chat failed: %s", e)
-            return "（出了点岔子）", "neutral"
+            return "(出了点岔子)", "neutral"
 
     def _call_api(self, messages: list[dict]) -> str:
         """调用 LLM API
