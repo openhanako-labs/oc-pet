@@ -171,7 +171,7 @@ class HanakoPetAdapter:
                 "model": self._model,
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 4000,
+                "max_tokens": 8192,
             },
             timeout=60,
         )
