@@ -1,6 +1,21 @@
 @echo off
 cd /d "%~dp0"
-set PYTHON=C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe
-echo Starting pet (with built-in conversation engine)...
-"%PYTHON%" main.py
+echo Starting OC Desktop Pet...
+
+:: ??? venv
+if exist ".venv\Scripts\python.exe" (
+    ".venv\Scripts\python.exe" main.py
+    goto :end
+)
+
+:: ????? Python
+where python >nul 2>&1
+if %errorlevel%==0 (
+    python main.py
+    goto :end
+)
+
+echo [ERROR] Python not found! Please install Python 3.10+ and add to PATH.
 pause
+
+:end
