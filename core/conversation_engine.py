@@ -76,13 +76,22 @@ class ConversationEngine:
 
         # 初始化 TTS（如果未注入）
         if not self._tts:
-            from tts_provider.cosyvoice import CosyVoiceProvider
-            self._tts = CosyVoiceProvider()
-        spk_info = self._tts.get_speaker_info(self._character_id) if hasattr(self._tts, 'get_speaker_info') else {}
-        if spk_info:
-            logger.info("TTS 配置就绪 | ref=%s", spk_info.get("ref_audio", "?")[-30:])
-        else:
-            logger.info("TTS provider: %s", getattr(self._tts, 'name', 'unknown'))
+            try:
+                from tts_provider.cosyvoice import CosyVoiceProvider
+                self._tts = CosyVoiceProvider()
+            except Exception as e:
+                logger.warning("TTS 初始化失败，禁用 TTS: %s", e)
+                self._tts = None
+
+        if self._tts:
+            try:
+                spk_info = self._tts.get_speaker_info(self._character_id) if hasattr(self._tts, 'get_speaker_info') else {}
+                if spk_info:
+                    logger.info("TTS 配置就绪 | ref=%s", spk_info.get("ref_audio", "?")[-30:])
+                else:
+                    logger.info("TTS provider: %s", getattr(self._tts, 'name', 'unknown'))
+            except Exception as e:
+                logger.warning("TTS 信息获取失败: %s", e)
 
         # 启动后台线程
         self._thread = threading.Thread(target=self._run, daemon=True)
