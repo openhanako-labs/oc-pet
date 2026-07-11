@@ -86,6 +86,8 @@ class PetWindow(QWidget):
         self._drag_last_time = 0.0
         self._vy = 0.0                   # 垂直速度(弹跳用)
         self._bounce_active = False      # 弹跳模式中
+        self._is_sitting = False         # 是否坐在窗口边缘
+        self._sitting_edge = ""           # 坐在哪条边: top/bottom/left/right
 
         self._current_char = agent_id
         self._is_thinking = False
@@ -832,6 +834,9 @@ class PetWindow(QWidget):
 
             if t == QEvent.MouseButtonPress:
                 if event.button() == Qt.LeftButton:
+                    # 退出坐下状态
+                    if self._is_sitting:
+                        self._exit_sitting()
                     self._drag_start_cursor = QCursor.pos()
                     self._drag_start_window = self.pos()
                     self._is_dragging = False
@@ -882,6 +887,17 @@ class PetWindow(QWidget):
                         else:
                             self._bounce_active = False
 
+                        # ── 边缘吸附坐下 ──
+                        edge = self._check_edge_sitting()
+                        if edge and not self._bounce_active:
+                            self._enter_sitting(edge)
+                            self._was_click = False
+                            return True
+
+                        # 如果不在边缘，退出坐下状态
+                        if self._is_sitting:
+                            self._exit_sitting()
+
                         pos = self.pos()
                         self.config.setdefault("window", {})["x"] = pos.x()
                         self.config.setdefault("window", {})["y"] = pos.y()
@@ -911,6 +927,111 @@ class PetWindow(QWidget):
             # 记录用于释放后速度估算
             self._drag_last_pos = cursor
             self._drag_last_time = time.time()
+
+    # ── 窗口边缘吸附坐下 ──
+
+    SIT_THRESHOLD = 30   # 距离边缘多少 px 触发吸附
+    SIT_ROTATE = 12      # 坐下时旋转角度
+
+    def _check_edge_sitting(self) -> str | None:
+        """检查是否靠近屏幕边缘，返回边缘方向或 None"""
+        sg = self._current_screen_geometry()
+        pos = self.pos()
+        w, h = self.width(), self.height()
+        x, y = pos.x(), pos.y()
+
+        # 检查四条边
+        if y <= sg.top() + self.SIT_THRESHOLD:
+            return "top"
+        if y + h >= sg.bottom() - self.SIT_THRESHOLD:
+            return "bottom"
+        if x <= sg.left() + self.SIT_THRESHOLD:
+            return "left"
+        if x + w >= sg.right() - self.SIT_THRESHOLD:
+            return "right"
+        return None
+
+    def _enter_sitting(self, edge: str):
+        """吸附到窗口边缘并进入坐下状态"""
+        sg = self._current_screen_geometry()
+        pos = self.pos()
+        w, h = self.width(), self.height()
+        x, y = pos.x(), pos.y()
+
+        # 吸附到对应边缘
+        if edge == "bottom":
+            y = sg.bottom() - h
+        elif edge == "top":
+            y = sg.top()
+        elif edge == "left":
+            x = sg.left()
+        elif edge == "right":
+            x = sg.right() - w
+
+        self.move(x, y)
+        self._is_sitting = True
+        self._sitting_edge = edge
+        self._stop_walking()
+        self._motion_state = "sitting"
+
+        # 应用旋转效果（朝边缘方向倾斜）
+        self._apply_sitting_rotation(edge)
+
+        # 保存位置
+        self.config.setdefault("window", {})["x"] = x
+        self.config.setdefault("window", {})["y"] = y
+        save_config(self.config)
+        if self._on_position_change:
+            self._on_position_change(x, y)
+
+        logger.info("Sitting on %s edge", edge)
+
+    def _exit_sitting(self):
+        """退出坐下状态"""
+        if not self._is_sitting:
+            return
+        self._is_sitting = False
+        self._sitting_edge = ""
+        self._motion_state = "idle"
+
+        # 移除旋转
+        self.char_label.setGraphicsEffect(None)
+        # 恢复帧渲染
+        self._renderer._show_frame()
+
+        logger.info("Stopped sitting")
+
+    def _apply_sitting_rotation(self, edge: str):
+        """坐下时应用视觉旋转效果"""
+        from PySide6.QtWidgets import QGraphicsRotation, QGraphicsProxyWidget
+        # 简单方案：用 transform 旋转 char_label 的 pixmap
+        frames = self._renderer._frames.get(self._renderer._anim_seq, [])
+        if not frames:
+            return
+        pix = frames[self._renderer._anim_idx % len(frames)]
+        ls = self.char_label.size()
+        if ls.width() > 0 and ls.height() > 0:
+            pix = pix.scaled(ls.width(), ls.height(),
+                             Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        # 根据边缘方向旋转
+        angle = {
+            "bottom": self.SIT_ROTATE,     # 底部：向右倾
+            "top": -self.SIT_ROTATE,       # 顶部：向左倾
+            "left": self.SIT_ROTATE,       # 左边：向右倾
+            "right": -self.SIT_ROTATE,     # 右边：向左倾
+        }.get(edge, 0)
+
+        transform = QTransform()
+        cx = pix.width() // 2
+        cy = pix.height() // 2
+        transform.translate(cx, cy)
+        transform.rotate(angle)
+        transform.translate(-cx, -cy)
+        rotated = pix.transformed(transform, Qt.SmoothTransformation)
+        if not self._renderer._facing_right:
+            rotated = rotated.transformed(QTransform().scale(-1, 1))
+        self.char_label.setPixmap(rotated)
 
     # ── 聊天交互 ──
 
