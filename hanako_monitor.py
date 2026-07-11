@@ -64,15 +64,16 @@ def compact_bubble_text(text: str) -> str:
         for s in re.split(r'(?<=[。！？!?])\s*', normalized)
         if s.strip()
     ]
-    # 优先选最后一句完整句（≥8字），且不是"完成/好了"类短语
-    skip_patterns = re.compile(r'^(完成|完成啦|好了|好的)[。！？!?]?$')
-    candidate = None
-    for s in reversed(sentences):
-        if len(s) >= BUBBLE_MIN_SENTENCE_LEN and not skip_patterns.match(s):
-            candidate = s
-            break
-    if not candidate:
-        candidate = sentences[-1] if sentences else normalized
+    # 取前 1-2 句（气泡空间有限，前文更重要）
+    if len(sentences) == 1:
+        candidate = sentences[0]
+    else:
+        # 取前两句，如果总长不超过上限
+        first_two = sentences[0] + sentences[1] if len(sentences) > 1 else sentences[0]
+        if len(first_two) <= BUBBLE_MAX_CHARS:
+            candidate = first_two
+        else:
+            candidate = sentences[0]
     # 截断
     if len(candidate) <= BUBBLE_MAX_CHARS:
         return candidate

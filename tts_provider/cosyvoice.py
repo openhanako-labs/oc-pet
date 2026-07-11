@@ -42,8 +42,10 @@ class CosyVoiceProvider(TTSProvider):
         try:
             import sys
             src_dir = str(COSYVOICE_DIR / "src")
-            if src_dir not in sys.path:
-                sys.path.insert(0, src_dir)
+            third_party_dir = str(COSYVOICE_DIR / "src" / "third_party" / "Matcha-TTS")
+            for d in [src_dir, third_party_dir]:
+                if d not in sys.path:
+                    sys.path.insert(0, d)
             from cosyvoice.cli.cosyvoice import CosyVoice2
             model_path = str(COSYVOICE_DIR / "models" / "CosyVoice2-0.5B")
             self._model = CosyVoice2(model_path)
