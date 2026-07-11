@@ -16,8 +16,8 @@ import os
 import threading
 import time
 
-from harness_adapter import HanakoPetAdapter
-from perception import PerceptionController
+from .harness_adapter import HanakoPetAdapter
+from .perception import PerceptionController
 
 logger = logging.getLogger(__name__)
 

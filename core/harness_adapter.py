@@ -16,7 +16,7 @@ from pathlib import Path
 
 import requests
 
-from hanako_context import HanakoContext
+from .hanako_context import HanakoContext
 
 logger = logging.getLogger(__name__)
 

@@ -21,27 +21,27 @@ from PySide6.QtGui import (
     QCursor
 )
 from config import CHARACTER_INFO, EXPRESSION_MAP, load_config, save_config
-from hanako_monitor import HanakoMonitor, compact_bubble_text
+from core.hanako_monitor import HanakoMonitor, compact_bubble_text
 
-from behavior import BehaviorParams, BEHAVIOR_MODES
-from behavior import MOUSE_REACTIONS, MouseReactionParams
-from behavior import (
+from motion.behavior import BehaviorParams, BEHAVIOR_MODES
+from motion.behavior import MOUSE_REACTIONS, MouseReactionParams
+from motion.behavior import (
     PHYSICS_INTERVAL, INERTIA_FACTOR, INTENT_FACTOR,
     ARRIVAL_DISTANCE, WALK_SPEED_BASE,
     BOUNCE_ELASTICITY, BOUNCE_FRICTION, BOUNCE_GRAVITY, BOUNCE_MIN_SPEED
 )
-from bubble import ChatBubble
+from ui.bubble import ChatBubble
 
-from action_linker import ActionLinker
-from foreground_watcher import ForegroundWatcher
-from tts_player import TTSTtsPlayer
-from startup_screen import StartupScreen
-from perception import PerceptionController, ProactiveScheduler
-from physics import PhysicsEngine, MotionStateMachine, PhysicsCallbacks
+from motion.action_linker import ActionLinker
+from motion.foreground_watcher import ForegroundWatcher
+from ui.tts_player import TTSTtsPlayer
+from ui.startup_screen import StartupScreen
+from core.perception import PerceptionController, ProactiveScheduler
+from motion.physics import PhysicsEngine, MotionStateMachine, PhysicsCallbacks
 from avatar.sprite_renderer import SpriteRenderer
 
-from conversation_engine import ConversationEngine
-from mouse_tracker import MouseTracker
+from core.conversation_engine import ConversationEngine
+from motion.mouse_tracker import MouseTracker
 
 logger = logging.getLogger(__name__)
 
@@ -726,7 +726,7 @@ class PetWindow(QWidget):
 
     def _open_settings(self):
         """打开配置面板"""
-        from settings_dialog import SettingsDialog
+        from ui.settings_dialog import SettingsDialog
         dialog = SettingsDialog(self.config, pet_manager=self._pet_manager, parent=self)
         if dialog.exec():
             self.config = dialog.get_config()
@@ -737,7 +737,7 @@ class PetWindow(QWidget):
 
     def _open_plugin_panel(self):
         """打开插件面板"""
-        from plugin_panel import PluginPanel
+        from ui.plugin_panel import PluginPanel
         panel = PluginPanel(on_send_command=self._send_plugin_command, parent=self)
         panel.exec()
 
@@ -1106,7 +1106,7 @@ class PetWindow(QWidget):
 
     def _update_status_indicator(self, state_name: str):
         """更新持久化状态指示器"""
-        from hanako_monitor import STATE_LABELS
+        from core.hanako_monitor import STATE_LABELS
         label = STATE_LABELS.get(state_name, f"⚪ {state_name}")
         self._status_label.setText(label)
 

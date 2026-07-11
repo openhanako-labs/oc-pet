@@ -16,9 +16,9 @@ import math
 import random
 from typing import Callable
 
-from behavior import BehaviorParams, PHYSICS_INTERVAL, INERTIA_FACTOR, INTENT_FACTOR
-from behavior import WALK_SPEED_BASE, ARRIVAL_DISTANCE
-from behavior import BOUNCE_GRAVITY, BOUNCE_FRICTION, BOUNCE_ELASTICITY, BOUNCE_MIN_SPEED
+from .behavior import BehaviorParams, PHYSICS_INTERVAL, INERTIA_FACTOR, INTENT_FACTOR
+from .behavior import WALK_SPEED_BASE, ARRIVAL_DISTANCE
+from .behavior import BOUNCE_GRAVITY, BOUNCE_FRICTION, BOUNCE_ELASTICITY, BOUNCE_MIN_SPEED
 
 logger = logging.getLogger(__name__)
 
