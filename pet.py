@@ -73,6 +73,7 @@ class PetWindow(QWidget):
         self._sprite_dir = sprite_dir  # None = 用默认 characters/ 目录
         self._on_position_change = on_position_change  # 位置变化回调
         self._pet_manager = pet_manager  # 多桌宠管理器引用
+        self._init_position = position  # 初始位置（供 _setup_window 使用）
 
         # ── 交互状态 ──
         self._drag_start_cursor = QPoint()
@@ -271,7 +272,7 @@ class PetWindow(QWidget):
         self._apply_penetration()
         self.setFixedSize(200, 360)
 
-        win_cfg = position or self.config.get("window", {})
+        win_cfg = self._init_position or self.config.get("window", {})
         if win_cfg.get("x", -1) >= 0 and win_cfg.get("y", -1) >= 0:
             self.move(win_cfg["x"], win_cfg["y"])
         else:
@@ -1151,6 +1152,8 @@ class PetWindow(QWidget):
 
     def _gaze_tick(self):
         """每 50ms 更新视线跟随（平滑偏移）"""
+        if not hasattr(self, '_renderer'):
+            return
         params = self._mouse_reaction_params
         if params.gaze_enabled and self._mouse_tracker.is_nearby:
             state = self._mouse_tracker.state
