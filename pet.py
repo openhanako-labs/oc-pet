@@ -1245,8 +1245,10 @@ class PetWindow(QWidget):
         self._status_label.move(self.width() - sw - 6, self.height() - sh - 6)
 
     def _restore_status_label(self):
-        """穿透提示后恢复为状态指示"""
+        """穿透提示后恢复为状态指示，然后淡出隐藏"""
         self._update_status_indicator(self._hanako_monitor.current_state_name)
+        # 3 秒后淡出隐藏
+        QTimer.singleShot(3000, self._status_label.hide)
 
     def _update_status_indicator(self, state_name: str):
         """更新持久化状态指示器"""
