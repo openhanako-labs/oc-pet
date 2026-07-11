@@ -38,6 +38,7 @@ from eye_overlay import EyeOverlay
 from startup_screen import StartupScreen
 from character_editor import CharacterEditor
 from perception import PerceptionController, ProactiveScheduler
+from physics import PhysicsEngine, MotionStateMachine, PhysicsCallbacks
 from avatar.sprite_renderer import SpriteRenderer
 
 from conversation_engine import ConversationEngine
@@ -91,11 +92,11 @@ class PetWindow(QWidget):
         self._target_x = 0
         self._vx = 0.0
         self._physics_timer = QTimer(self)
-        self._physics_timer.timeout.connect(self._physics_tick)
+        self._physics_timer.timeout.connect(lambda: self._physics.tick(self._get_behavior_params()))
         self._motion_state = "idle"   # idle / wander / rest
         self._rest_counter = 0
         self._motion_timer = QTimer(self)
-        self._motion_timer.timeout.connect(self._motion_tick)
+        self._motion_timer.timeout.connect(lambda: self._motion.tick(self._get_behavior_params()))
         self._motion_timer.start(500)
         self._is_walking = False
 
@@ -187,6 +188,10 @@ class PetWindow(QWidget):
         self._anim_timer = self._renderer._anim_timer
         self._anim_timer.timeout.connect(self._anim_tick)
         self._setup_animation()
+
+        # ── 物理引擎（委托）──
+        self._physics = PhysicsEngine(self)
+        self._motion = MotionStateMachine(self._physics, self)
 
         self._setup_menu()
         self._setup_tray()
@@ -806,22 +811,20 @@ class PetWindow(QWidget):
                         if dt > 0 and dt < 0.2:
                             dx = cursor.x() - self._drag_last_pos.x()
                             dy = cursor.y() - self._drag_last_pos.y()
-                            self._vx = dx / dt * 0.02    # 缩放到物理帧单位
-                            self._vy = dy / dt * 0.02
-                            speed = math.sqrt(self._vx ** 2 + self._vy ** 2)
+                            vx = dx / dt * 0.02
+                            vy = dy / dt * 0.02
+                            speed = math.sqrt(vx ** 2 + vy ** 2)
                             if speed > 1.5:
                                 self._bounce_active = True
                                 self._is_walking = False
                                 self._motion_state = "bounce"
-                                self._set_anim_seq('walk')  # 弹跳时用 walk 动画
+                                self._set_anim_seq('walk')
+                                self._physics.start_bounce(vx, vy)
                                 self._physics_timer.start(PHYSICS_INTERVAL)
                             else:
-                                self._vx = 0.0
-                                self._vy = 0.0
                                 self._bounce_active = False
                         else:
-                            self._vx = 0.0
-                            self._vy = 0.0
+                            self._bounce_active = False
 
                         pos = self.pos()
                         self.config.setdefault("window", {})["x"] = pos.x()
@@ -856,177 +859,10 @@ class PetWindow(QWidget):
     def _stop_walking(self):
         self._is_walking = False
         self._bounce_active = False
-        self._vy = 0.0
+        self._physics.stop()
         self._physics_timer.stop()
-        self._motion_state = "idle"
-        self._rest_counter = 0
+        self._motion.reset()
         self._set_anim_seq('idle')
-
-    def _motion_tick(self):
-        """运动状态机主循环 (500ms/tick) - idle→wander/rest 转换"""
-        if self._is_dragging or self.input_widget.isVisible() or self._is_walking or self._bounce_active:
-            return
-
-        params = self._get_behavior_params()
-        if params.walk_chance <= 0:
-            if self._motion_state != "idle":
-                self._motion_state = "idle"
-                self._set_anim_seq('idle')
-            return
-
-        # 休息倒计时
-        if self._motion_state == "rest":
-            self._rest_counter -= 500
-            if self._rest_counter <= 0:
-                self._motion_state = "idle"
-            return
-
-        # idle → 决定下一步
-        if self._motion_state == "idle":
-            if random.random() < params.walk_chance:
-                self._start_walk(params)
-            else:
-                self._start_rest(params)
-
-    def _start_walk(self, params: BehaviorParams):
-        """开始走动 - 惯性物理驱动"""
-        sg = self._current_screen_geometry()
-        current_x = self.x()
-
-        # 方向决策
-        if params.direction_to_mouse:
-            cursor = QCursor.pos()
-            diff = cursor.x() - current_x
-            if abs(diff) > 30 and 0 < cursor.x() < sg.width():
-                direction = 1 if diff > 0 else -1
-            else:
-                direction = random.choice([-1, 1])
-        else:
-            direction = random.choice([-1, 1])
-
-        distance = random.randint(params.min_dist, params.max_dist)
-        self._target_x = current_x + direction * distance
-        self._target_x = max(10, min(self._target_x, sg.width() - self.width() - 10))
-
-        self._vx = 0.0
-        self._facing_right = (direction > 0)
-        self._motion_state = "wander"
-        self._set_anim_seq('walk')
-        self._is_walking = True
-        self._physics_timer.start(PHYSICS_INTERVAL)
-
-    def _physics_tick(self):
-        """物理引擎 - 惯性运动 / 弹性弹跳 (30ms/tick)"""
-        sg = self._current_screen_geometry()
-
-        # ── 弹跳模式 ──
-        if self._bounce_active:
-            # 重力
-            self._vy += BOUNCE_GRAVITY
-
-            # 摩擦衰减
-            self._vx *= BOUNCE_FRICTION
-            self._vy *= BOUNCE_FRICTION
-
-            new_x = self.x() + self._vx
-            new_y = self.y() + self._vy
-
-            # 左右边缘弹跳
-            left = 0
-            right = sg.width() - self.width()
-            if new_x < left:
-                new_x = left
-                self._vx = abs(self._vx) * BOUNCE_ELASTICITY
-            elif new_x > right:
-                new_x = right
-                self._vx = -abs(self._vx) * BOUNCE_ELASTICITY
-
-            # 上下边缘弹跳
-            top = 0
-            bottom = sg.height() - self.height()
-            if new_y < top:
-                new_y = top
-                self._vy = abs(self._vy) * BOUNCE_ELASTICITY
-            elif new_y > bottom:
-                new_y = bottom
-                self._vy = -abs(self._vy) * BOUNCE_ELASTICITY
-                # 落地时水平速度也多衰减一点(模拟地面摩擦)
-                self._vx *= 0.85
-
-            self.move(int(new_x), int(new_y))
-
-            # 速度降到很低 → 停止弹跳
-            speed = math.sqrt(self._vx ** 2 + self._vy ** 2)
-            if speed < BOUNCE_MIN_SPEED:
-                self._bounce_active = False
-                self._vx = 0.0
-                self._vy = 0.0
-                self._motion_state = "idle"
-                self._physics_timer.stop()
-                self._set_anim_seq('idle')
-                # 保存最终位置
-                pos = self.pos()
-                self.config.setdefault("window", {})["x"] = pos.x()
-                self.config.setdefault("window", {})["y"] = pos.y()
-                save_config(self.config)
-            return
-
-        # ── 原有:步行模式 ──
-        if not self._is_walking:
-            self._physics_timer.stop()
-            return
-
-        dx = self._target_x - self.x()
-        if abs(dx) <= ARRIVAL_DISTANCE:
-            self._physics_timer.stop()
-            self._on_walk_finished()
-            return
-
-        # 比例控制 + 速度上限
-        params = self._get_behavior_params()
-        max_speed = WALK_SPEED_BASE * params.speed_mul
-        desired_vx = dx * 0.12  # 比例增益
-        desired_vx = max(-max_speed, min(max_speed, desired_vx))
-
-        # 惯性公式
-        self._vx = self._vx * INERTIA_FACTOR + desired_vx * INTENT_FACTOR
-
-        # 根据速度更新朝向
-        if abs(self._vx) > 0.5:
-            self._facing_right = (self._vx > 0)
-
-        # 防止抖动的死区
-        if abs(self._vx) < 0.2:
-            self._vx = 0.3 if self._vx >= 0 else -0.3
-
-        new_x = self.x() + self._vx
-
-        # 屏幕边界
-        sg = self._current_screen_geometry()
-        new_x = max(10, min(new_x, sg.width() - self.width() - 10))
-
-        self.move(int(new_x), self.y())
-
-    def _start_rest(self, params: BehaviorParams):
-        """开始休息(不动 + 倒计时)"""
-        self._motion_state = "rest"
-        self._set_anim_seq('idle')
-        self._rest_counter = random.randint(
-            max(params.min_pause, 1500),
-            max(params.max_pause, 4000)
-        )
-
-    def _on_walk_finished(self):
-        self._is_walking = False
-        self._set_anim_seq('idle')
-        self._store_label_pos()
-        pos = self.pos()
-        self.config.setdefault("window", {})["x"] = pos.x()
-        self.config.setdefault("window", {})["y"] = pos.y()
-        save_config(self.config)
-        # 走完自动进入休息
-        params = self._get_behavior_params()
-        self._start_rest(params)
 
     def _toggle_chat(self):
         self._stop_walking()
@@ -1157,6 +993,44 @@ class PetWindow(QWidget):
                 pass
 
     # ── 右键菜单 ──
+
+    # ── PhysicsCallbacks 接口 ──
+
+    def get_screen_geometry(self):
+        return self._current_screen_geometry()
+
+    def get_pos(self):
+        return (self.x(), self.y())
+
+    def get_size(self):
+        return (self.width(), self.height())
+
+    def move_to(self, x: int, y: int):
+        self.move(x, y)
+
+    def on_walk_finished(self):
+        self._is_walking = False
+        self._set_anim_seq('idle')
+        self._store_label_pos()
+        pos = self.pos()
+        self.config.setdefault("window", {})["x"] = pos.x()
+        self.config.setdefault("window", {})["y"] = pos.y()
+        save_config(self.config)
+        params = self._get_behavior_params()
+        self._motion._start_rest(params)
+
+    def on_bounce_finished(self, x: int, y: int):
+        self._motion_state = "idle"
+        self._bounce_active = False
+        self.config.setdefault("window", {})["x"] = x
+        self.config.setdefault("window", {})["y"] = y
+        save_config(self.config)
+
+    def on_facing_change(self, facing_right: bool):
+        self._facing_right = facing_right
+
+    def set_anim(self, anim: str):
+        self._set_anim_seq(anim)
 
     # ── Hanako 状态回调 ──
 
