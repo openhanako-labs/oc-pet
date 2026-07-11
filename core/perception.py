@@ -238,7 +238,7 @@ class ScreenPerception:
 
     def _capture_and_analyze(self):
         import hashlib as _hashlib
-        from hanako_context import HanakoContext
+        from .hanako_context import HanakoContext
 
         img = ImageGrab.grab()
         new_size = (img.width // SCREENSHOT_SCALE, img.height // SCREENSHOT_SCALE)
