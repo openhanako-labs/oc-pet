@@ -596,6 +596,16 @@ class SettingsDialog(QDialog):
                 }
                 if key in mapping:
                     mapping[key].setText(val)
+                elif key == "TTS_PROVIDER" and val:
+                    for i in range(self.tts_provider_select.count()):
+                        if self.tts_provider_select.itemData(i) == val:
+                            self.tts_provider_select.setCurrentIndex(i)
+                            break
+                elif key == "ASR_PROVIDER" and val:
+                    for i in range(self.asr_provider_select.count()):
+                        if self.asr_provider_select.itemData(i) == val:
+                            self.asr_provider_select.setCurrentIndex(i)
+                            break
                 elif key == "LLM_MODEL" and val:
                     # 先精确匹配，再按 model_id 前缀匹配
                     idx = self.llm_model.findText(val)
@@ -641,12 +651,14 @@ class SettingsDialog(QDialog):
             f"LLM_MODEL={self._strip_provider_suffix(self.llm_model.currentText())}",
             "",
             "# TTS API",
+            f"TTS_PROVIDER={self.tts_provider_select.currentData() or ''}",
             f"TTS_BASE_URL={self.tts_url.text().strip()}",
             f"TTS_API_KEY={self.tts_key.text().strip()}",
             f"TTS_MODEL={self.tts_model.currentText().strip() or 'tts-1'}",
             f"TTS_VOICE={self.tts_voice.text().strip() or 'alloy'}",
             "",
             "# ASR API",
+            f"ASR_PROVIDER={self.asr_provider_select.currentData() or ''}",
             f"ASR_BASE_URL={self.asr_url.text().strip()}",
             f"ASR_API_KEY={self.asr_key.text().strip()}",
             f"ASR_MODEL={self.asr_model.currentText().strip() or 'whisper-1'}",
