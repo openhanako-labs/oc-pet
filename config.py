@@ -66,6 +66,10 @@ CHARACTER_INFO = {
         "name": "幽灵团子",
         "path": "characters/default",
     },
+    "yuexinmiao": {
+        "name": "月薪喵",
+        "path": "characters/yuexinmiao",
+    },
     "ophelia": {
         "name": "奥菲莉娅",
         "path": "characters/ophelia",
