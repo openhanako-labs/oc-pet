@@ -162,6 +162,7 @@ class PetWindow(QWidget):
         self._mouse_tracker.on_chase = self._on_mouse_chase
         self._mouse_tracker.on_startled = self._on_mouse_startled
         self._mouse_tracker.on_leave = self._on_mouse_leave
+        self._mouse_last_scene = "idle"  # 用于去重
         self._mouse_tracker_timer = QTimer(self)
         self._mouse_tracker_timer.timeout.connect(self._mouse_tracker.tick)
         self._mouse_tracker_timer.start(200)
@@ -739,6 +740,29 @@ class PetWindow(QWidget):
             self._tts_player.disable()
         self._tts_player.set_volume(tts_cfg.get("volume", 0.8))
 
+        # TTS 引擎切换（重建 provider）
+        if self._engine:
+            new_provider = self._create_tts_provider()
+            self._engine._tts = new_provider
+            if new_provider:
+                import threading
+                def _reload_tts():
+                    new_provider.preload()
+                    self._engine._tts_ready = new_provider.is_ready
+                    logger.info("TTS provider 已切换: %s (ready=%s)",
+                                new_provider.name, new_provider.is_ready)
+                threading.Thread(target=_reload_tts, daemon=True).start()
+
+        # 鼠标交互
+        self._mouse_reaction_params = MOUSE_REACTIONS.get(
+            self.config.get("behavior", "normal"), MOUSE_REACTIONS["normal"]
+        )
+        if hasattr(self, '_renderer'):
+            self._renderer.set_gaze_enabled(
+                self.config.get("mouse_interaction", True)
+                and self._mouse_reaction_params.gaze_enabled
+            )
+
         # 行为模式
         self._switch_behavior_mode(self.config.get("behavior", "normal"))
 
@@ -1144,6 +1168,8 @@ class PetWindow(QWidget):
 
     # ── 鼠标交互反应 ──
 
+    _mouse_reaction_cooldown: float = 0.0  # 上次反应时间
+
     def _get_window_rect(self) -> tuple[int, int, int, int] | None:
         """返回角色窗口 (x, y, w, h)，供 MouseTracker 使用"""
         p = self.pos()
@@ -1161,12 +1187,20 @@ class PetWindow(QWidget):
         else:
             self._renderer.update_gaze()
 
+    def _check_reaction_cooldown(self) -> bool:
+        """检查是否在反应冷却中（3 秒内不重复）"""
+        now = time.time()
+        if now - self._mouse_reaction_cooldown < 3.0:
+            return True  # 冷却中
+        self._mouse_reaction_cooldown = now
+        return False
+
     def _on_mouse_nearby(self):
         """鼠标进入角色附近"""
         params = self._mouse_reaction_params
         if not params.react_nearby:
             return
-        if self._is_thinking:
+        if self._is_thinking or self._check_reaction_cooldown():
             return
         self._set_anim_seq(params.nearby_anim, emotion="surprised")
         self._show_bubble("？", emotion="surprised")
@@ -1202,7 +1236,7 @@ class PetWindow(QWidget):
         params = self._mouse_reaction_params
         if not params.react_startle:
             return
-        if self._is_thinking:
+        if self._is_thinking or self._check_reaction_cooldown():
             return
         self._set_anim_seq(params.startle_anim, emotion="surprised")
         self._show_bubble("！", emotion="surprised")
