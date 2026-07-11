@@ -1196,23 +1196,22 @@ class PetWindow(QWidget):
         return False
 
     def _on_mouse_nearby(self):
-        """鼠标进入角色附近"""
+        """鼠标进入角色附近 - 只切动画，不弹气泡"""
         params = self._mouse_reaction_params
         if not params.react_nearby:
             return
         if self._is_thinking or self._check_reaction_cooldown():
             return
         self._set_anim_seq(params.nearby_anim, emotion="surprised")
-        self._show_bubble("？", emotion="surprised")
 
     def _on_mouse_hover(self):
-        """鼠标在角色附近静止"""
+        """鼠标在角色附近静止 - 只切动画"""
         params = self._mouse_reaction_params
         if not params.react_hover:
             return
         if self._is_thinking:
             return
-        self._show_bubble("...?", emotion="thinking")
+        self._set_anim_seq("idle", emotion="thinking")
 
     def _on_mouse_chase(self, target_x: int):
         """鼠标长时间不动，走过去看看"""
@@ -1232,14 +1231,13 @@ class PetWindow(QWidget):
         self._physics_timer.start(30)
 
     def _on_mouse_startled(self, speed: float):
-        """鼠标快速掠过"""
+        """鼠标快速掠过 - 只切动画"""
         params = self._mouse_reaction_params
         if not params.react_startle:
             return
         if self._is_thinking or self._check_reaction_cooldown():
             return
         self._set_anim_seq(params.startle_anim, emotion="surprised")
-        self._show_bubble("！", emotion="surprised")
 
     def _on_mouse_leave(self):
         """鼠标离开角色附近"""
