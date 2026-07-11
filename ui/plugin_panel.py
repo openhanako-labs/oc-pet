@@ -131,6 +131,12 @@ class PluginPanel(QDialog):
                     tools_raw = []
                 tools = []
                 for t in tools_raw:
+                    if isinstance(t, str):
+                        # 工具是字符串（只有 ID）
+                        tools.append({"name": t, "desc": "", "source": ""})
+                        continue
+                    if not isinstance(t, dict):
+                        continue
                     src = t.get("source", "")
                     # 尝试读取工具的 name/description
                     tool_file = d / src

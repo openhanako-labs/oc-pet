@@ -574,7 +574,7 @@ class PetWindow(QWidget):
         bw = self.bubble.width()
         bh = self.bubble.height()
         bx = (self.width() - bw) // 2
-        by = top_y - bh - 4  # 头顶上方 4px
+        by = top_y - bh - 20  # 头顶上方 20px，避免遮挡
         self.bubble.move(max(bx, 2), max(by, 2))
 
     # ── 右键菜单 ──
