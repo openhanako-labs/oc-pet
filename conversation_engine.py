@@ -18,7 +18,6 @@ import time
 
 from harness_adapter import HanakoPetAdapter
 from perception import PerceptionController
-from tts_bridge import CosyVoiceService
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +67,8 @@ class ConversationEngine:
 
         # 初始化 TTS（如果未注入）
         if not self._tts:
-            from tts_bridge import CosyVoiceService
-            self._tts = CosyVoiceService()
+            from tts_provider.cosyvoice import CosyVoiceProvider
+            self._tts = CosyVoiceProvider()
         spk_info = self._tts.get_speaker_info(self._character_id) if hasattr(self._tts, 'get_speaker_info') else {}
         if spk_info:
             logger.info("TTS 配置就绪 | ref=%s", spk_info.get("ref_audio", "?")[-30:])
