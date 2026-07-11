@@ -316,6 +316,14 @@ class SettingsDialog(QDialog):
         # 读取 provider catalog 获取可用模型
         self._catalog_models = self._load_catalog_models()
 
+        # LLM Provider 快速选择
+        self.llm_provider_select = QComboBox()
+        self.llm_provider_select.addItem("手动填写", "")
+        for pid in self._catalog_models.get("providers", []):
+            self.llm_provider_select.addItem(pid, pid)
+        self.llm_provider_select.currentIndexChanged.connect(self._on_llm_provider_select)
+        api_form.addRow("LLM Provider", self.llm_provider_select)
+
         self.llm_url = QLineEdit()
         self.llm_url.setPlaceholderText("留空用 Hanako")
         api_form.addRow("LLM 地址", self.llm_url)
@@ -521,6 +529,33 @@ class SettingsDialog(QDialog):
             "provider_configs": provider_configs,
         }
 
+    def _on_llm_provider_select(self, idx: int):
+        """LLM provider 下拉选择 → 自动填充 URL、Key、模型列表"""
+        prov_id = self.llm_provider_select.itemData(idx)
+        if not prov_id:
+            return
+        cfg = self._catalog_models.get("provider_configs", {}).get(prov_id, {})
+        if cfg.get("base_url"):
+            self.llm_url.setText(cfg["base_url"])
+        if cfg.get("api_key"):
+            self.llm_key.setText(cfg["api_key"])
+        self.llm_model.clear()
+        models = []
+        try:
+            from pathlib import Path
+            import json
+            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+            data = json.loads(catalog_path.read_text("utf-8"))
+            prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
+            for m in prov_models:
+                if isinstance(m, dict):
+                    models.append(m.get("id", ""))
+                elif isinstance(m, str):
+                    models.append(m)
+        except Exception:
+            pass
+        self.llm_model.addItems([m for m in models if m])
+
     def _on_tts_provider_select(self, idx: int):
         """TTS provider 下拉选择 → 自动填充 URL、Key、模型列表"""
         prov_id = self.tts_provider_select.itemData(idx)
@@ -600,6 +635,11 @@ class SettingsDialog(QDialog):
                 }
                 if key in mapping:
                     mapping[key].setText(val)
+                elif key == "LLM_PROVIDER" and val:
+                    for i in range(self.llm_provider_select.count()):
+                        if self.llm_provider_select.itemData(i) == val:
+                            self.llm_provider_select.setCurrentIndex(i)
+                            break
                 elif key == "TTS_PROVIDER" and val:
                     for i in range(self.tts_provider_select.count()):
                         if self.tts_provider_select.itemData(i) == val:
@@ -647,7 +687,7 @@ class SettingsDialog(QDialog):
     def _strip_provider_suffix(text: str) -> str:
         """去掉 'model_id  [provider]' 后缀，返回纯 model_id"""
         import re
-        return re.sub(r"\s{2,}\[\w+\]\s*$", "", text).strip()
+        return re.sub(r"\s{2,}\[[^\]]+\]\s*$", "", text).strip()
 
     def _save_env(self):
         from env_config import ENV_PATH
@@ -656,6 +696,7 @@ class SettingsDialog(QDialog):
             "# 留空则回退到 Hanako 的默认配置",
             "",
             "# LLM",
+            f"LLM_PROVIDER={self.llm_provider_select.currentData() or ''}",
             f"LLM_BASE_URL={self.llm_url.text().strip()}",
             f"LLM_API_KEY={self.llm_key.text().strip()}",
             f"LLM_MODEL={self._strip_provider_suffix(self.llm_model.currentText())}",
