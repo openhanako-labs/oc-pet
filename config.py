@@ -62,9 +62,9 @@ DEFAULT_CONFIG = {
 }
 
 CHARACTER_INFO = {
-    "yuexiye": {
-        "name": "月曦夜",
-        "path": "characters/yuexiye",
+    "default": {
+        "name": "幽灵团子",
+        "path": "characters/default",
     },
     "ophelia": {
         "name": "奥菲莉娅",

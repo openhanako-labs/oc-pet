@@ -1,0 +1,19 @@
+{
+  "spritesheet": {
+    "src": "frames",
+    "frameWidth": 328,
+    "frameHeight": 736,
+    "scale": 0.35
+  },
+  "animations": {
+    "idle":  { "start": 0, "count": 4, "fps": 3 },
+    "walk":  { "start": 4, "count": 4, "fps": 4 },
+    "extra": { "start": 8, "count": 4, "fps": 3 }
+  },
+  "emotions": {
+    "happy":     { "start": 8, "count": 1 },
+    "surprised": { "start": 9, "count": 1 },
+    "thinking":  { "start": 10, "count": 1 },
+    "neutral":   { "start": 11, "count": 1 }
+  }
+}
