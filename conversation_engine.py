@@ -150,7 +150,17 @@ class ConversationEngine:
 
         # 3. TTS 合成（同步，和文字一起回调）
         audio_path = ""
-        if self._tts and self._tts_ready and reply.strip() and reply.strip() not in ("\u2026", "..."):
+        skip_reason = ""
+        if not self._tts:
+            skip_reason = "no tts provider"
+        elif not self._tts_ready:
+            skip_reason = "tts not ready"
+        elif not reply.strip():
+            skip_reason = "empty reply"
+        elif reply.strip() in ("\u2026", "..."):
+            skip_reason = "ellipsis reply"
+        
+        if not skip_reason:
             try:
                 instruct_map = {
                     "happy": "开心", "sad": "难过", "angry": "生气",
@@ -165,7 +175,7 @@ class ConversationEngine:
             except Exception as e:
                 logger.warning("TTS error: %s", e)
         else:
-            logger.info("TTS skipped: empty reply")
+            logger.info("TTS skipped: %s", skip_reason or "unknown")
 
         # 4. 回调（文字 + 音频一起）
         self.on_reply(reply, emotion, anim, audio_path)
