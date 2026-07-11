@@ -134,7 +134,6 @@ class PetWindow(QWidget):
         # ── Proactive 主动对话调度器(P1)──
         proactive_cfg = self.config.get("proactive", {})
         self._proactive = ProactiveScheduler(
-            character_id=self._current_char,
             foreground_watcher=self._foreground_watcher,
             on_proactive=self._on_proactive_trigger,
         )
