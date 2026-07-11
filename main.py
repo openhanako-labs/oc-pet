@@ -40,16 +40,33 @@ def main():
 
     manager = PetManager()
 
-    # 如果 config 里没有 agents 列表（首次运行），自动发现并添加 ophelia
+    # 如果 config 里没有 agents 列表（首次运行），自动添加
     if not manager.agents:
         discovered = manager.discover_agents()
+        # 优先用 ophelia（Hanako agent）
         for agent in discovered:
             if agent["id"] == "ophelia":
                 manager.add_agent("ophelia")
                 break
-        if not manager.agents and discovered:
-            # 没有 ophelia，添加第一个可用的
-            manager.add_agent(discovered[0]["id"])
+        # 没有 ophelia，用第一个有精灵的 Hanako agent
+        if not manager.agents:
+            for agent in discovered:
+                if agent.get("has_sprites"):
+                    manager.add_agent(agent["id"])
+                    break
+        # 还是没有，用内置 default 角色
+        if not manager.agents:
+            from pathlib import Path
+            default_char = Path(__file__).parent / "characters" / "default"
+            if default_char.exists():
+                manager._config.setdefault("agents", []).append({
+                    "id": "default",
+                    "enabled": True,
+                    "position": {"x": -1, "y": -1},
+                    "scale": 1.0,
+                    "builtin": True,
+                })
+                manager._save_config()
 
     manager.launch_all()
 

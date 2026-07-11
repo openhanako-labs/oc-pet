@@ -131,6 +131,13 @@ class PetManager:
 
         优先级：agent 自带 pet/ → 项目内置 characters/ → None
         """
+        # 0. 检查是否是内置角色（直接从 characters/ 读取）
+        for agent in self.agents:
+            if agent["id"] == agent_id and agent.get("builtin"):
+                char_dir = CHARACTERS_DIR / agent_id
+                if char_dir.exists():
+                    return str(char_dir)
+
         # 1. agent 自带
         agent_pet = AGENTS_DIR / agent_id / "pet"
         if agent_pet.exists():
