@@ -366,12 +366,17 @@ class ProactiveScheduler:
         self._cooldown_minutes = 10
         self._rules: list[dict] = list(DEFAULT_RULES)
         self._cooldown_until: float = 0.0
+        self._last_conversation: float = time.time()  # 上次对话时间
         self.on_proactive: callable = on_proactive or (lambda text: None)
 
     def load_config(self, config: dict):
         self._enabled = config.get("enabled", True)
         self._cooldown_minutes = config.get("cooldown_minutes", 10)
         self._rules = config.get("rules", list(DEFAULT_RULES))
+
+    def mark_conversation(self):
+        """标记用户刚和桌宠对话过"""
+        self._last_conversation = time.time()
 
     @property
     def enabled(self) -> bool:
@@ -393,17 +398,8 @@ class ProactiveScheduler:
         if now < self._cooldown_until:
             return None
 
-        # 系统空闲时间检测（Windows GetLastInputInfo）
-        import ctypes
-        class LASTINPUTINFO(ctypes.Structure):
-            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
-        lii = LASTINPUTINFO()
-        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
-        ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii))
-        millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
-        idle_sec = millis / 1000.0
-        if idle_sec < 60:
-            return None
+        # 对话空闲时间（上次对话到现在）
+        conversation_idle = now - self._last_conversation
 
         category = "other"
         if self._foreground_watcher:
@@ -412,7 +408,7 @@ class ProactiveScheduler:
         sorted_rules = sorted(self._rules, key=lambda r: r.get("idle_min", 0), reverse=True)
         for rule in sorted_rules:
             required_idle = rule.get("idle_min", 0) * 60
-            if idle_sec < required_idle:
+            if conversation_idle < required_idle:
                 continue
             fg_match = rule.get("foreground", ["*"])
             if "*" in fg_match or category in fg_match:
@@ -421,7 +417,7 @@ class ProactiveScheduler:
                     prompt = rule.get("prompt", "")
                     if prompt:
                         self._cooldown_until = now + self._cooldown_minutes * 60
-                        logger.info("Proactive triggered: idle=%ds fg=%s rule='%s'", int(idle_sec), category, prompt)
+                        logger.info("Proactive triggered: idle=%ds fg=%s rule='%s'", int(conversation_idle), category, prompt)
                         self.on_proactive(prompt)
                         return prompt
         return None

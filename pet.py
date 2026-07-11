@@ -1082,6 +1082,10 @@ class PetWindow(QWidget):
         except Exception:
             pass
 
+        # 标记对话时间（主动对话用）
+        if self._perception.proactive:
+            self._perception.proactive.mark_conversation()
+
         # ── 用户发新消息 → 立即截停旧 TTS(P2 可中断管线)──
         self._tts_player.stop()
 
