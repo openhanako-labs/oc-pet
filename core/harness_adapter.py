@@ -28,9 +28,10 @@ class HanakoPetAdapter:
     不再保留独立的角色 prompt 和 API 配置。
     """
 
-    def __init__(self, agent_id: str = "ophelia"):
+    def __init__(self, agent_id: str = "ophelia", builtin: bool = False):
         self.agent_id = agent_id
-        self._context = HanakoContext(agent_id)
+        self._builtin = builtin
+        self._context = HanakoContext(agent_id, builtin=builtin)
 
         # 读取模型配置 - .env 优先,回退到 Hanako
         from env_config import get_llm_config
@@ -97,7 +98,7 @@ class HanakoPetAdapter:
             角色回复文本
         """
         if not self._base_url or not self._api_key:
-            return "...(模型未配置,请在 Hanako 设置中配置模型后重试)"
+            return "...(模型未配置,请在设置中配置模型)", "neutral"
 
         messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] 1. 回复简短自然，不超过 2 句话。2. 在回复末尾添加情绪标签，格式 [emotion:xxx]，xxx 为 happy/angry/sad/surprised/thinking/neutral 之一。例如：你好呀。[emotion:happy]"}]
 

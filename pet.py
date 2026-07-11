@@ -176,8 +176,19 @@ class PetWindow(QWidget):
         # ── TTS provider ──
         tts_provider = self._create_tts_provider()
 
+        # ── 检测是否是内置角色 ──
+        is_builtin = False
+        if self._pet_manager:
+            for agent in self._pet_manager.agents:
+                if agent["id"] == self._current_char:
+                    is_builtin = agent.get("builtin", False)
+                    break
+
         # ── 对话引擎（合并 bridge，单进程）──
-        self._engine = ConversationEngine(self._current_char, perception=self._perception, tts_provider=tts_provider)
+        self._engine = ConversationEngine(
+            self._current_char, perception=self._perception,
+            tts_provider=tts_provider, builtin=is_builtin
+        )
         self._engine.on_reply = self._on_engine_reply
         self._engine.on_status = self._on_engine_status
         self._engine.on_tts_ready = lambda: logger.info("Engine TTS ready")

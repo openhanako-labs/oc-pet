@@ -34,11 +34,21 @@ def _read_file(path: Path) -> str:
 
 
 class HanakoContext:
-    """读取 Hanako Agent 的配置文件，提供统一的上下文接口。"""
+    """读取 Hanako Agent 的配置文件，提供统一的上下文接口。
 
-    def __init__(self, agent_id: str = "ophelia"):
+    支持两种角色来源：
+    - Hanako agent: ~/.hanako/agents/<agent_id>/
+    - 内置角色: <project>/characters/<agent_id>/ (builtin)
+    """
+
+    def __init__(self, agent_id: str = "ophelia", builtin: bool = False):
         self.agent_id = agent_id
-        self._agent_dir = HANAKO_HOME / "agents" / agent_id
+        self._builtin = builtin
+        if builtin:
+            # 内置角色从项目目录读取
+            self._agent_dir = Path(__file__).parent.parent / "characters" / agent_id
+        else:
+            self._agent_dir = HANAKO_HOME / "agents" / agent_id
         self._provider_catalog = self._load_provider_catalog()
 
     # ── 角色设定 ──

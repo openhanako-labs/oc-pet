@@ -33,8 +33,9 @@ class ConversationEngine:
     生命周期：随 pet 启动而启动，随 pet 关闭而关闭。
     """
 
-    def __init__(self, character_id: str = "ophelia", perception: PerceptionController = None, tts_provider=None):
+    def __init__(self, character_id: str = "ophelia", perception: PerceptionController = None, tts_provider=None, builtin: bool = False):
         self._character_id = character_id
+        self._builtin = builtin
         self._adapter = None
         self._tts = tts_provider  # 外部注入，None 时用默认
         self._perception = perception or PerceptionController(character_id)  # 外部注入优先
@@ -59,7 +60,7 @@ class ConversationEngine:
 
         # 初始化 LLM 适配器
         try:
-            self._adapter = HanakoPetAdapter(agent_id=self._character_id)
+            self._adapter = HanakoPetAdapter(agent_id=self._character_id, builtin=self._builtin)
             logger.info("LLM 适配器就绪 | model=%s", self._adapter.model_config.get("model", "?"))
         except Exception as e:
             logger.error("LLM 适配器初始化失败: %s", e)
