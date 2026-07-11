@@ -268,8 +268,8 @@ class SettingsDialog(QDialog):
         asr_layout = QFormLayout(asr_group)
 
         self.asr_provider = QComboBox()
-        self.asr_provider.addItems(["本地 Whisper", "API 调用"])
-        asr_prov_map = {"whisper_local": 0, "api": 1}
+        self.asr_provider.addItems(["本地 Whisper", "MIMO ASR", "API 调用"])
+        asr_prov_map = {"whisper_local": 0, "mimo": 1, "api": 2}
         self.asr_provider.setCurrentIndex(asr_prov_map.get(config.get("asr", {}).get("provider", "whisper_local"), 0))
         asr_layout.addRow("ASR 引擎", self.asr_provider)
 
@@ -354,8 +354,13 @@ class SettingsDialog(QDialog):
         self.tts_model.lineEdit().setPlaceholderText("tts-1（OpenAI 默认）")
         api_form.addRow("TTS 模型", self.tts_model)
 
-        self.tts_voice = QLineEdit()
-        self.tts_voice.setPlaceholderText("alloy")
+        self.tts_voice = QComboBox()
+        self.tts_voice.setEditable(True)
+        # MIMO + 通用音色
+        mimo_voices = ["mimo_default", "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean"]
+        openai_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+        self.tts_voice.addItems(mimo_voices + ["─── OpenAI ───"] + openai_voices)
+        self.tts_voice.lineEdit().setPlaceholderText("选择或输入音色")
         api_form.addRow("TTS 音色", self.tts_voice)
 
         # ASR API provider 快速选择
@@ -590,7 +595,6 @@ class SettingsDialog(QDialog):
                     "LLM_API_KEY": self.llm_key,
                     "TTS_BASE_URL": self.tts_url,
                     "TTS_API_KEY": self.tts_key,
-                    "TTS_VOICE": self.tts_voice,
                     "ASR_BASE_URL": self.asr_url,
                     "ASR_API_KEY": self.asr_key,
                 }
@@ -624,6 +628,12 @@ class SettingsDialog(QDialog):
                         self.tts_model.setCurrentIndex(idx)
                     else:
                         self.tts_model.setEditText(val)
+                elif key == "TTS_VOICE" and val:
+                    idx = self.tts_voice.findText(val)
+                    if idx >= 0:
+                        self.tts_voice.setCurrentIndex(idx)
+                    else:
+                        self.tts_voice.setEditText(val)
                 elif key == "ASR_MODEL" and val:
                     idx = self.asr_model.findText(val)
                     if idx >= 0:
@@ -655,7 +665,7 @@ class SettingsDialog(QDialog):
             f"TTS_BASE_URL={self.tts_url.text().strip()}",
             f"TTS_API_KEY={self.tts_key.text().strip()}",
             f"TTS_MODEL={self.tts_model.currentText().strip() or 'tts-1'}",
-            f"TTS_VOICE={self.tts_voice.text().strip() or 'alloy'}",
+            f"TTS_VOICE={self.tts_voice.currentText().strip() or 'mimo_default'}",
             "",
             "# ASR API",
             f"ASR_PROVIDER={self.asr_provider_select.currentData() or ''}",
@@ -698,7 +708,7 @@ class SettingsDialog(QDialog):
         c["break_reminder"]["cooldown_minutes"] = self.break_cooldown.value()
 
         # ASR
-        c.setdefault("asr", {})["provider"] = ["whisper_local", "api"][self.asr_provider.currentIndex()]
+        c.setdefault("asr", {})["provider"] = ["whisper_local", "mimo", "api"][self.asr_provider.currentIndex()]
 
         # 记忆注入
         c.setdefault("memory", {})["budget_mode"] = "auto" if self.mem_mode.currentIndex() == 0 else "manual"

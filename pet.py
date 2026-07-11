@@ -703,7 +703,18 @@ class PetWindow(QWidget):
         """根据配置创建 ASR provider，失败返回 None"""
         provider = self.config.get("asr", {}).get("provider", "whisper_local")
         try:
-            if provider == "api":
+            if provider == "mimo":
+                from asr_provider.mimo_asr import MimoAsrProvider
+                from env_config import get_asr_api_config
+                mimo = MimoAsrProvider()
+                cfg = get_asr_api_config()
+                mimo.configure(
+                    base_url=cfg.get("base_url", ""),
+                    api_key=cfg.get("api_key", ""),
+                    model=cfg.get("model", ""),
+                )
+                return mimo
+            elif provider == "api":
                 from asr_provider.api_asr import ApiAsrProvider
                 return ApiAsrProvider()
             else:
