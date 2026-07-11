@@ -672,24 +672,32 @@ class PetWindow(QWidget):
                 pass
 
     def _create_tts_provider(self):
-        """根据配置创建 TTS provider"""
+        """根据配置创建 TTS provider，失败返回 None"""
         provider = self.config.get("tts", {}).get("provider", "cosyvoice")
-        if provider == "api":
-            from tts_provider.api_tts import ApiTtsProvider
-            return ApiTtsProvider()
-        else:
-            from tts_provider.cosyvoice import CosyVoiceProvider
-            return CosyVoiceProvider()
+        try:
+            if provider == "api":
+                from tts_provider.api_tts import ApiTtsProvider
+                return ApiTtsProvider()
+            else:
+                from tts_provider.cosyvoice import CosyVoiceProvider
+                return CosyVoiceProvider()
+        except Exception as e:
+            logger.warning("TTS provider 创建失败 (%s): %s", provider, e)
+            return None
 
     def _create_asr_provider(self):
-        """根据配置创建 ASR provider"""
+        """根据配置创建 ASR provider，失败返回 None"""
         provider = self.config.get("asr", {}).get("provider", "whisper_local")
-        if provider == "api":
-            from asr_provider.api_asr import ApiAsrProvider
-            return ApiAsrProvider()
-        else:
-            from asr_provider.whisper_local import WhisperLocalProvider
-            return WhisperLocalProvider()
+        try:
+            if provider == "api":
+                from asr_provider.api_asr import ApiAsrProvider
+                return ApiAsrProvider()
+            else:
+                from asr_provider.whisper_local import WhisperLocalProvider
+                return WhisperLocalProvider()
+        except Exception as e:
+            logger.warning("ASR provider 创建失败 (%s): %s", provider, e)
+            return None
 
     def _open_settings(self):
         """打开配置面板"""
