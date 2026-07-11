@@ -343,6 +343,14 @@ class SettingsDialog(QDialog):
         self.tts_voice.setPlaceholderText("alloy")
         api_form.addRow("TTS 音色", self.tts_voice)
 
+        # ASR API provider 快速选择
+        self.asr_provider_select = QComboBox()
+        self.asr_provider_select.addItem("手动填写", "")
+        for pid in self._catalog_models.get("providers", []):
+            self.asr_provider_select.addItem(pid, pid)
+        self.asr_provider_select.currentIndexChanged.connect(self._on_asr_provider_select)
+        api_form.addRow("ASR Provider", self.asr_provider_select)
+
         self.asr_url = QLineEdit()
         self.asr_url.setPlaceholderText("ASR API 地址")
         api_form.addRow("ASR 地址", self.asr_url)
@@ -351,6 +359,11 @@ class SettingsDialog(QDialog):
         self.asr_key.setEchoMode(QLineEdit.Password)
         self.asr_key.setPlaceholderText("ASR Key")
         api_form.addRow("ASR Key", self.asr_key)
+
+        self.asr_model = QComboBox()
+        self.asr_model.setEditable(True)
+        self.asr_model.lineEdit().setPlaceholderText("whisper-1（OpenAI 默认）")
+        api_form.addRow("ASR 模型", self.asr_model)
 
         api_layout.addWidget(api_group)
         api_layout.addStretch()
@@ -516,6 +529,33 @@ class SettingsDialog(QDialog):
             pass
         self.tts_model.addItems([m for m in models if m])
 
+    def _on_asr_provider_select(self, idx: int):
+        """ASR provider 下拉选择 → 自动填充 URL、Key、模型列表"""
+        prov_id = self.asr_provider_select.itemData(idx)
+        if not prov_id:
+            return
+        cfg = self._catalog_models.get("provider_configs", {}).get(prov_id, {})
+        if cfg.get("base_url"):
+            self.asr_url.setText(cfg["base_url"])
+        if cfg.get("api_key"):
+            self.asr_key.setText(cfg["api_key"])
+        self.asr_model.clear()
+        models = []
+        try:
+            from pathlib import Path
+            import json
+            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+            data = json.loads(catalog_path.read_text("utf-8"))
+            prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
+            for m in prov_models:
+                if isinstance(m, dict):
+                    models.append(m.get("id", ""))
+                elif isinstance(m, str):
+                    models.append(m)
+        except Exception:
+            pass
+        self.asr_model.addItems([m for m in models if m])
+
     # ── .env 读写 ──
 
     def _load_env_to_ui(self):
@@ -554,6 +594,12 @@ class SettingsDialog(QDialog):
                         self.tts_model.setCurrentIndex(idx)
                     else:
                         self.tts_model.setEditText(val)
+                elif key == "ASR_MODEL" and val:
+                    idx = self.asr_model.findText(val)
+                    if idx >= 0:
+                        self.asr_model.setCurrentIndex(idx)
+                    else:
+                        self.asr_model.setEditText(val)
         except Exception:
             pass
 
@@ -577,7 +623,7 @@ class SettingsDialog(QDialog):
             "# ASR API",
             f"ASR_BASE_URL={self.asr_url.text().strip()}",
             f"ASR_API_KEY={self.asr_key.text().strip()}",
-            f"ASR_MODEL=whisper-1",
+            f"ASR_MODEL={self.asr_model.currentText().strip() or 'whisper-1'}",
         ]
         ENV_PATH.write_text("\n".join(lines) + "\n", "utf-8")
 
