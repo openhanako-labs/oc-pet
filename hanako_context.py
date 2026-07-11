@@ -142,7 +142,8 @@ class HanakoContext:
 
         Returns:
             {"provider": provider_id, "model": model_id,
-             "base_url": "...", "api_key": "...", "api_type": "openai-completions"}
+             "base_url": "...", "api_key": "...", "api_type": "openai-completions",
+             "max_context": int}
             如果找不到完整配置则返回空 dict
         """
         agent_cfg = self.read_agent_config()
@@ -174,13 +175,26 @@ class HanakoContext:
                 "model": model_id,
             }
 
-        return {
+        # 从 catalog 的 models 列表中查找匹配模型的 context 字段
+        max_context = 0
+        catalog_models = provider_cfg.get("models", [])
+        for m in catalog_models:
+            if isinstance(m, dict) and m.get("id") == model_id:
+                max_context = m.get("context", 0)
+                break
+            elif isinstance(m, str) and m == model_id:
+                break
+
+        result = {
             "provider": provider_id,
             "model": model_id,
             "base_url": provider_cfg.get("base_url", ""),
             "api_key": provider_cfg.get("api_key", ""),
             "api_type": provider_cfg.get("api", "openai-completions"),
         }
+        if max_context:
+            result["max_context"] = max_context
+        return result
 
     # ── 记忆 ──
 

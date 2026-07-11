@@ -1,11 +1,14 @@
 """SpriteRenderer - 2D 帧精灵渲染器
 
 从 pet.py 提取的帧精灵渲染逻辑，实现 AvatarRenderer 接口。
-管理帧加载、动画定时器、瞳孔 overlay、朝向翻转。
+管理帧加载、动画定时器、视线跟随（精灵偏移）、朝向翻转。
+
+视线跟随：根据鼠标位置微微偏移精灵，模拟"注视"效果。
 """
 from __future__ import annotations
 
 import logging
+import math
 import os
 from typing import Optional
 
@@ -14,9 +17,16 @@ from PySide6.QtGui import QPixmap, QPainter, QTransform, QColor, QImage
 from PySide6.QtWidgets import QLabel, QWidget
 
 from avatar.base import AvatarRenderer
-from eye_overlay import EyeOverlay
 
 logger = logging.getLogger(__name__)
+
+# ── 视线跟随参数 ──
+
+GAZE_MAX_OFFSET_X = 4   # 水平最大偏移 (px)
+GAZE_MAX_OFFSET_Y = 3   # 垂直最大偏移 (px)
+GAZE_SMOOTHING = 0.15    # 平滑系数 (0-1, 越小越平滑)
+GAZE_FLIP_THRESHOLD = 80  # 鼠标超过角色中心多远时自动翻转朝向 (px)
+
 
 # ── 帧扫描工具 ──
 
@@ -43,7 +53,7 @@ class SpriteRenderer(AvatarRenderer):
         - 帧序列加载（characters/<id>/frames/<anim>/_N.png）
         - 动画定时器（idle ~3fps, walk ~4fps）
         - 帧区间约束（情绪映射到 extra 帧子范围）
-        - 瞳孔 overlay（鼠标跟随）
+        - 视线跟随（精灵偏移模拟注视）
         - 朝向翻转（左右镜像）
         - 缩放
 
@@ -51,6 +61,7 @@ class SpriteRenderer(AvatarRenderer):
         renderer = SpriteRenderer(parent_widget)
         renderer.load("ophelia")
         renderer.play_anim("idle")
+        renderer.look_at(mouse_x, mouse_y)  # 视线跟随
     """
 
     def __init__(self, parent: QWidget):
@@ -64,13 +75,6 @@ class SpriteRenderer(AvatarRenderer):
         self.char_label.move(10, 70)
         self.char_label.lower()
         self.char_label.installEventFilter(parent)
-
-        # 瞳孔 overlay
-        self._eye_overlay = EyeOverlay(parent)
-        self._eye_overlay.setFixedSize(180, 250)
-        self._eye_overlay.move(10, 70)
-        self._eye_overlay.hide()
-        self._eye_overlay.raise_()
 
         # 帧数据
         self._frames: dict[str, list[QPixmap]] = {}
@@ -91,6 +95,14 @@ class SpriteRenderer(AvatarRenderer):
 
         # 缩放
         self._scale: float = 1.0
+
+        # 视线跟随状态
+        self._gaze_offset_x: float = 0.0  # 当前平滑后的偏移
+        self._gaze_offset_y: float = 0.0
+        self._gaze_target_x: float = 0.0  # 目标偏移
+        self._gaze_target_y: float = 0.0
+        self._gaze_enabled: bool = True
+        self._base_label_pos: QPoint = QPoint(10, 70)  # 角色 label 的基准位置
 
     # ── 生命周期 ──
 
@@ -260,7 +272,6 @@ class SpriteRenderer(AvatarRenderer):
     def cleanup(self):
         """释放资源"""
         self._anim_timer.stop()
-        self._eye_overlay.stop()
         self._frames.clear()
         self._frame_tops.clear()
 
@@ -334,7 +345,7 @@ class SpriteRenderer(AvatarRenderer):
             self._show_frame()
 
     def _show_frame(self):
-        """渲染当前帧到 char_label"""
+        """渲染当前帧到 char_label，应用视线偏移"""
         frames = self._frames.get(self._anim_seq, [])
         if not frames:
             return
@@ -347,12 +358,80 @@ class SpriteRenderer(AvatarRenderer):
             pix = pix.transformed(QTransform().scale(-1, 1))
         self.char_label.setPixmap(pix)
 
-    # ── 视线 ──
+    # ── 视线跟随 ──
 
     def look_at(self, x: int, y: int) -> None:
-        """瞳孔 overlay 跟随坐标"""
-        # EyeOverlay 自己定时获取光标位置，这里不需要主动调用
-        pass
+        """设置视线目标（全局坐标），驱动精灵偏移和朝向翻转
+
+        在 200ms 定时器或鼠标事件中调用。
+        """
+        if not self._gaze_enabled:
+            return
+
+        # 计算角色中心（全局坐标）
+        label_pos = self.char_label.mapToGlobal(QPoint(0, 0))
+        cx = label_pos.x() + self.char_label.width() // 2
+        cy = label_pos.y() + self.char_label.height() // 2
+
+        dx = x - cx
+        dy = y - cy
+        dist = math.sqrt(dx * dx + dy * dy)
+
+        if dist < 1:
+            self._gaze_target_x = 0
+            self._gaze_target_y = 0
+        else:
+            # 归一化后缩放到最大偏移
+            norm_x = dx / max(dist, 1)
+            norm_y = dy / max(dist, 1)
+            # 距离越远偏移越大，但有上限
+            strength = min(1.0, dist / 400.0)
+            self._gaze_target_x = norm_x * GAZE_MAX_OFFSET_X * strength
+            self._gaze_target_y = norm_y * GAZE_MAX_OFFSET_Y * strength
+
+        # 平滑插值
+        self._gaze_offset_x += (self._gaze_target_x - self._gaze_offset_x) * GAZE_SMOOTHING
+        self._gaze_offset_y += (self._gaze_target_y - self._gaze_offset_y) * GAZE_SMOOTHING
+
+        # 应用偏移到 label 位置
+        ox = self._base_label_pos.x() + int(self._gaze_offset_x)
+        oy = self._base_label_pos.y() + int(self._gaze_offset_y)
+        self.char_label.move(ox, oy)
+
+        # 自动翻转朝向（鼠标在另一侧且距离够远）
+        if abs(dx) > GAZE_FLIP_THRESHOLD:
+            should_face_right = dx > 0
+            if should_face_right != self._facing_right:
+                self._facing_right = should_face_right
+                self._show_frame()
+
+    def reset_gaze(self):
+        """重置视线（鼠标离开时调用）"""
+        self._gaze_target_x = 0
+        self._gaze_target_y = 0
+        # 平滑归零
+        self._gaze_offset_x *= 0.5
+        self._gaze_offset_y *= 0.5
+        self.char_label.move(
+            self._base_label_pos.x() + int(self._gaze_offset_x),
+            self._base_label_pos.y() + int(self._gaze_offset_y),
+        )
+
+    def set_gaze_enabled(self, enabled: bool):
+        """开关视线跟随"""
+        self._gaze_enabled = enabled
+        if not enabled:
+            self.reset_gaze()
+
+    def update_gaze(self):
+        """每帧调用，平滑更新偏移（用于无新鼠标事件时的渐变归零）"""
+        if abs(self._gaze_offset_x - self._gaze_target_x) > 0.1 or \
+           abs(self._gaze_offset_y - self._gaze_target_y) > 0.1:
+            self._gaze_offset_x += (self._gaze_target_x - self._gaze_offset_x) * GAZE_SMOOTHING
+            self._gaze_offset_y += (self._gaze_target_y - self._gaze_offset_y) * GAZE_SMOOTHING
+            ox = self._base_label_pos.x() + int(self._gaze_offset_x)
+            oy = self._base_label_pos.y() + int(self._gaze_offset_y)
+            self.char_label.move(ox, oy)
 
     def get_char_top_y(self) -> int:
         """获取角色头顶 Y 坐标（用于气泡定位）"""
@@ -364,6 +443,10 @@ class SpriteRenderer(AvatarRenderer):
 
     # ── 变换 ──
 
+    def set_label_base_pos(self, pos: QPoint):
+        """设置角色 label 基准位置（由 pet.py 在布局变化时调用）"""
+        self._base_label_pos = pos
+
     def set_position(self, x: int, y: int) -> None:
         """角色 Label 位置不变（由窗口控制），只更新 overlay"""
         # char_label 的位置是相对窗口的，不随窗口移动
@@ -374,15 +457,14 @@ class SpriteRenderer(AvatarRenderer):
         return (self.char_label.width(), self.char_label.height())
 
     def set_scale(self, scale: float) -> None:
-        """缩放角色和 overlay"""
+        """缩放角色"""
         self._scale = scale
         cw = max(180, int(180 * scale))
         ch = max(250, int(250 * scale))
         self.char_label.setFixedSize(cw, ch)
-        self.char_label.move(10, int(70 * scale))
-        self._eye_overlay.setFixedSize(cw, ch)
-        self._eye_overlay.move(10, int(70 * scale))
-        self._eye_overlay.resize_for_character(cw, ch)
+        base_y = int(70 * scale)
+        self.char_label.move(10, base_y)
+        self._base_label_pos = QPoint(10, base_y)
         self._show_frame()
 
     def get_scale(self) -> float:
@@ -393,10 +475,9 @@ class SpriteRenderer(AvatarRenderer):
         cw = max(180, int(180 * self._scale))
         ch = max(250, int(250 * self._scale))
         self.char_label.setFixedSize(cw, ch)
-        self.char_label.move(10, int(70 * self._scale))
-        self._eye_overlay.setFixedSize(cw, ch)
-        self._eye_overlay.move(10, int(70 * self._scale))
-        self._eye_overlay.resize_for_character(cw, ch)
+        base_y = int(70 * self._scale)
+        self.char_label.move(10, base_y)
+        self._base_label_pos = QPoint(10, base_y)
         self._show_frame()
 
     # ── 朝向 ──
@@ -408,21 +489,24 @@ class SpriteRenderer(AvatarRenderer):
     def get_facing(self) -> bool:
         return self._facing_right
 
-    # ── 瞳孔 overlay 控制 ──
-
-    def show_eyes(self):
-        self._eye_overlay.start()
-
-    def hide_eyes(self):
-        self._eye_overlay.stop()
+    # ── 兼容接口（已弃用 eye overlay）──
 
     @property
     def eye_overlay(self):
-        return self._eye_overlay
+        """兼容旧代码，返回 None"""
+        return None
 
     @property
     def label(self):
         return self.char_label
+
+    def show_eyes(self):
+        """兼容旧代码，现在由 look_at 驱动"""
+        pass
+
+    def hide_eyes(self):
+        """兼容旧代码"""
+        self.reset_gaze()
 
 
 # 延迟导入 EXPRESSION_MAP（避免循环引用）

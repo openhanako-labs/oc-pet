@@ -24,6 +24,7 @@ from config import CHARACTER_INFO, EXPRESSION_MAP, load_config, save_config
 from hanako_monitor import HanakoMonitor, compact_bubble_text
 
 from behavior import BehaviorParams, BEHAVIOR_MODES
+from behavior import MOUSE_REACTIONS, MouseReactionParams
 from behavior import (
     PHYSICS_INTERVAL, INERTIA_FACTOR, INTENT_FACTOR,
     ARRIVAL_DISTANCE, WALK_SPEED_BASE,
@@ -34,13 +35,13 @@ from bubble import ChatBubble
 from action_linker import ActionLinker
 from foreground_watcher import ForegroundWatcher
 from tts_player import TTSTtsPlayer
-from eye_overlay import EyeOverlay
 from startup_screen import StartupScreen
 from perception import PerceptionController, ProactiveScheduler
 from physics import PhysicsEngine, MotionStateMachine, PhysicsCallbacks
 from avatar.sprite_renderer import SpriteRenderer
 
 from conversation_engine import ConversationEngine
+from mouse_tracker import MouseTracker
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ class PetWindow(QWidget):
 
         # ── 动画状态 ──
         self._bob_frame = 0
+        self._bob_offset = 0
         self._label_base_pos = QPoint(0, 0)
         self._target_x = 0
         self._vx = 0.0
@@ -142,6 +144,24 @@ class PetWindow(QWidget):
 
         # ── 感知控制器(P2: 时间 + 情绪状态机 + 日程)──
         self._perception = PerceptionController(self._current_char)
+
+        # ── 鼠标交互追踪器 ──
+        self._mouse_tracker = MouseTracker(self._get_window_rect)
+        self._mouse_reaction_params = MOUSE_REACTIONS.get(
+            self._behavior_mode, MOUSE_REACTIONS["normal"]
+        )
+        self._mouse_tracker.on_nearby = self._on_mouse_nearby
+        self._mouse_tracker.on_hover = self._on_mouse_hover
+        self._mouse_tracker.on_chase = self._on_mouse_chase
+        self._mouse_tracker.on_startled = self._on_mouse_startled
+        self._mouse_tracker.on_leave = self._on_mouse_leave
+        self._mouse_tracker_timer = QTimer(self)
+        self._mouse_tracker_timer.timeout.connect(self._mouse_tracker.tick)
+        self._mouse_tracker_timer.start(200)
+        # 视线跟随定时器（更新平滑偏移）
+        self._gaze_timer = QTimer(self)
+        self._gaze_timer.timeout.connect(self._gaze_tick)
+        self._gaze_timer.start(50)  # 20fps 平滑
 
         # ── TTS provider ──
         tts_provider = self._create_tts_provider()
@@ -321,6 +341,9 @@ class PetWindow(QWidget):
         self._stop_walking()
         self._motion_state = "idle"
         self._rest_counter = 0
+        # 更新鼠标交互参数
+        self._mouse_reaction_params = MOUSE_REACTIONS.get(mode, MOUSE_REACTIONS["normal"])
+        self._renderer.set_gaze_enabled(self._mouse_reaction_params.gaze_enabled)
 
     def _get_behavior_params(self) -> BehaviorParams:
         """获取当前行为模式的参数"""
@@ -405,7 +428,6 @@ class PetWindow(QWidget):
         self._renderer = SpriteRenderer(self)
         # 兼容别名(供 pet.py 其他部分使用)
         self.char_label = self._renderer.label
-        self._eye_overlay = self._renderer.eye_overlay
 
         # 启动画面
         self._startup_screen = StartupScreen(self)
@@ -496,12 +518,12 @@ class PetWindow(QWidget):
 
     def _bob_tick(self):
         self._bob_frame += 1
-        offset = int(math.sin(self._bob_frame * 0.06) * 2.5)
+        self._bob_offset = int(math.sin(self._bob_frame * 0.06) * 2.5)
         if not self._is_dragging:
-            self.char_label.move(
-                self._label_base_pos.x(),
-                self._label_base_pos.y() + offset
-            )
+            # 视线偏移 + 呼吸浮动叠加
+            ox = self._renderer._base_label_pos.x() + int(self._renderer._gaze_offset_x)
+            oy = self._renderer._base_label_pos.y() + int(self._renderer._gaze_offset_y) + self._bob_offset
+            self.char_label.move(ox, oy)
 
     def _set_anim_seq(self, seq_name, emotion=None):
         """切换动画序列 - 委托给 SpriteRenderer"""
@@ -745,19 +767,13 @@ class PetWindow(QWidget):
 
     def _store_label_pos(self):
         self._label_base_pos = self.char_label.pos()
+        self._renderer.set_label_base_pos(self._label_base_pos)
 
     # ── 事件过滤器:统一处理点按/拖拽 ──
 
     def eventFilter(self, obj, event):
         if obj is self.char_label:
             t = event.type()
-
-            if t == QEvent.Enter:
-                self._eye_overlay.start()
-                return True
-            if t == QEvent.Leave:
-                self._eye_overlay.stop()
-                return True
 
             if t == QEvent.MouseButtonPress:
                 if event.button() == Qt.LeftButton:
@@ -1083,10 +1099,9 @@ class PetWindow(QWidget):
         except Exception:
             pass
 
-        # 感知系统 tick(情绪衰减 + 日程刷新)
+        # 感知系统 tick(情绪衰减 + 主动对话 + 日程刷新)
         try:
-            self._perception.tick_emotion()
-            self._perception.tick_schedule()
+            self._perception.tick()
         except Exception:
             pass
 
@@ -1114,6 +1129,73 @@ class PetWindow(QWidget):
             self._tts_player.stop()
             self._show_bubble("思考中...", emotion="thinking")
             self._is_thinking = True
+
+    # ── 鼠标交互反应 ──
+
+    def _get_window_rect(self) -> tuple[int, int, int, int] | None:
+        """返回角色窗口 (x, y, w, h)，供 MouseTracker 使用"""
+        p = self.pos()
+        s = self.size()
+        return (p.x(), p.y(), s.width(), s.height())
+
+    def _gaze_tick(self):
+        """每 50ms 更新视线跟随（平滑偏移）"""
+        params = self._mouse_reaction_params
+        if params.gaze_enabled and self._mouse_tracker.is_nearby:
+            state = self._mouse_tracker.state
+            self._renderer.look_at(state.x, state.y)
+        else:
+            self._renderer.update_gaze()
+
+    def _on_mouse_nearby(self):
+        """鼠标进入角色附近"""
+        params = self._mouse_reaction_params
+        if not params.react_nearby:
+            return
+        if self._is_thinking:
+            return
+        self._set_anim_seq(params.nearby_anim, emotion="surprised")
+        self._show_bubble("？", emotion="surprised")
+
+    def _on_mouse_hover(self):
+        """鼠标在角色附近静止"""
+        params = self._mouse_reaction_params
+        if not params.react_hover:
+            return
+        if self._is_thinking:
+            return
+        self._show_bubble("...?", emotion="thinking")
+
+    def _on_mouse_chase(self, target_x: int):
+        """鼠标长时间不动，走过去看看"""
+        params = self._mouse_reaction_params
+        if not params.chase_enabled:
+            return
+        if self._is_thinking or self._physics.is_active:
+            return
+        x, _ = self.get_pos()
+        direction = 1 if target_x > x else -1
+        distance = min(abs(target_x - x), 200)
+        target = x + direction * distance
+        sg = self._current_screen_geometry()
+        target = max(10, min(target, sg.width() - self.width() - 10))
+        self._motion_state = "chase"
+        self._physics.start_walk(target, facing_right=(direction > 0))
+        self._physics_timer.start(30)
+
+    def _on_mouse_startled(self, speed: float):
+        """鼠标快速掠过"""
+        params = self._mouse_reaction_params
+        if not params.react_startle:
+            return
+        if self._is_thinking:
+            return
+        self._set_anim_seq(params.startle_anim, emotion="surprised")
+        self._show_bubble("！", emotion="surprised")
+
+    def _on_mouse_leave(self):
+        """鼠标离开角色附近"""
+        self._renderer.reset_gaze()
 
     def _show_bubble(self, text: str, emotion: str = "neutral"):
         """显示消息气泡"""
@@ -1222,6 +1304,7 @@ class PetWindow(QWidget):
             '_physics_timer', '_motion_timer', '_bob_timer',
             '_anim_timer', '_drag_poll_timer', '_hanako_poll_timer',
             '_break_timer', '_foreground_timer', '_bubble_timer',
+            '_mouse_tracker_timer', '_gaze_timer',
         ]
         for tname in timers:
             t = getattr(self, tname, None)

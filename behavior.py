@@ -38,6 +38,49 @@ BEHAVIOR_MODES = {
     ),
 }
 
+
+# ─── 鼠标交互参数 ─────────────────────────────────────
+
+@dataclass(frozen=True)
+class MouseReactionParams:
+    """鼠标交互反应参数"""
+    gaze_enabled: bool        # 是否启用视线跟随
+    react_nearby: bool        # 鼠标靠近时是否反应（转头看）
+    react_hover: bool         # 鼠标悬停时是否反应
+    chase_enabled: bool       # 是否追逐鼠标
+    react_startle: bool       # 是否对快速移动有惊吓反应
+    nearby_anim: str          # 靠近时播放的动画（"extra" / "idle"）
+    startle_anim: str         # 惊吓时播放的动画
+    chase_walk_speed: float   # 追逐时的移动速度倍率
+
+
+MOUSE_REACTIONS = {
+    "quiet": MouseReactionParams(
+        gaze_enabled=False, react_nearby=False, react_hover=False,
+        chase_enabled=False, react_startle=False,
+        nearby_anim="idle", startle_anim="idle",
+        chase_walk_speed=0.8,
+    ),
+    "normal": MouseReactionParams(
+        gaze_enabled=True, react_nearby=True, react_hover=True,
+        chase_enabled=False, react_startle=True,
+        nearby_anim="extra", startle_anim="extra",
+        chase_walk_speed=1.0,
+    ),
+    "active": MouseReactionParams(
+        gaze_enabled=True, react_nearby=True, react_hover=True,
+        chase_enabled=True, react_startle=True,
+        nearby_anim="extra", startle_anim="extra",
+        chase_walk_speed=1.2,
+    ),
+    "cling": MouseReactionParams(
+        gaze_enabled=True, react_nearby=True, react_hover=True,
+        chase_enabled=True, react_startle=False,
+        nearby_anim="extra", startle_anim="idle",
+        chase_walk_speed=1.1,
+    ),
+}
+
 # ─── 惯性运动常量 ───────────────────────────────────────
 
 PHYSICS_INTERVAL = 30          # 物理更新间隔 (ms)，≈33fps

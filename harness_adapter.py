@@ -40,6 +40,7 @@ class HanakoPetAdapter:
             self._api_key = env_llm["api_key"]
             self._model = env_llm["model"]
             self._api_type = "openai-completions"
+            self._max_context = 0
             logger.info("LLM using .env override | model=%s", self._model)
         else:
             self._model_cfg = self._context.read_model_config()
@@ -47,7 +48,17 @@ class HanakoPetAdapter:
             self._api_key = self._model_cfg.get("api_key", "")
             self._model = self._model_cfg.get("model", "")
             self._api_type = self._model_cfg.get("api_type", "openai-completions")
+            self._max_context = self._model_cfg.get("max_context", 0)
             self._model_cfg = {"model": self._model}  # 统一属性名
+
+        # 记忆预算: 模型 context 的 1%, 上限 6000 字符, 下限 800
+        if self._max_context > 0:
+            self._memory_budget = max(800, min(6000, self._max_context // 100))
+        else:
+            self._memory_budget = 800
+        logger.info("Memory budget: %d chars (model context: %s)",
+                     self._memory_budget,
+                     f"{self._max_context:,}" if self._max_context else "unknown")
 
         # 构建 system prompt
         self._system_prompt = self._context.build_prompt()
@@ -92,7 +103,7 @@ class HanakoPetAdapter:
 
         # 注入记忆
         if inject_memory:
-            memory_text = self._context.build_memory_context(max_chars=800)
+            memory_text = self._context.build_memory_context(max_chars=self._memory_budget)
             if memory_text:
                 messages.append({
                     "role": "system",
