@@ -211,7 +211,11 @@ class HanakoPetAdapter:
 
     def _call_openai(self, messages: list[dict], tools: list = None):
         """调用 OpenAI 兼容 API"""
-        url = f"{self._base_url.rstrip('/')}/chat/completions"
+        base = self._base_url.rstrip('/')
+        # 自动补 /v1 前缀（如果用户填的是裸域名）
+        if not base.endswith('/v1') and '/v1/' not in base:
+            base += '/v1'
+        url = f"{base}/chat/completions"
         resp = requests.post(
             url,
             headers={
@@ -222,7 +226,6 @@ class HanakoPetAdapter:
                 "model": self._model,
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 8192,
                 **({"tools": tools} if tools else {}),
             },
             timeout=60,

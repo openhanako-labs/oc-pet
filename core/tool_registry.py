@@ -33,11 +33,16 @@ class ToolDef:
 
     def to_openai_tool(self) -> dict:
         """转换为 OpenAI tool calling 格式"""
+        # 清理工具名：只保留 [a-zA-Z0-9_-]
+        import re
+        clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', self.name)
+        if not clean_name or not clean_name[0].isalpha():
+            clean_name = 'tool_' + clean_name
         return {
             "type": "function",
             "function": {
-                "name": self.name,
-                "description": self.description,
+                "name": clean_name,
+                "description": self.description[:200] if self.description else self.name,
                 "parameters": self.parameters,
             }
         }
@@ -51,6 +56,7 @@ class ToolRegistry:
 
     def __init__(self):
         self._tools: dict[str, ToolDef] = {}  # name -> ToolDef
+        self._name_map: dict[str, str] = {}  # sanitized_name -> original_name
 
     def discover(self):
         """扫描所有插件目录，提取工具定义"""
@@ -102,6 +108,14 @@ class ToolRegistry:
                 logger.warning("Failed to parse plugin %s: %s", plugin_dir.name, e)
 
         logger.info("Tool registry: %d tools from plugins", len(self._tools))
+
+        # 构建名称映射（sanitized -> original）
+        import re
+        for name in self._tools:
+            clean = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+            if not clean or not clean[0].isalpha():
+                clean = 'tool_' + clean
+            self._name_map[clean] = name
 
     def _parse_tool_file(self, path: Path, plugin_id: str) -> Optional[ToolDef]:
         """从 JS 工具文件提取 name/description/parameters"""
@@ -158,8 +172,15 @@ class ToolRegistry:
         return [t.to_openai_tool() for t in self._tools.values()]
 
     def get_tool(self, name: str) -> Optional[ToolDef]:
-        """按名称查找工具"""
-        return self._tools.get(name)
+        """按名称查找工具（支持 sanitized 名称）"""
+        # 先尝试原始名称
+        if name in self._tools:
+            return self._tools[name]
+        # 再尝试 sanitized 名称映射
+        original = self._name_map.get(name)
+        if original and original in self._tools:
+            return self._tools[original]
+        return None
 
     @property
     def tool_count(self) -> int:
