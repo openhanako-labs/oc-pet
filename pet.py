@@ -1222,6 +1222,10 @@ class PetWindow(QWidget):
         self._facing_right = facing_right
 
     def set_anim(self, anim: str):
+        # atlas 格式：walk → running-right/left（根据朝向）
+        if anim == 'walk':
+            if 'running-right' in self._renderer._frames:
+                anim = 'running-right' if self._facing_right else 'running-left'
         self._set_anim_seq(anim)
 
     # ── Hanako 状态回调 ──
