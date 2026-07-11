@@ -88,6 +88,24 @@ EXPRESSION_MAP = {
     "speaking":   ("idle",  None, None),  # 说话 -> idle 全序列
 }
 
+# atlas 模式的状态→动画映射（9 种动画）
+# 如果 pet.json 的 emotions 字段存在，优先用它；否则用这个回退
+ATLAS_STATE_MAP = {
+    "idle":         "idle",
+    "walking":      "running-right",
+    "greeting":     "waving",
+    "excited":      "jumping",
+    "error":        "failed",
+    "waiting":      "waiting",
+    "thinking":     "running",
+    "working":      "running",
+    "done":         "review",
+    "happy":        "waving",
+    "surprised":    "jumping",
+    "sad":          "failed",
+    "neutral":      "idle",
+}
+
 # Hanako 状态 → 桌宠动作
 HANAKO_STATE_MAP = {
     "listening": {"anim": "idle", "desc": "倾听"},

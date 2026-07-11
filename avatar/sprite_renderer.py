@@ -119,9 +119,16 @@ class SpriteRenderer(AvatarRenderer):
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             char_dir = os.path.join(base_dir, "characters", character_id)
 
-        # 优先：pet.json spritesheet 模式
+        # 优先：pet.json
         pet_json_path = os.path.join(char_dir, "pet.json")
         if os.path.exists(pet_json_path):
+            import json
+            meta = json.loads(open(pet_json_path, encoding='utf-8').read())
+            # 检测 atlas 格式（8x9 网格）
+            if 'atlas' in meta:
+                if self._load_from_atlas(char_dir, meta):
+                    return True
+            # 回退到旧的 spritesheet 格式
             if self._load_from_pet_json(char_dir, pet_json_path):
                 return True
             logger.warning("pet.json load failed, falling back to frames/")
@@ -209,6 +216,75 @@ class SpriteRenderer(AvatarRenderer):
 
         except Exception as e:
             logger.warning("pet.json load error: %s", e)
+            return False
+
+    def _load_from_atlas(self, char_dir: str, meta: dict) -> bool:
+        """从 atlas 格式加载（8×9 网格，兼容 Codex hatch-pet）"""
+        try:
+            atlas_cfg = meta.get('atlas', {})
+            src = atlas_cfg.get('src', 'atlas.png')
+            columns = atlas_cfg.get('columns', 8)
+            rows = atlas_cfg.get('rows', 9)
+            cell_w = atlas_cfg.get('cellWidth', 192)
+            cell_h = atlas_cfg.get('cellHeight', 208)
+            self._scale = meta.get('scale', 1.0)
+
+            atlas_path = os.path.join(char_dir, src)
+            if not os.path.exists(atlas_path):
+                logger.warning("Atlas not found: %s", atlas_path)
+                return False
+
+            sheet = QPixmap(atlas_path)
+            if sheet.isNull():
+                logger.warning("Failed to load atlas: %s", atlas_path)
+                return False
+
+            # 切割 atlas 为行×列
+            all_rows = []
+            for row in range(rows):
+                row_frames = []
+                for col in range(columns):
+                    x = col * cell_w
+                    y = row * cell_h
+                    cell = sheet.copy(x, y, cell_w, cell_h)
+                    if not cell.isNull():
+                        row_frames.append(cell)
+                all_rows.append(row_frames)
+
+            # 映射动画序列
+            anims = meta.get('animations', {})
+            for anim_name, anim_cfg in anims.items():
+                row_idx = anim_cfg.get('row', 0)
+                frame_count = anim_cfg.get('frames', 6)
+                fps = anim_cfg.get('fps', 3)
+                if 0 <= row_idx < len(all_rows):
+                    frames = all_rows[row_idx][:frame_count]
+                    if frames:
+                        self._frames[anim_name] = frames
+                        self._frame_tops[anim_name] = [scan_top_y(f) for f in frames]
+                        self._seq_fps[anim_name] = fps
+                        logger.info("Loaded %s: %d frames (from atlas row %d)",
+                                    anim_name, len(frames), row_idx)
+
+            # 情绪映射
+            emotions = meta.get('emotions', {})
+            for emo, emo_cfg in emotions.items():
+                anim_ref = emo_cfg.get('anim', '')
+                if anim_ref:
+                    self._emotion_ranges[emo] = anim_ref
+
+            if not self._frames:
+                return False
+
+            self._anim_seq = 'idle'
+            self._anim_idx = 0
+            self._anim_range = (None, None)
+            self._show_frame()
+            logger.info("Atlas loaded: %d animations from %s", len(self._frames), src)
+            return True
+
+        except Exception as e:
+            logger.warning("Atlas load error: %s", e)
             return False
 
     def _load_from_frames_dir(self, frames_dir: str) -> bool:
@@ -302,7 +378,21 @@ class SpriteRenderer(AvatarRenderer):
                 self._current_emotion = emotion
                 return
 
-        # emotion -> EXPRESSION_MAP 映射
+        # emotion -> atlas 映射（字符串动画名）
+        if emotion and hasattr(self, '_emotion_ranges') and emotion in self._emotion_ranges:
+            ref = self._emotion_ranges[emotion]
+            if isinstance(ref, str) and ref in self._frames:
+                self._anim_seq = ref
+                self._anim_range = (None, None)
+                self._anim_idx = 0
+                fps = self._seq_fps.get(ref, 3)
+                self._anim_timer.setInterval(int(1000 / fps))
+                self._show_frame()
+                self._current_anim = ref
+                self._current_emotion = emotion
+                return
+
+        # emotion -> EXPRESSION_MAP 映射（元组帧范围）
         if emotion and emotion in EXPRESSION_MAP:
             mapped = EXPRESSION_MAP[emotion]
             if isinstance(mapped, tuple) and len(mapped) == 3:
