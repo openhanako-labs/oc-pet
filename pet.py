@@ -153,6 +153,8 @@ class PetWindow(QWidget):
 
         # ── 感知控制器(P2: 时间 + 情绪状态机 + 日程)──
         self._perception = PerceptionController(self._current_char)
+        # 屏幕内容→情绪回调
+        self._perception.screen.on_emotion = self._on_screen_emotion
 
         # ── 鼠标交互追踪器 ──
         self._mouse_tracker = MouseTracker(self._get_window_rect)
@@ -1401,6 +1403,21 @@ class PetWindow(QWidget):
     def _on_mouse_leave(self):
         """鼠标离开角色附近"""
         self._renderer.reset_gaze()
+
+    def _on_screen_emotion(self, emotion: str, intensity: float):
+        """屏幕内容触发的情绪"""
+        try:
+            self._perception.trigger_emotion(emotion, intensity)
+            # 切换对应动画
+            anim_map = {
+                'happy': 'waving', 'surprised': 'jumping',
+                'thinking': 'running', 'sad': 'failed',
+            }
+            anim = anim_map.get(emotion, 'idle')
+            if anim in self._renderer._frames:
+                self._set_anim_seq(anim, emotion=emotion)
+        except Exception:
+            pass
 
     def _show_bubble(self, text: str, emotion: str = "neutral"):
         """显示消息气泡"""

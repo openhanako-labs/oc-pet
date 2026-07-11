@@ -182,6 +182,31 @@ SCREENSHOT_SCALE = 4
 JPEG_QUALITY = 50
 VISION_PROMPT = "用一句话简短描述用户当前在屏幕上做什么（不超过20字）"
 
+# 屏幕内容→情绪映射
+SCREEN_EMOTION_MAP = {
+    # 关键词 → (情绪, 强度)
+    "游戏": ("happy", 0.6),
+    "gaming": ("happy", 0.6),
+    "视频": ("happy", 0.4),
+    "电影": ("happy", 0.4),
+    "音乐": ("happy", 0.3),
+    "代码": ("thinking", 0.5),
+    "编程": ("thinking", 0.5),
+    "开发": ("thinking", 0.5),
+    "terminal": ("thinking", 0.5),
+    "终端": ("thinking", 0.5),
+    "写作": ("thinking", 0.4),
+    "文档": ("thinking", 0.3),
+    "阅读": ("thinking", 0.3),
+    "聊天": ("happy", 0.3),
+    "社交": ("happy", 0.3),
+    "购物": ("happy", 0.3),
+    "错误": ("surprised", 0.7),
+    "error": ("surprised", 0.7),
+    "崩溃": ("surprised", 0.8),
+    "crash": ("surprised", 0.8),
+}
+
 
 class ScreenPerception:
     """屏幕感知 - 后台定时截屏 + 视觉模型分析
@@ -203,6 +228,7 @@ class ScreenPerception:
         self._consecutive_failures: int = 0
         self._lock = threading.Lock()
         self.on_update: callable = lambda desc: None
+        self.on_emotion: callable = lambda emotion, intensity: None
 
     @property
     def last_description(self) -> str:
@@ -288,6 +314,8 @@ class ScreenPerception:
                     self._interval = self._base_interval  # 恢复正常间隔
                     logger.info("Screen analysis: %s", content[:50])
                     self.on_update(content)
+                    # 触发屏幕情绪
+                    self._detect_screen_emotion(content)
                 else:
                     logger.warning("Vision API returned empty content")
                     self._consecutive_failures += 1
@@ -306,6 +334,15 @@ class ScreenPerception:
             self._interval = self._base_interval * 3
             logger.warning("ScreenPerception backoff: interval=%ds (failures=%d)",
                          self._interval, self._consecutive_failures)
+
+    def _detect_screen_emotion(self, description: str):
+        """根据屏幕内容触发情绪"""
+        desc_lower = description.lower()
+        for keyword, (emotion, intensity) in SCREEN_EMOTION_MAP.items():
+            if keyword in desc_lower:
+                logger.info("Screen emotion triggered: %s (%.1f) from '%s'", emotion, intensity, description[:30])
+                self.on_emotion(emotion, intensity)
+                return
 
 
 # ════════════════════════════════════════════════════════════
