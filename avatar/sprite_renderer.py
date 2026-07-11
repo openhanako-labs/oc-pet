@@ -308,6 +308,12 @@ class SpriteRenderer(AvatarRenderer):
             if isinstance(mapped, tuple) and len(mapped) == 3:
                 seq, start, end = mapped
                 if seq in self._frames:
+                    # 安全检查：确保帧索引不越界
+                    max_idx = len(self._frames[seq]) - 1
+                    if start is not None and start > max_idx:
+                        start = max_idx
+                    if end is not None and end > max_idx:
+                        end = max_idx
                     self._anim_seq = seq
                     self._anim_range = (start, end)
                     self._anim_idx = start if start is not None else 0

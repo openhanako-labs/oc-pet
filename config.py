@@ -78,10 +78,10 @@ CHARACTER_INFO = {
 #          起始/结束为 None 时使用全序列
 EXPRESSION_MAP = {
     "happy":      ("extra", 0, 1),   # 开心 -> extra[0..1]
-    "angry":      ("extra", 2, 3),   # 生气 -> extra[2..3]
-    "surprised":  ("extra", 4, 5),   # 惊讶 -> extra[4..5]
-    "thinking":   ("extra", 6, 7),   # 思考中 -> extra[6..7]
-    "working":    ("extra", 6, 7),   # 工作中 -> extra[6..7]
+    "surprised":  ("extra", 2, 3),   # 惊讶 -> extra[2..3]
+    "angry":      ("extra", 2, 3),   # 生气 -> 复用惊讶帧
+    "thinking":   ("extra", 0, 0),   # 思考 -> 单帧
+    "working":    ("extra", 0, 0),   # 工作 -> 单帧
     "neutral":    ("idle",  None, None),  # 中性 -> idle 全序列
     "sad":        ("idle",  None, None),  # 悲伤 -> idle 全序列
     "listening":  ("idle",  None, None),  # 倾听 -> idle 全序列
