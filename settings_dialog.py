@@ -39,10 +39,24 @@ QCheckBox { color: #d4cec4; }
 QComboBox {
     background: #252330; color: #d4cec4;
     border: 1px solid #3a3450; border-radius: 4px; padding: 4px 8px;
+    min-height: 22px;
 }
-QComboBox::drop-down { border: none; }
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 20px;
+    border: none;
+}
+QComboBox::down-arrow {
+    image: none;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #8888aa;
+    margin-right: 6px;
+}
 QComboBox QAbstractItemView {
     background: #252330; color: #d4cec4; selection-background-color: #3a3458;
+    border: 1px solid #3a3450;
 }
 QSlider::groove:horizontal { height: 4px; background: #3a3450; border-radius: 2px; }
 QSlider::handle:horizontal {
@@ -313,7 +327,8 @@ class SettingsDialog(QDialog):
 
         self.llm_model = QComboBox()
         self.llm_model.setEditable(True)
-        self.llm_model.addItems([""] + self._catalog_models.get("llm", []))
+        self.llm_model.addItems(self._catalog_models.get("llm", []))
+        self.llm_model.setCurrentText("")
         self.llm_model.lineEdit().setPlaceholderText("留空用 Hanako")
         api_form.addRow("LLM 模型", self.llm_model)
 
