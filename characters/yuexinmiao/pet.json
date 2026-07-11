@@ -1,0 +1,32 @@
+{
+  "id": "yuexinmiao",
+  "name": "月薪喵",
+  "description": "一只白色的小办公室猫咪",
+  "style": "flat",
+  "atlas": {
+    "src": "spritesheet.webp",
+    "columns": 8,
+    "rows": 9,
+    "cellWidth": 192,
+    "cellHeight": 208
+  },
+  "animations": {
+    "idle":          { "row": 0, "frames": 6, "fps": 3 },
+    "running-right": { "row": 1, "frames": 8, "fps": 6 },
+    "running-left":  { "row": 2, "frames": 8, "fps": 6 },
+    "waving":        { "row": 3, "frames": 4, "fps": 4 },
+    "jumping":       { "row": 4, "frames": 5, "fps": 5 },
+    "failed":        { "row": 5, "frames": 8, "fps": 4 },
+    "waiting":       { "row": 6, "frames": 6, "fps": 3 },
+    "running":       { "row": 7, "frames": 6, "fps": 5 },
+    "review":        { "row": 8, "frames": 6, "fps": 3 }
+  },
+  "emotions": {
+    "happy":     { "anim": "waving" },
+    "surprised": { "anim": "jumping" },
+    "thinking":  { "anim": "running" },
+    "sad":       { "anim": "failed" },
+    "neutral":   { "anim": "idle" }
+  },
+  "scale": 1.0
+}
