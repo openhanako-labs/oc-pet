@@ -36,7 +36,6 @@ from foreground_watcher import ForegroundWatcher
 from tts_player import TTSTtsPlayer
 from eye_overlay import EyeOverlay
 from startup_screen import StartupScreen
-from character_editor import CharacterEditor
 from perception import PerceptionController, ProactiveScheduler
 from physics import PhysicsEngine, MotionStateMachine, PhysicsCallbacks
 from avatar.sprite_renderer import SpriteRenderer
@@ -349,25 +348,6 @@ class PetWindow(QWidget):
         self._action_linker.trigger_action(basedir, action_id)
         self._show_bubble(f"{action_id}!", emotion="happy")
 
-    def _adjust_scale(self):
-        """缩放 +0.2,钳制 0.3~2.0"""
-        self._pet_scale = min(2.0, self._pet_scale + 0.2)
-        self._recalc_geometry()
-
-    def _zoom_in(self):
-        """放大"""
-        self._adjust_scale()
-
-    def _zoom_out(self):
-        """缩小"""
-        self._pet_scale = max(0.3, self._pet_scale - 0.2)
-        self._recalc_geometry()
-
-    def _open_character_editor(self):
-        """打开角色设定编辑器"""
-        editor = CharacterEditor(self._current_char, self)
-        editor.exec()
-
     def _recalc_geometry(self):
         """缩放后重算窗口和角色图片尺寸(不改变窗口位置)"""
         w = max(200, int(200 * self._pet_scale))
@@ -586,12 +566,7 @@ class PetWindow(QWidget):
 
         self._menu.addSeparator()
 
-        # 缩放
-        self._menu.addAction("🔍 放大", self._zoom_in)
-        self._menu.addAction("🔍 缩小", self._zoom_out)
-
-        # 角色 / 穿透 / 设置
-        self._menu.addAction("🎨 角色", self._open_character_editor)
+        # 穿透 / 设置
         self._passthrough_action = self._menu.addAction("🔍 穿透", self._toggle_passthrough)
         self._passthrough_action.setCheckable(True)
         self._passthrough_action.setChecked(self._mousePassthrough)
@@ -670,12 +645,6 @@ class PetWindow(QWidget):
                 self.bubble.hide_bubble()
             except Exception:
                 pass
-
-    def _open_character_editor(self):
-        """打开角色编辑器"""
-        from character_editor import CharacterEditor
-        editor = CharacterEditor(self._current_char, parent=self)
-        editor.exec()
 
     def _open_settings(self):
         """打开配置面板"""
