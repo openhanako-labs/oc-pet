@@ -33,7 +33,7 @@ class HanakoPetAdapter:
         self._builtin = builtin
         self._context = HanakoContext(agent_id, builtin=builtin)
 
-        # 读取模型配置 - .env 优先,回退到 Hanako
+        # 读取模型配置 - .env 优先,回退到 Hanako, builtin 回退到 catalog 默认
         from env_config import get_llm_config
         env_llm = get_llm_config()
         if env_llm:
@@ -52,6 +52,10 @@ class HanakoPetAdapter:
             self._max_context = self._model_cfg.get("max_context", 0)
             self._model_cfg = {"model": self._model}  # 统一属性名
 
+            # builtin 角色没有 Hanako agent 目录，从 catalog 读默认 provider
+            if builtin and (not self._base_url or not self._api_key):
+                self._load_default_from_catalog()
+
         # 记忆预算: 模型 context 的 1%, 上限 6000 字符, 下限 800
         if self._max_context > 0:
             self._memory_budget = max(800, min(6000, self._max_context // 100))
@@ -69,8 +73,35 @@ class HanakoPetAdapter:
 
         # 验证
         missing = self._context.validate()
-        if missing:
+        if missing and not builtin:
             logger.warning("配置不完整,缺失: %s", ", ".join(missing))
+
+    def _load_default_from_catalog(self):
+        """builtin 角色没有 Hanako agent，从 provider catalog 读默认模型"""
+        import json
+        from pathlib import Path
+        catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+        try:
+            data = json.loads(catalog_path.read_text("utf-8"))
+            providers = data.get("providers", {})
+            # 优先用 agnes，其次第一个有 base_url 的 provider
+            for prov_id in ["agnes"] + list(providers.keys()):
+                prov = providers.get(prov_id, {})
+                if prov.get("base_url") and prov.get("api_key"):
+                    self._base_url = prov["base_url"]
+                    self._api_key = prov["api_key"]
+                    # 取第一个模型
+                    models = prov.get("models", [])
+                    if models:
+                        m = models[0]
+                        self._model = m.get("id", m) if isinstance(m, dict) else str(m)
+                        self._max_context = m.get("context", 0) if isinstance(m, dict) else 0
+                    self._api_type = prov.get("api", "openai-completions")
+                    self._model_cfg = {"model": self._model}
+                    logger.info("Builtin LLM from catalog: provider=%s model=%s", prov_id, self._model)
+                    return
+        except Exception as e:
+            logger.warning("Failed to load default from catalog: %s", e)
 
         logger.info(
             "HanakoPetAdapter ready | agent=%s | model=%s | api=%s | prompt_len=%d",
