@@ -104,10 +104,8 @@ class ConversationEngine:
         self.on_status("")
         self.on_tts_ready()
 
-        # 刷新日程
-        self._perception.tick_schedule()
-
-        # 启动屏幕感知
+        # 刷新日程 + 启动屏幕感知
+        self._perception.tick()
         self._perception.start_screen(interval=120)
 
         logger.info("对话引擎启动完成")
