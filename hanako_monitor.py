@@ -64,19 +64,15 @@ def compact_bubble_text(text: str) -> str:
         for s in re.split(r'(?<=[。！？!?])\s*', normalized)
         if s.strip()
     ]
-    # 取前 1-2 句（气泡空间有限，前文更重要）
-    if len(sentences) == 1:
-        candidate = sentences[0]
-    else:
-        # 取前两句，如果总长不超过上限
-        first_two = sentences[0] + sentences[1] if len(sentences) > 1 else sentences[0]
-        if len(first_two) <= BUBBLE_MAX_CHARS:
-            candidate = first_two
-        else:
-            candidate = sentences[0]
-    # 截断
+    # 气泡显示完整回复，超长才截断
+    candidate = normalized
     if len(candidate) <= BUBBLE_MAX_CHARS:
         return candidate
+    # 超长：取前两句
+    if len(sentences) >= 2:
+        first_two = sentences[0] + sentences[1]
+        if len(first_two) <= BUBBLE_MAX_CHARS:
+            return first_two
     return candidate[:BUBBLE_MAX_CHARS - 1] + "…"
 
 
