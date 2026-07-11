@@ -1124,6 +1124,10 @@ class PetWindow(QWidget):
         if self._engine:
             self._engine.send(prompt_text, character=self._current_char)
             logger.info("Proactive message sent: %s", prompt_text)
+            # 显示思考中气泡
+            self._tts_player.stop()
+            self._show_bubble("思考中...", emotion="thinking")
+            self._is_thinking = True
 
     def _show_bubble(self, text: str, emotion: str = "neutral"):
         """显示消息气泡"""

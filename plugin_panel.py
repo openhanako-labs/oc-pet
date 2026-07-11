@@ -78,8 +78,8 @@ class PluginPanel(QDialog):
         # ── 插件列表 ──
         self._tree = QTreeWidget()
         self._tree.setHeaderLabels(["插件", "工具数", "描述"])
-        self._tree.header().setSectionWidth(0, 160)
-        self._tree.header().setSectionWidth(1, 60)
+        self._tree.header().resizeSection(0, 160)
+        self._tree.header().resizeSection(1, 60)
         self._tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
         self._tree.itemClicked.connect(self._on_select)
         layout.addWidget(self._tree, stretch=1)
