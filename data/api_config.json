@@ -1,0 +1,14 @@
+{
+  "tts": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "",
+    "model": "tts-1",
+    "voice": "alloy",
+    "format": "wav"
+  },
+  "asr": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "",
+    "model": "whisper-1"
+  }
+}

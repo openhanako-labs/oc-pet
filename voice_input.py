@@ -77,7 +77,8 @@ class VoiceInput:
     CHANNELS = 1
     DTYPE = np.float32
 
-    def __init__(self):
+    def __init__(self, asr_provider=None):
+        self._asr = asr_provider
         self._recording = False
         self._audio_data: list[np.ndarray] = []
         self._stream = None
@@ -159,22 +160,21 @@ class VoiceInput:
         tmp_path = os.path.join(tempfile.gettempdir(), f"pet_voice_{int(time.time())}.wav")
         self._save_wav(audio, tmp_path)
 
-        # Whisper 识别
+        # ASR 识别
         self._on_status("语音识别中...")
 
-        model = _get_whisper_model()
-        if not model:
+        if not self._asr:
             self._on_status("ASR 模型未加载")
             self._cleanup(tmp_path)
             return ""
 
         try:
-            result = model.transcribe(tmp_path, language="zh")
-            text = result.get("text", "").strip()
-            logger.info("ASR result: %s", text[:50])
+            text = self._asr.transcribe(tmp_path, language="zh")
+            if text:
+                logger.info("ASR result: %s", text[:50])
             self._on_status("")
             self._cleanup(tmp_path)
-            return text
+            return text or ""
         except Exception as e:
             logger.error("ASR failed: %s", e)
             self._on_status("识别失败")

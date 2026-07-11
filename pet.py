@@ -143,8 +143,11 @@ class PetWindow(QWidget):
         # ── 感知控制器(P2: 时间 + 情绪状态机 + 日程)──
         self._perception = PerceptionController(self._current_char)
 
+        # ── TTS provider ──
+        tts_provider = self._create_tts_provider()
+
         # ── 对话引擎（合并 bridge，单进程）──
-        self._engine = ConversationEngine(self._current_char, perception=self._perception)
+        self._engine = ConversationEngine(self._current_char, perception=self._perception, tts_provider=tts_provider)
         self._engine.on_reply = self._on_engine_reply
         self._engine.on_status = self._on_engine_status
         self._engine.on_tts_ready = lambda: logger.info("Engine TTS ready")
@@ -155,10 +158,11 @@ class PetWindow(QWidget):
         self._engine.start()
 
         # ── 语音输入（ASR）──
+        asr_provider = self._create_asr_provider()
         self._voice_input = None
         self._voice_recording = False
         if _voice_available:
-            self._voice_input = VoiceInput()
+            self._voice_input = VoiceInput(asr_provider=asr_provider)
             self._voice_input._on_status = self._on_voice_status
             # 后台预加载 Whisper 模型
             preload_whisper()
@@ -638,6 +642,26 @@ class PetWindow(QWidget):
                 self.bubble.hide_bubble()
             except Exception:
                 pass
+
+    def _create_tts_provider(self):
+        """根据配置创建 TTS provider"""
+        provider = self.config.get("tts", {}).get("provider", "cosyvoice")
+        if provider == "api":
+            from tts_provider.api_tts import ApiTtsProvider
+            return ApiTtsProvider()
+        else:
+            from tts_provider.cosyvoice import CosyVoiceProvider
+            return CosyVoiceProvider()
+
+    def _create_asr_provider(self):
+        """根据配置创建 ASR provider"""
+        provider = self.config.get("asr", {}).get("provider", "whisper_local")
+        if provider == "api":
+            from asr_provider.api_asr import ApiAsrProvider
+            return ApiAsrProvider()
+        else:
+            from asr_provider.whisper_local import WhisperLocalProvider
+            return WhisperLocalProvider()
 
     def _open_settings(self):
         """打开配置面板"""

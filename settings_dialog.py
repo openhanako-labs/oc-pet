@@ -78,6 +78,12 @@ class SettingsDialog(QDialog):
         self.tts_enabled.setChecked(config.get("tts", {}).get("enabled", True))
         tts_layout.addRow(self.tts_enabled)
 
+        self.tts_provider = QComboBox()
+        self.tts_provider.addItems(["本地 CosyVoice", "API 调用"])
+        tts_prov_map = {"cosyvoice": 0, "api": 1}
+        self.tts_provider.setCurrentIndex(tts_prov_map.get(config.get("tts", {}).get("provider", "cosyvoice"), 0))
+        tts_layout.addRow("TTS 引擎", self.tts_provider)
+
         self.tts_volume = QSlider(Qt.Horizontal)
         self.tts_volume.setRange(0, 100)
         self.tts_volume.setValue(int(config.get("tts", {}).get("volume", 0.8) * 100))
@@ -134,6 +140,18 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(screen_group)
 
+        # ── ASR 语音输入 ──
+        asr_group = QGroupBox("语音输入")
+        asr_layout = QFormLayout(asr_group)
+
+        self.asr_provider = QComboBox()
+        self.asr_provider.addItems(["本地 Whisper", "API 调用"])
+        asr_prov_map = {"whisper_local": 0, "api": 1}
+        self.asr_provider.setCurrentIndex(asr_prov_map.get(config.get("asr", {}).get("provider", "whisper_local"), 0))
+        asr_layout.addRow("ASR 引擎", self.asr_provider)
+
+        layout.addWidget(asr_group)
+
         layout.addStretch()
 
         # ── 按钮 ──
@@ -157,6 +175,7 @@ class SettingsDialog(QDialog):
 
         # TTS
         c.setdefault("tts", {})["enabled"] = self.tts_enabled.isChecked()
+        c["tts"]["provider"] = ["cosyvoice", "api"][self.tts_provider.currentIndex()]
         c["tts"]["volume"] = self.tts_volume.value() / 100
 
         # 行为
@@ -170,6 +189,9 @@ class SettingsDialog(QDialog):
         # 屏幕感知
         c.setdefault("screen", {})["enabled"] = self.screen_enabled.isChecked()
         c["screen"]["interval"] = self.screen_interval.value()
+
+        # ASR
+        c.setdefault("asr", {})["provider"] = ["whisper_local", "api"][self.asr_provider.currentIndex()]
 
         self.accept()
 

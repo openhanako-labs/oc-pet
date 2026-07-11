@@ -34,10 +34,10 @@ class ConversationEngine:
     生命周期：随 pet 启动而启动，随 pet 关闭而关闭。
     """
 
-    def __init__(self, character_id: str = "ophelia", perception: PerceptionController = None):
+    def __init__(self, character_id: str = "ophelia", perception: PerceptionController = None, tts_provider=None):
         self._character_id = character_id
         self._adapter = None
-        self._tts = None
+        self._tts = tts_provider  # 外部注入，None 时用默认
         self._perception = perception or PerceptionController(character_id)  # 外部注入优先
         self._queue: list[dict] = []
         self._lock = threading.Lock()
@@ -66,13 +66,15 @@ class ConversationEngine:
             logger.error("LLM 适配器初始化失败: %s", e)
             return
 
-        # 初始化 TTS
-        self._tts = CosyVoiceService()
-        spk_info = self._tts.get_speaker_info(self._character_id)
+        # 初始化 TTS（如果未注入）
+        if not self._tts:
+            from tts_bridge import CosyVoiceService
+            self._tts = CosyVoiceService()
+        spk_info = self._tts.get_speaker_info(self._character_id) if hasattr(self._tts, 'get_speaker_info') else {}
         if spk_info:
             logger.info("TTS 配置就绪 | ref=%s", spk_info.get("ref_audio", "?")[-30:])
         else:
-            logger.warning("TTS: 未找到角色 %s 的参考音频", self._character_id)
+            logger.info("TTS provider: %s", getattr(self._tts, 'name', 'unknown'))
 
         # 启动后台线程
         self._thread = threading.Thread(target=self._run, daemon=True)
