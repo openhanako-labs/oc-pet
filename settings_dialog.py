@@ -334,8 +334,9 @@ class SettingsDialog(QDialog):
         self.tts_key.setPlaceholderText("TTS Key")
         api_form.addRow("TTS Key", self.tts_key)
 
-        self.tts_model = QLineEdit()
-        self.tts_model.setPlaceholderText("tts-1（OpenAI 默认）")
+        self.tts_model = QComboBox()
+        self.tts_model.setEditable(True)
+        self.tts_model.lineEdit().setPlaceholderText("tts-1（OpenAI 默认）")
         api_form.addRow("TTS 模型", self.tts_model)
 
         self.tts_voice = QLineEdit()
@@ -488,7 +489,7 @@ class SettingsDialog(QDialog):
         }
 
     def _on_tts_provider_select(self, idx: int):
-        """TTS provider 下拉选择 → 自动填充 URL 和 Key"""
+        """TTS provider 下拉选择 → 自动填充 URL、Key、模型列表"""
         prov_id = self.tts_provider_select.itemData(idx)
         if not prov_id:
             return
@@ -497,6 +498,23 @@ class SettingsDialog(QDialog):
             self.tts_url.setText(cfg["base_url"])
         if cfg.get("api_key"):
             self.tts_key.setText(cfg["api_key"])
+        # 填充该 provider 的模型列表
+        self.tts_model.clear()
+        models = []
+        try:
+            from pathlib import Path
+            import json
+            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+            data = json.loads(catalog_path.read_text("utf-8"))
+            prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
+            for m in prov_models:
+                if isinstance(m, dict):
+                    models.append(m.get("id", ""))
+                elif isinstance(m, str):
+                    models.append(m)
+        except Exception:
+            pass
+        self.tts_model.addItems([m for m in models if m])
 
     # ── .env 读写 ──
 
@@ -525,12 +543,17 @@ class SettingsDialog(QDialog):
                 if key in mapping:
                     mapping[key].setText(val)
                 elif key == "LLM_MODEL" and val:
-                    # QComboBox: 尝试选中匹配项，否则设为可编辑文本
                     idx = self.llm_model.findText(val)
                     if idx >= 0:
                         self.llm_model.setCurrentIndex(idx)
                     else:
                         self.llm_model.setEditText(val)
+                elif key == "TTS_MODEL" and val:
+                    idx = self.tts_model.findText(val)
+                    if idx >= 0:
+                        self.tts_model.setCurrentIndex(idx)
+                    else:
+                        self.tts_model.setEditText(val)
         except Exception:
             pass
 
@@ -548,7 +571,7 @@ class SettingsDialog(QDialog):
             "# TTS API",
             f"TTS_BASE_URL={self.tts_url.text().strip()}",
             f"TTS_API_KEY={self.tts_key.text().strip()}",
-            f"TTS_MODEL={self.tts_model.text().strip() or 'tts-1'}",
+            f"TTS_MODEL={self.tts_model.currentText().strip() or 'tts-1'}",
             f"TTS_VOICE={self.tts_voice.text().strip() or 'alloy'}",
             "",
             "# ASR API",
