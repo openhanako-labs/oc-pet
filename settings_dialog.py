@@ -317,6 +317,14 @@ class SettingsDialog(QDialog):
         self.llm_model.lineEdit().setPlaceholderText("留空用 Hanako")
         api_form.addRow("LLM 模型", self.llm_model)
 
+        # TTS API provider 快速选择
+        self.tts_provider_select = QComboBox()
+        self.tts_provider_select.addItem("手动填写", "")
+        for pid in self._catalog_models.get("providers", []):
+            self.tts_provider_select.addItem(pid, pid)
+        self.tts_provider_select.currentIndexChanged.connect(self._on_tts_provider_select)
+        api_form.addRow("TTS Provider", self.tts_provider_select)
+
         self.tts_url = QLineEdit()
         self.tts_url.setPlaceholderText("TTS API 地址")
         api_form.addRow("TTS 地址", self.tts_url)
@@ -325,6 +333,10 @@ class SettingsDialog(QDialog):
         self.tts_key.setEchoMode(QLineEdit.Password)
         self.tts_key.setPlaceholderText("TTS Key")
         api_form.addRow("TTS Key", self.tts_key)
+
+        self.tts_model = QLineEdit()
+        self.tts_model.setPlaceholderText("tts-1（OpenAI 默认）")
+        api_form.addRow("TTS 模型", self.tts_model)
 
         self.tts_voice = QLineEdit()
         self.tts_voice.setPlaceholderText("alloy")
@@ -438,17 +450,23 @@ class SettingsDialog(QDialog):
         """从 provider-catalog.json 读取所有可用模型
 
         Returns:
-            {"llm": ["model-a", "model-b", ...], "provider_map": {"model": "provider"}}
+            {"llm": [...], "providers": [...], "provider_map": {...},
+             "provider_configs": {"prov_id": {base_url, api_key, models}}}
         """
         import json
         from pathlib import Path
         catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
         llm_models = []
         provider_map = {}
+        provider_configs = {}
         try:
             if catalog_path.exists():
                 data = json.loads(catalog_path.read_text("utf-8"))
                 for prov_id, prov_cfg in data.get("providers", {}).items():
+                    provider_configs[prov_id] = {
+                        "base_url": prov_cfg.get("base_url", ""),
+                        "api_key": prov_cfg.get("api_key", ""),
+                    }
                     for m in prov_cfg.get("models", []):
                         if isinstance(m, dict):
                             mid = m.get("id", "")
@@ -462,7 +480,23 @@ class SettingsDialog(QDialog):
                             provider_map[label] = prov_id
         except Exception:
             pass
-        return {"llm": sorted(set(llm_models)), "provider_map": provider_map}
+        return {
+            "llm": sorted(set(llm_models)),
+            "providers": sorted(provider_configs.keys()),
+            "provider_map": provider_map,
+            "provider_configs": provider_configs,
+        }
+
+    def _on_tts_provider_select(self, idx: int):
+        """TTS provider 下拉选择 → 自动填充 URL 和 Key"""
+        prov_id = self.tts_provider_select.itemData(idx)
+        if not prov_id:
+            return
+        cfg = self._catalog_models.get("provider_configs", {}).get(prov_id, {})
+        if cfg.get("base_url"):
+            self.tts_url.setText(cfg["base_url"])
+        if cfg.get("api_key"):
+            self.tts_key.setText(cfg["api_key"])
 
     # ── .env 读写 ──
 
@@ -483,6 +517,7 @@ class SettingsDialog(QDialog):
                     "LLM_API_KEY": self.llm_key,
                     "TTS_BASE_URL": self.tts_url,
                     "TTS_API_KEY": self.tts_key,
+                    "TTS_MODEL": self.tts_model,
                     "TTS_VOICE": self.tts_voice,
                     "ASR_BASE_URL": self.asr_url,
                     "ASR_API_KEY": self.asr_key,
@@ -513,7 +548,7 @@ class SettingsDialog(QDialog):
             "# TTS API",
             f"TTS_BASE_URL={self.tts_url.text().strip()}",
             f"TTS_API_KEY={self.tts_key.text().strip()}",
-            f"TTS_MODEL=tts-1",
+            f"TTS_MODEL={self.tts_model.text().strip() or 'tts-1'}",
             f"TTS_VOICE={self.tts_voice.text().strip() or 'alloy'}",
             "",
             "# ASR API",
