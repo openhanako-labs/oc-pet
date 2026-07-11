@@ -1190,7 +1190,7 @@ class PetWindow(QWidget):
     def _check_reaction_cooldown(self) -> bool:
         """检查是否在反应冷却中（3 秒内不重复）"""
         now = time.time()
-        if now - self._mouse_reaction_cooldown < 3.0:
+        if now - self._mouse_reaction_cooldown < 5.0:
             return True  # 冷却中
         self._mouse_reaction_cooldown = now
         return False

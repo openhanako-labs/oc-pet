@@ -34,11 +34,11 @@ logger = logging.getLogger(__name__)
 
 # ── 阈值配置 ──
 
-NEARBY_RADIUS = 180      # "附近"判定半径 (px)
+NEARBY_RADIUS = 120      # "附近"判定半径 (px)
 HOVER_TIME = 8.0         # 静止多久算 hover (秒)
 CHASE_TIME = 15.0        # 静止多久触发追逐 (秒)
 STARTLE_SPEED = 2500     # 快速掠过阈值 (px/s)
-STARTLE_COOLDOWN = 5.0   # 惊吓冷却 (秒)
+STARTLE_COOLDOWN = 8.0   # 惊吓冷却 (秒)
 LEAVE_GRACE = 1.0        # 离开判定延迟 (秒)
 MOUSE_STILL_THRESHOLD = 8  # 鼠标"静止"判定 (px/帧)
 

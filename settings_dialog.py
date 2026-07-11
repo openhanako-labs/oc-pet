@@ -299,6 +299,9 @@ class SettingsDialog(QDialog):
         api_group = QGroupBox("API 配置（留空 = 用 Hanako 默认）")
         api_form = QFormLayout(api_group)
 
+        # 读取 provider catalog 获取可用模型
+        self._catalog_models = self._load_catalog_models()
+
         self.llm_url = QLineEdit()
         self.llm_url.setPlaceholderText("留空用 Hanako")
         api_form.addRow("LLM 地址", self.llm_url)
@@ -308,8 +311,10 @@ class SettingsDialog(QDialog):
         self.llm_key.setPlaceholderText("留空用 Hanako")
         api_form.addRow("LLM Key", self.llm_key)
 
-        self.llm_model = QLineEdit()
-        self.llm_model.setPlaceholderText("留空用 Hanako")
+        self.llm_model = QComboBox()
+        self.llm_model.setEditable(True)
+        self.llm_model.addItems([""] + self._catalog_models.get("llm", []))
+        self.llm_model.lineEdit().setPlaceholderText("留空用 Hanako")
         api_form.addRow("LLM 模型", self.llm_model)
 
         self.tts_url = QLineEdit()
@@ -426,6 +431,39 @@ class SettingsDialog(QDialog):
         self._pet_manager.set_enabled(agent["id"], new_state)
         self._refresh_agent_list()
 
+    # ── Provider Catalog ──
+
+    @staticmethod
+    def _load_catalog_models() -> dict:
+        """从 provider-catalog.json 读取所有可用模型
+
+        Returns:
+            {"llm": ["model-a", "model-b", ...], "provider_map": {"model": "provider"}}
+        """
+        import json
+        from pathlib import Path
+        catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+        llm_models = []
+        provider_map = {}
+        try:
+            if catalog_path.exists():
+                data = json.loads(catalog_path.read_text("utf-8"))
+                for prov_id, prov_cfg in data.get("providers", {}).items():
+                    for m in prov_cfg.get("models", []):
+                        if isinstance(m, dict):
+                            mid = m.get("id", "")
+                            if mid:
+                                label = f"{mid}  [{prov_id}]"
+                                llm_models.append(label)
+                                provider_map[label] = prov_id
+                        elif isinstance(m, str) and m:
+                            label = f"{m}  [{prov_id}]"
+                            llm_models.append(label)
+                            provider_map[label] = prov_id
+        except Exception:
+            pass
+        return {"llm": sorted(set(llm_models)), "provider_map": provider_map}
+
     # ── .env 读写 ──
 
     def _load_env_to_ui(self):
@@ -443,7 +481,6 @@ class SettingsDialog(QDialog):
                 mapping = {
                     "LLM_BASE_URL": self.llm_url,
                     "LLM_API_KEY": self.llm_key,
-                    "LLM_MODEL": self.llm_model,
                     "TTS_BASE_URL": self.tts_url,
                     "TTS_API_KEY": self.tts_key,
                     "TTS_VOICE": self.tts_voice,
@@ -452,6 +489,13 @@ class SettingsDialog(QDialog):
                 }
                 if key in mapping:
                     mapping[key].setText(val)
+                elif key == "LLM_MODEL" and val:
+                    # QComboBox: 尝试选中匹配项，否则设为可编辑文本
+                    idx = self.llm_model.findText(val)
+                    if idx >= 0:
+                        self.llm_model.setCurrentIndex(idx)
+                    else:
+                        self.llm_model.setEditText(val)
         except Exception:
             pass
 
@@ -464,7 +508,7 @@ class SettingsDialog(QDialog):
             "# LLM",
             f"LLM_BASE_URL={self.llm_url.text().strip()}",
             f"LLM_API_KEY={self.llm_key.text().strip()}",
-            f"LLM_MODEL={self.llm_model.text().strip()}",
+            f"LLM_MODEL={self.llm_model.currentText().strip()}",
             "",
             "# TTS API",
             f"TTS_BASE_URL={self.tts_url.text().strip()}",
