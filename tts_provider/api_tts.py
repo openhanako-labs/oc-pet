@@ -1,21 +1,10 @@
 """API TTS - OpenAI 兼容 /audio/speech 接口
 
-支持的 provider：
-  - openai: api.openai.com/v1/audio/speech
-  - siliconflow: api.siliconflow.cn/v1/audio/speech
-  - volcengine: 火山引擎 TTS
-  - 其他兼容 OpenAI 格式的 provider
-
-配置在 data/api_config.json:
-{
-  "tts": {
-    "base_url": "https://api.openai.com/v1",
-    "api_key": "sk-...",
-    "model": "tts-1",
-    "voice": "alloy",
-    "format": "wav"
-  }
-}
+配置在 .env 文件：
+  TTS_BASE_URL=https://api.openai.com/v1
+  TTS_API_KEY=sk-...
+  TTS_MODEL=tts-1
+  TTS_VOICE=alloy
 """
 from __future__ import annotations
 
@@ -29,6 +18,7 @@ from typing import Optional
 import requests
 
 from .base import TTSProvider
+from env_config import get_tts_api_config
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +40,7 @@ class ApiTtsProvider(TTSProvider):
     """API TTS - OpenAI 兼容格式"""
 
     def __init__(self):
-        self._cfg = load_api_config().get("tts", {})
+        self._cfg = get_tts_api_config()
         self._ready = False
 
     @property

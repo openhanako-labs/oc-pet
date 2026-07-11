@@ -2,9 +2,11 @@
 characters/
 config.json
 hanako-state.json
+.env
 data/outbox.json
 data/response.json
 data/notifications.json
+data/api_config.json
 data/.pending
 *.png
 *.jpg

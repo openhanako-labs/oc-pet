@@ -20,6 +20,7 @@ from typing import Optional
 import requests
 
 from .base import ASRProvider
+from env_config import get_asr_api_config
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class ApiAsrProvider(ASRProvider):
     """API ASR - OpenAI 兼容格式"""
 
     def __init__(self):
-        self._cfg = load_api_config().get("asr", {})
+        self._cfg = get_asr_api_config()
         self._ready = False
 
     @property

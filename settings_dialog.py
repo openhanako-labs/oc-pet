@@ -8,16 +8,19 @@
   - 行为模式：静默/正常/活跃/黏人
   - 主动对话：开关、冷却时间
   - 屏幕感知：开关、截屏间隔
-  - 久坐提醒：开关、空闲阈值
   - 语音输入：开关
+  - API 配置：LLM/TTS/ASR 的 base_url/api_key/model
 """
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QCheckBox, QSlider, QSpinBox, QComboBox,
-    QPushButton, QLabel, QGroupBox, QTabWidget, QWidget
+    QPushButton, QLabel, QGroupBox, QTabWidget, QWidget,
+    QLineEdit, QTextEdit
 )
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
@@ -152,6 +155,53 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(asr_group)
 
+        # ── API 配置 ──
+        api_group = QGroupBox("API 配置（留空 = 用 Hanako 默认）")
+        api_layout = QFormLayout(api_group)
+
+        # LLM
+        self.llm_url = QLineEdit()
+        self.llm_url.setPlaceholderText("https://apihub.agnes-ai.com/v1（留空用 Hanako）")
+        api_layout.addRow("LLM 地址", self.llm_url)
+
+        self.llm_key = QLineEdit()
+        self.llm_key.setEchoMode(QLineEdit.Password)
+        self.llm_key.setPlaceholderText("sk-...（留空用 Hanako）")
+        api_layout.addRow("LLM Key", self.llm_key)
+
+        self.llm_model = QLineEdit()
+        self.llm_model.setPlaceholderText("agnes-2.0-flash（留空用 Hanako）")
+        api_layout.addRow("LLM 模型", self.llm_model)
+
+        # TTS API
+        self.tts_url = QLineEdit()
+        self.tts_url.setPlaceholderText("https://api.openai.com/v1")
+        api_layout.addRow("TTS 地址", self.tts_url)
+
+        self.tts_key = QLineEdit()
+        self.tts_key.setEchoMode(QLineEdit.Password)
+        self.tts_key.setPlaceholderText("sk-...")
+        api_layout.addRow("TTS Key", self.tts_key)
+
+        self.tts_voice = QLineEdit()
+        self.tts_voice.setPlaceholderText("alloy")
+        api_layout.addRow("TTS 音色", self.tts_voice)
+
+        # ASR API
+        self.asr_url = QLineEdit()
+        self.asr_url.setPlaceholderText("https://api.openai.com/v1")
+        api_layout.addRow("ASR 地址", self.asr_url)
+
+        self.asr_key = QLineEdit()
+        self.asr_key.setEchoMode(QLineEdit.Password)
+        self.asr_key.setPlaceholderText("sk-...")
+        api_layout.addRow("ASR Key", self.asr_key)
+
+        layout.addWidget(api_group)
+
+        # 加载已有 .env 值
+        self._load_env_to_ui()
+
         layout.addStretch()
 
         # ── 按钮 ──
@@ -168,6 +218,59 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(save_btn)
 
         layout.addLayout(btn_row)
+
+    def _load_env_to_ui(self):
+        """从 .env 文件加载已有值到输入框"""
+        from env_config import ENV_PATH
+        if not ENV_PATH.exists():
+            return
+        try:
+            for line in ENV_PATH.read_text("utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip()
+                mapping = {
+                    "LLM_BASE_URL": self.llm_url,
+                    "LLM_API_KEY": self.llm_key,
+                    "LLM_MODEL": self.llm_model,
+                    "TTS_BASE_URL": self.tts_url,
+                    "TTS_API_KEY": self.tts_key,
+                    "TTS_VOICE": self.tts_voice,
+                    "ASR_BASE_URL": self.asr_url,
+                    "ASR_API_KEY": self.asr_key,
+                }
+                if key in mapping:
+                    mapping[key].setText(val)
+        except Exception:
+            pass
+
+    def _save_env(self):
+        """将 API 配置写入 .env 文件"""
+        from env_config import ENV_PATH
+        lines = [
+            "# OC Desktop Pet - API 配置",
+            "# 留空则回退到 Hanako 的默认配置",
+            "",
+            "# LLM",
+            f"LLM_BASE_URL={self.llm_url.text().strip()}",
+            f"LLM_API_KEY={self.llm_key.text().strip()}",
+            f"LLM_MODEL={self.llm_model.text().strip()}",
+            "",
+            "# TTS API",
+            f"TTS_BASE_URL={self.tts_url.text().strip()}",
+            f"TTS_API_KEY={self.tts_key.text().strip()}",
+            f"TTS_MODEL=tts-1",
+            f"TTS_VOICE={self.tts_voice.text().strip() or 'alloy'}",
+            "",
+            "# ASR API",
+            f"ASR_BASE_URL={self.asr_url.text().strip()}",
+            f"ASR_API_KEY={self.asr_key.text().strip()}",
+            f"ASR_MODEL=whisper-1",
+        ]
+        ENV_PATH.write_text("\n".join(lines) + "\n", "utf-8")
 
     def _save(self):
         """收集所有设置写入 config"""
@@ -192,6 +295,9 @@ class SettingsDialog(QDialog):
 
         # ASR
         c.setdefault("asr", {})["provider"] = ["whisper_local", "api"][self.asr_provider.currentIndex()]
+
+        # 保存 .env（API 凭据）
+        self._save_env()
 
         self.accept()
 

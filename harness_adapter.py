@@ -32,12 +32,22 @@ class HanakoPetAdapter:
         self.agent_id = agent_id
         self._context = HanakoContext(agent_id)
 
-        # 读取模型配置
-        self._model_cfg = self._context.read_model_config()
-        self._base_url = self._model_cfg.get("base_url", "")
-        self._api_key = self._model_cfg.get("api_key", "")
-        self._model = self._model_cfg.get("model", "")
-        self._api_type = self._model_cfg.get("api_type", "openai-completions")
+        # 读取模型配置 - .env 优先，回退到 Hanako
+        from env_config import get_llm_config
+        env_llm = get_llm_config()
+        if env_llm:
+            self._base_url = env_llm["base_url"]
+            self._api_key = env_llm["api_key"]
+            self._model = env_llm["model"]
+            self._api_type = "openai-completions"
+            logger.info("LLM using .env override | model=%s", self._model)
+        else:
+            self._model_cfg = self._context.read_model_config()
+            self._base_url = self._model_cfg.get("base_url", "")
+            self._api_key = self._model_cfg.get("api_key", "")
+            self._model = self._model_cfg.get("model", "")
+            self._api_type = self._model_cfg.get("api_type", "openai-completions")
+            self._model_cfg = {"model": self._model}  # 统一属性名
 
         # 构建 system prompt
         self._system_prompt = self._context.build_prompt()
