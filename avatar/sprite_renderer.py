@@ -71,8 +71,8 @@ class SpriteRenderer(AvatarRenderer):
         # 角色图片 Label
         self.char_label = QLabel(parent)
         self.char_label.setAlignment(Qt.AlignCenter)
-        self.char_label.setFixedSize(180, 250)
-        self.char_label.move(10, 70)
+        self.char_label.setFixedSize(192, 208)  # atlas 默认格子尺寸
+        self.char_label.move(10, 0)
         self.char_label.lower()
         self.char_label.installEventFilter(parent)
 
@@ -557,27 +557,36 @@ class SpriteRenderer(AvatarRenderer):
         return (self.char_label.width(), self.char_label.height())
 
     def set_scale(self, scale: float) -> None:
-        """缩放角色"""
+        """缩放角色 — 尺寸从实际帧数据计算"""
         self._scale = scale
-        cw = max(180, int(180 * scale))
-        ch = max(250, int(250 * scale))
+        base_w, base_h = self._get_frame_size()
+        cw = int(base_w * scale)
+        ch = int(base_h * scale)
         self.char_label.setFixedSize(cw, ch)
-        base_y = int(70 * scale)
-        self.char_label.move(10, base_y)
-        self._base_label_pos = QPoint(10, base_y)
+        # 垂直居中偏移
+        self.char_label.move(10, 0)
+        self._base_label_pos = QPoint(10, 0)
         self._show_frame()
+
+    def _get_frame_size(self) -> tuple[int, int]:
+        """获取当前角色的帧原始尺寸"""
+        if self._frames:
+            first_seq = next(iter(self._frames))
+            first_frame = self._frames[first_seq][0]
+            return first_frame.width(), first_frame.height()
+        return 192, 208  # atlas 默认格子尺寸
 
     def get_scale(self) -> float:
         return self._scale
 
     def recalc_geometry(self, window_w: int, window_h: int):
         """窗口尺寸变化时重算角色尺寸"""
-        cw = max(180, int(180 * self._scale))
-        ch = max(250, int(250 * self._scale))
+        base_w, base_h = self._get_frame_size()
+        cw = int(base_w * self._scale)
+        ch = int(base_h * self._scale)
         self.char_label.setFixedSize(cw, ch)
-        base_y = int(70 * self._scale)
-        self.char_label.move(10, base_y)
-        self._base_label_pos = QPoint(10, base_y)
+        self.char_label.move(10, 0)
+        self._base_label_pos = QPoint(10, 0)
         self._show_frame()
 
     # ── 朝向 ──
