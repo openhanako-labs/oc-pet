@@ -42,6 +42,7 @@ class HanakoPetAdapter:
             self._model = env_llm["model"]
             self._api_type = "openai-completions"
             self._max_context = 0
+            self._model_cfg = {"model": self._model}
             logger.info("LLM using .env override | model=%s", self._model)
         else:
             self._model_cfg = self._context.read_model_config()

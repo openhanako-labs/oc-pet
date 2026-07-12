@@ -24,17 +24,6 @@ from env_config import get_asr_api_config
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path(__file__).parent.parent / "data" / "api_config.json"
-
-
-def load_api_config() -> dict:
-    if CONFIG_PATH.exists():
-        try:
-            return json.loads(CONFIG_PATH.read_text("utf-8"))
-        except Exception:
-            pass
-    return {}
-
 
 class ApiAsrProvider(ASRProvider):
     """API ASR - OpenAI 兼容格式"""

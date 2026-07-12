@@ -1,13 +1,9 @@
-# 用户数据
-characters/
+# 运行时数据
 config.json
+config.json.bak
 hanako-state.json
 .env
-data/outbox.json
-data/response.json
-data/notifications.json
-data/api_config.json
-data/.pending
+data/
 *.png
 *.jpg
 *.ico
@@ -20,6 +16,11 @@ __pycache__/
 # 构建产物
 output/
 import-pets/
-启动桌宠_debug.bat
-output/
-output/
+sandbox/
+sandbox_runner.py
+test-env/
+
+# characters 目录除了内置角色外忽略
+characters/*
+!characters/yuexinmiao/
+!characters/yuexinmiao/**

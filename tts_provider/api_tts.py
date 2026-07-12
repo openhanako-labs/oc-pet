@@ -23,17 +23,7 @@ from env_config import get_tts_api_config
 logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = Path.home() / ".hanako" / "pets" / "tts_cache"
-CONFIG_PATH = Path(__file__).parent.parent / "data" / "api_config.json"
 
-
-def load_api_config() -> dict:
-    """加载 API 配置"""
-    if CONFIG_PATH.exists():
-        try:
-            return json.loads(CONFIG_PATH.read_text("utf-8"))
-        except Exception:
-            pass
-    return {}
 
 
 class ApiTtsProvider(TTSProvider):
