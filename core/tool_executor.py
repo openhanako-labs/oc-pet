@@ -61,8 +61,11 @@ class ToolExecutor:
                 ['node', tmp_path],
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 timeout=30,
                 cwd=str(source_path.parent),
+                env={**os.environ, 'LANG': 'en_US.UTF-8', 'PYTHONIOENCODING': 'utf-8'},
             )
 
             # 清理
