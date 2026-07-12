@@ -105,6 +105,7 @@ class PetWindow(QWidget):
         self._vx = 0.0
         self._physics_timer = QTimer(self)
         self._physics_timer.timeout.connect(lambda: self._physics.tick(self._get_behavior_params()))
+        self._physics_timer.start(PHYSICS_INTERVAL)  # 始终运行，idle 时 tick 直接 return
         self._motion_state = "idle"   # idle / wander / rest
         self._rest_counter = 0
         self._motion_timer = QTimer(self)
@@ -896,7 +897,6 @@ class PetWindow(QWidget):
                                 self._motion_state = "bounce"
                                 self._set_anim_seq('walk')
                                 self._physics.start_bounce(vx, vy)
-                                self._physics_timer.start(PHYSICS_INTERVAL)
                             else:
                                 self._bounce_active = False
                         else:
@@ -1054,7 +1054,7 @@ class PetWindow(QWidget):
         self._is_walking = False
         self._bounce_active = False
         self._physics.stop()
-        self._physics_timer.stop()
+        # _physics_timer 保持运行（idle 时 tick 直接 return）
         self._motion.reset()
         self._set_anim_seq('idle')
 
@@ -1397,7 +1397,7 @@ class PetWindow(QWidget):
         target = max(10, min(target, sg.width() - self.width() - 10))
         self._motion_state = "chase"
         self._physics.start_walk(target, facing_right=(direction > 0))
-        self._physics_timer.start(30)
+        # _physics_timer 已在初始化时启动
 
     def _on_mouse_startled(self, speed: float):
         """鼠标快速掠过 - 只切动画"""
