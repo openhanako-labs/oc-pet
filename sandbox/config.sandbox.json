@@ -1,0 +1,51 @@
+{
+  "character": "ophelia",
+  "scale": 1.0,
+  "opacity": 0.95,
+  "behavior": "normal",
+  "window": {
+    "width": 200,
+    "height": 300,
+    "x": -1,
+    "y": -1
+  },
+  "break_reminder": {
+    "enabled": false,
+    "idle_minutes": 15,
+    "gradual": true,
+    "cooldown_minutes": 30
+  },
+  "action_linker": {
+    "enabled": false,
+    "highlight_duration": 30
+  },
+  "tts": {
+    "enabled": false,
+    "volume": 0.8,
+    "provider": "mock"
+  },
+  "proactive": {
+    "enabled": false,
+    "cooldown_minutes": 999,
+    "rules": []
+  },
+  "screen": {
+    "enabled": false,
+    "interval": 999
+  },
+  "mouse_interaction": true,
+  "asr": {
+    "provider": "mock"
+  },
+  "memory": {
+    "budget_mode": "auto",
+    "budget_chars": 800
+  },
+  "agents": [
+    {
+      "id": "ophelia",
+      "enabled": true,
+      "builtin": false
+    }
+  ]
+}

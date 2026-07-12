@@ -15,7 +15,7 @@
 | 单格宽度 | 192px |
 | 单格高度 | 208px |
 | 总尺寸 | 1536×1872px |
-| 背景 | 透明（chroma-key 可移除） |
+| 背景 | 透明或纯色（便于抠图） |
 
 ### 9 种动画
 
@@ -28,7 +28,7 @@
 | 4 | jumping | 5 | 跳跃/悬停 | 预备→起跳→空中→落地→站稳 |
 | 5 | failed | 8 | 失败/阻塞 | 垂头丧气、闭眼 |
 | 6 | waiting | 6 | 等待输入 | 期待姿态、歪头 |
-| 7 | running | 6 | 正在工作 | 专注、思考、打字（非跑步） |
+| 7 | working | 6 | 正在工作 | 专注、思考、打字（非跑步） |
 | 8 | review | 6 | 审查完成 | 前倾检查、眯眼、歪头 |
 
 ### 状态驱动动画映射
@@ -42,7 +42,7 @@ greeting          →  row 3 (waving)
 excited           →  row 4 (jumping)
 error/failed      →  row 5 (failed)
 waiting_input     →  row 6 (waiting)
-thinking/working  →  row 7 (running)
+thinking/working  →  row 7 (working)
 done/review       →  row 8 (review)
 ```
 
@@ -66,13 +66,16 @@ prompt: Sprite sheet for [角色名], 8 frames in a horizontal row.
         [动画描述]. Same character as reference image.
         Clean transparent background, each frame clearly separated.
         Consistent size and style across all frames.
+        No floating effects (speed lines, dust, stars, tears).
+        No shadows (drop shadow, contact shadow, ground shadow).
+        No text, labels, UI, or readable logos.
 ```
 
 **生成顺序建议**：
 1. idle（确认基础形象）
 2. running-right（确认运动风格）
 3. running-left（如可镜像则跳过）
-4. waving → jumping → failed → waiting → running → review
+4. waving → jumping → failed → waiting → working → review
 
 ### 3. running-left 处理
 
@@ -128,19 +131,73 @@ characters/<name>/
     "jumping":       { "row": 4, "frames": 5, "fps": 5 },
     "failed":        { "row": 5, "frames": 8, "fps": 4 },
     "waiting":       { "row": 6, "frames": 6, "fps": 3 },
-    "running":       { "row": 7, "frames": 6, "fps": 5 },
+    "working":       { "row": 7, "frames": 6, "fps": 5 },
     "review":        { "row": 8, "frames": 6, "fps": 3 }
   },
   "emotions": {
     "happy":     { "anim": "waving" },
+    "angry":     { "anim": "failed" },
     "surprised": { "anim": "jumping" },
-    "thinking":  { "anim": "running" },
+    "thinking":  { "anim": "working" },
     "sad":       { "anim": "failed" },
     "neutral":   { "anim": "idle" }
   },
   "scale": 1.0
 }
 ```
+
+## 分帧模式（备选）
+
+如果不使用 atlas，也可以用分帧目录结构：
+
+```
+characters/<name>/
+├── pet.json
+├── frames/
+│   ├── idle/
+│   │   ├── idle_0.png
+│   │   ├── idle_1.png
+│   │   └── ...
+│   ├── running-right/
+│   │   ├── running-right_0.png
+│   │   └── ...
+│   └── .../
+└── preview/
+```
+
+对应 pet.json 格式：
+
+```json
+{
+  "spritesheet": {
+    "src": "frames/",
+    "frameWidth": 192,
+    "frameHeight": 208,
+    "scale": 1.0
+  },
+  "animations": {
+    "idle":          { "start": 0,  "count": 6, "fps": 3 },
+    "running-right": { "start": 6,  "count": 8, "fps": 6 },
+    "running-left":  { "start": 14, "count": 8, "fps": 6 },
+    "waving":        { "start": 22, "count": 4, "fps": 4 },
+    "jumping":       { "start": 26, "count": 5, "fps": 5 },
+    "failed":        { "start": 31, "count": 8, "fps": 4 },
+    "waiting":       { "start": 39, "count": 6, "fps": 3 },
+    "working":       { "start": 45, "count": 6, "fps": 5 },
+    "review":        { "start": 51, "count": 6, "fps": 3 }
+  },
+  "emotions": {
+    "happy":     { "anim": "waving" },
+    "angry":     { "anim": "failed" },
+    "surprised": { "anim": "jumping" },
+    "thinking":  { "anim": "working" },
+    "sad":       { "anim": "failed" },
+    "neutral":   { "anim": "idle" }
+  }
+}
+```
+
+---
 
 ## 风格规范
 
@@ -152,7 +209,7 @@ characters/<name>/
 ### 必须遵守
 - 全身轮廓在 192×208 格内可读
 - 跨行保持面部、比例、材质、配色一致
-- 背景干净可移除（纯色 chroma-key 或透明）
+- 背景干净可移除（透明或纯色背景）
 - 细节足够大，缩小后仍可辨认
 
 ### 禁止

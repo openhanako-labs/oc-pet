@@ -6,6 +6,17 @@
 import sys
 import os
 import logging
+
+# ── 沙盒模式快捷开关 ──
+if "--sandbox" in sys.argv:
+    # 移除参数，委托给 sandbox_runner
+    sys.argv.remove("--sandbox")
+    from sandbox_runner import apply_patches, run_interactive
+    logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(name)s: %(message)s')
+    apply_patches()
+    run_interactive()
+    sys.exit(0)
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont
 
@@ -22,6 +33,7 @@ from pet_manager import PetManager
 
 
 def main():
+    # 检查沙盒标志
     app = QApplication(sys.argv)
     app.setApplicationName("OC Desktop Pet")
 
@@ -44,11 +56,11 @@ def main():
     if not manager.agents:
         from pathlib import Path
 
-        # 1. 优先用内置 default 角色
-        default_char = Path(__file__).parent / "characters" / "default"
-        if default_char.exists():
+        # 1. 优先用月薪喵
+        yuexinmiao = Path(__file__).parent / "characters" / "yuexinmiao"
+        if yuexinmiao.exists():
             manager._config.setdefault("agents", []).append({
-                "id": "default",
+                "id": "yuexinmiao",
                 "enabled": True,
                 "position": {"x": -1, "y": -1},
                 "scale": 1.0,
@@ -67,19 +79,6 @@ def main():
                     if agent.get("has_sprites"):
                         manager.add_agent(agent["id"])
                         break
-
-            # 3. 兜底：用月薪喵
-            if not manager.agents:
-                yuexinmiao = Path(__file__).parent / "characters" / "yuexinmiao"
-                if yuexinmiao.exists():
-                    manager._config.setdefault("agents", []).append({
-                        "id": "yuexinmiao",
-                        "enabled": True,
-                        "position": {"x": -1, "y": -1},
-                        "scale": 1.0,
-                        "builtin": True,
-                    })
-                    manager._save_config()
 
     manager.launch_all()
 
