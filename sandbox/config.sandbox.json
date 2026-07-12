@@ -45,7 +45,20 @@
     {
       "id": "ophelia",
       "enabled": true,
-      "builtin": false
+      "builtin": false,
+      "position": {
+        "x": 865,
+        "y": 244
+      }
+    },
+    {
+      "id": "aimis",
+      "enabled": false,
+      "position": {
+        "x": -1,
+        "y": -1
+      },
+      "scale": 1.0
     }
   ]
 }

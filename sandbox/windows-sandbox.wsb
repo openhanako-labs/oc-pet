@@ -1,16 +1,32 @@
 <Configuration>
   <Networking>Enable</Networking>
   <vGPU>Enable</vGPU>
+  <AudioInput>Enable</AudioInput>
 
   <MappedFolders>
+    <!-- 项目源码（可写）：改了本地代码，重启沙盒自动生效 -->
     <MappedFolder>
-      <HostFolder>W:\Games\Hanako\Work\projects\oc-pet\sandbox</HostFolder>
-      <SandboxFolder>C:\sandbox</SandboxFolder>
+      <HostFolder>W:\Games\Hanako\Work\projects\oc-pet</HostFolder>
+      <SandboxFolder>C:\oc-pet</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+
+    <!-- 宿主机 Python（只读）：已有全部依赖 -->
+    <MappedFolder>
+      <HostFolder>C:\Users\Administrator\AppData\Local\Programs\Python\Python312</HostFolder>
+      <SandboxFolder>C:\Python312</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+
+    <!-- Hanako 配置（只读）：agent 身份、API 密钥 -->
+    <MappedFolder>
+      <HostFolder>C:\Users\Administrator\.hanako</HostFolder>
+      <SandboxFolder>C:\Users\WDAGUtilityAccount\.hanako</SandboxFolder>
       <ReadOnly>true</ReadOnly>
     </MappedFolder>
   </MappedFolders>
 
   <LogonCommand>
-    <Command>powershell.exe -ExecutionPolicy Bypass -NoProfile -File C:\sandbox\sandbox_bootstrap.ps1</Command>
+    <Command>powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "Set-Location C:\oc-pet; $env:Path='C:\Python312;C:\Python312\Scripts;'+$env:Path; $env:PYTHONHOME='C:\Python312'; python main.py"</Command>
   </LogonCommand>
 </Configuration>
