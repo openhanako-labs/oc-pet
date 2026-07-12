@@ -168,6 +168,14 @@ class HanakoPetAdapter:
 
             text = resp.strip() if resp and resp.strip() else ""
 
+            # 兜底：检查 content 里是否包含 <function> 标签（非标准 tool calling）
+            if text and tools:
+                parsed = self._parse_function_in_content(text)
+                if parsed:
+                    logger.info("Parsed tool call from content (non-standard)")
+                    self._history.append({"role": "user", "content": message.strip()})
+                    return {"tool_calls": parsed, "message": {"content": text}}, None
+
             if not text:
                 logger.warning("LLM returned empty: %s", repr(resp[:100] if resp else None))
                 text = "(......想不起来要说什么了)"
@@ -197,6 +205,36 @@ class HanakoPetAdapter:
         except Exception as e:
             logger.warning("Chat failed: %s", e)
             return "(出了点岔子)", "neutral"
+
+    def _parse_function_in_content(self, text: str) -> list:
+        """从 content 文本中解析 <function> 标签格式的工具调用
+
+        支持格式：
+            <function=tool_name>{"arg": "value"}</function>
+            <function=name>args_json</function>
+        """
+        pattern = r'<function=([a-zA-Z0-9_-]+)[^>]*>(.*?)</function>'
+        matches = re.findall(pattern, text, re.DOTALL)
+        if not matches:
+            return []
+
+        tool_calls = []
+        for name, args_str in matches:
+            args_str = args_str.strip()
+            try:
+                json.loads(args_str)  # 验证 JSON
+            except json.JSONDecodeError:
+                args_str = '{}'
+
+            tool_calls.append({
+                "id": f"call_{name}_{len(tool_calls)}",
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": args_str,
+                }
+            })
+        return tool_calls
 
     def _call_api(self, messages: list[dict], tools: list = None):
         """调用 LLM API
