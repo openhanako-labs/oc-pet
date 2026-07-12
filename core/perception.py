@@ -283,10 +283,18 @@ class ScreenPerception:
         logger.info("Screenshot: %s, %dKB base64", new_size, len(b64) // 1024)
 
         ctx = HanakoContext()
-        cfg = ctx.read_model_config()
-        api_url = cfg.get("base_url", "") + "/chat/completions"
-        api_key = cfg.get("api_key", "")
-        model = cfg.get("model", "")
+        # 优先用 .env 配置
+        from env_config import get_llm_config
+        env_llm = get_llm_config()
+        if env_llm:
+            api_url = env_llm["base_url"] + "/v1/chat/completions"
+            api_key = env_llm["api_key"]
+            model = env_llm["model"]
+        else:
+            cfg = ctx.read_model_config()
+            api_url = cfg.get("base_url", "") + "/chat/completions"
+            api_key = cfg.get("api_key", "")
+            model = cfg.get("model", "")
         if not api_url or not api_key:
             return
 
