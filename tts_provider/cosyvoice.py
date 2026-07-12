@@ -56,7 +56,9 @@ class CosyVoiceProvider(TTSProvider):
 
             logger.info("CosyVoice 模型就绪")
         except Exception as e:
-            logger.error("CosyVoice 加载失败: %s", e)
+            # CosyVoice 是可选依赖（需要 torch/hyperpyyaml 等），
+            # 缺失时静默降级，不报 ERROR
+            logger.info("CosyVoice 不可用（可选依赖未安装）: %s", e)
             self._loaded = False
 
     def get_speaker_info(self, character_id: str) -> dict:

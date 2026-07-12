@@ -52,8 +52,9 @@ def _get_whisper_model():
         _whisper_model = whisper.load_model("base")
         logger.info("Whisper 模型就绪")
     except Exception as e:
-        logger.error("Whisper 加载失败: %s", e)
-        _whisper_model = None
+            # Whisper 是可选依赖，缺失时静默降级
+            logger.info("Whisper 不可用（可选依赖未安装）: %s", e)
+            _whisper_model = None
     finally:
         _whisper_loading = False
     return _whisper_model
@@ -96,7 +97,7 @@ class VoiceInput:
         try:
             import sounddevice as sd
         except ImportError:
-            logger.error("sounddevice not available")
+            logger.info("sounddevice not available")
             self._on_status("录音模块不可用")
             return False
 
@@ -115,7 +116,7 @@ class VoiceInput:
             logger.info("Recording started")
             return True
         except Exception as e:
-            logger.error("Failed to start recording: %s", e)
+            logger.info("Failed to start recording: %s", e)
             self._recording = False
             self._on_status("录音启动失败: " + str(e))
             return False
@@ -176,7 +177,7 @@ class VoiceInput:
             self._cleanup(tmp_path)
             return text or ""
         except Exception as e:
-            logger.error("ASR failed: %s", e)
+            logger.info("ASR failed: %s", e)
             self._on_status("识别失败")
             self._cleanup(tmp_path)
             return ""
