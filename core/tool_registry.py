@@ -83,11 +83,21 @@ class ToolRegistry:
 
                 for t in tools_raw:
                     if isinstance(t, str):
-                        # 字符串格式的工具 ID
-                        self._tools[t] = ToolDef(
-                            name=t, description="", parameters={"type": "object", "properties": {}},
-                            plugin_id=plugin_id, source_path=""
-                        )
+                        # 字符串格式：可能是工具名或 source 路径
+                        if t.endswith('.js') or '/' in t:
+                            # 是 source 路径（如 "./tools/tavern-chat.js"）
+                            tool_path = plugin_dir / t.lstrip('./')
+                            tool_def = self._parse_tool_file(tool_path, plugin_id)
+                            if tool_def:
+                                if tool_def.name in self._tools:
+                                    tool_def.name = f"{plugin_id}.{tool_def.name}"
+                                self._tools[tool_def.name] = tool_def
+                        else:
+                            # 是工具 ID
+                            self._tools[t] = ToolDef(
+                                name=t, description="", parameters={"type": "object", "properties": {}},
+                                plugin_id=plugin_id, source_path=""
+                            )
                         continue
                     if not isinstance(t, dict):
                         continue
