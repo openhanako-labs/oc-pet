@@ -257,7 +257,7 @@ class ConversationEngine:
         # 再次调用 LLM，让模型基于工具结果生成最终回复
         try:
             reply, emotion = self._adapter.chat(
-                message="",  # 空消息，因为历史已经包含了用户消息和工具结果
+                message="[工具执行完成，请根据结果用自然语言回复用户]",
                 inject_memory=False,
                 extra_context=perception_ctx,
             )
