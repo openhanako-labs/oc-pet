@@ -67,7 +67,11 @@ class ApiTtsProvider(TTSProvider):
             return str(output_path)
 
         # 调用 API
-        url = self._cfg["base_url"].rstrip("/") + "/audio/speech"
+        base = self._cfg["base_url"].rstrip("/")
+        # 自动补 /v1 前缀
+        if not base.endswith('/v1') and '/v1/' not in base:
+            base += '/v1'
+        url = base + "/audio/speech"
         headers = {
             "Authorization": f"Bearer {self._cfg['api_key']}",
             "Content-Type": "application/json",
