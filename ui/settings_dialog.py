@@ -768,10 +768,15 @@ class SettingsDialog(QDialog):
         self.llm_model.addItems([m for m in models if m])
 
     def _on_tts_provider_select(self, idx: int):
-        """TTS provider 下拉选择 → 自动填充 URL、Key、模型列表"""
+        """TTS provider 下拉选择 → 自动填充 URL、Key、模型列表，并联动 TTS 引擎选择"""
         prov_id = self.tts_provider_select.itemData(idx)
         if not prov_id:
             return
+        
+        # 联动：当选择 TTS Provider 时，自动将 TTS 引擎设置为 "API 调用"
+        # TTS 引擎下拉框选项：["本地 CosyVoice", "MIMO TTS", "API 调用"]，索引 2 是 "API 调用"
+        self.tts_provider.setCurrentIndex(2)
+        
         cfg = self._catalog_models.get("provider_configs", {}).get(prov_id, {})
         if cfg.get("base_url"):
             self.tts_url.setText(cfg["base_url"])
@@ -796,10 +801,15 @@ class SettingsDialog(QDialog):
         self.tts_model.addItems([m for m in models if m])
 
     def _on_asr_provider_select(self, idx: int):
-        """ASR provider 下拉选择 → 自动填充 URL、Key、模型列表"""
+        """ASR provider 下拉选择 → 自动填充 URL、Key、模型列表，并联动 ASR 引擎选择"""
         prov_id = self.asr_provider_select.itemData(idx)
         if not prov_id:
             return
+        
+        # 联动：当选择 ASR Provider 时，自动将 ASR 引擎设置为 "API 调用"
+        # ASR 引擎下拉框选项：["本地 Whisper", "MIMO ASR", "API 调用"]，索引 2 是 "API 调用"
+        self.asr_provider.setCurrentIndex(2)
+        
         cfg = self._catalog_models.get("provider_configs", {}).get(prov_id, {})
         if cfg.get("base_url"):
             self.asr_url.setText(cfg["base_url"])
