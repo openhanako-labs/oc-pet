@@ -36,6 +36,28 @@ def _get_foreground_window_title() -> str:
     return buf.value or ""
 
 
+def _get_foreground_window_rect() -> tuple[int, int, int, int] | None:
+    """获取当前前台窗口的位置和大小
+    
+    Returns:
+        (x, y, width, height) 或 None
+    """
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return None
+    
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return None
+    
+    x = rect.left
+    y = rect.top
+    width = rect.right - rect.left
+    height = rect.bottom - rect.top
+    
+    return (x, y, width, height)
+
+
 def _get_foreground_process_name() -> str:
     """获取当前前台窗口所属进程名（如 Obsidian.exe）"""
     hwnd = user32.GetForegroundWindow()
