@@ -1347,7 +1347,7 @@ class PetWindow(QWidget):
         except Exception as e:
             logger.error("_foreground_tick error: %s", e)
 
-    def _on_foreground_change(self, app_name: str, app_category: str):
+    def _on_foreground_change(self, app_name: str, app_category: str, title: str = ""):
         """前台窗口变化 → 重置 idle 计时器"""
         going = self._idle_stage
         self._last_interaction = time.time()
