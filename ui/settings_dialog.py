@@ -599,7 +599,10 @@ class SettingsDialog(QDialog):
             for pkg in packages:
                 version_tag = f" v{pkg.version}" if pkg.version and pkg.version != "?" else ""
                 desc_tag = f" - {pkg.description}" if pkg.description and pkg.description != "(无 manifest)" else ""
-                self._pkg_list.addItem(f"{pkg.name}{version_tag}{desc_tag}")
+                display_text = f"{pkg.name}{version_tag}{desc_tag}"
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.UserRole, pkg.agent_id)  # 存储 agent_id
+                self._pkg_list.addItem(item)
             self._pkg_status_label.setText(f"共 {len(packages)} 个已安装角色")
         except Exception as e:
             self._pkg_status_label.setText(f"加载失败: {e}")
@@ -635,9 +638,13 @@ class SettingsDialog(QDialog):
         if row < 0:
             return
 
-        # 从列表获取 agent_id
-        item_text = self._pkg_list.item(row).text()
-        agent_id = item_text.split(" ")[0]  # 取第一个词作为 agent_id
+        # 从 UserRole 数据获取 agent_id
+        item = self._pkg_list.item(row)
+        agent_id = item.data(Qt.UserRole)
+        if not agent_id:
+            # 兜底：从文本中提取
+            item_text = item.text()
+            agent_id = item_text.split(" ")[0]
 
         from PySide6.QtWidgets import QFileDialog
         out_path, _ = QFileDialog.getSaveFileName(
@@ -662,8 +669,13 @@ class SettingsDialog(QDialog):
         if row < 0:
             return
 
-        item_text = self._pkg_list.item(row).text()
-        agent_id = item_text.split(" ")[0]
+        # 从 UserRole 数据获取 agent_id
+        item = self._pkg_list.item(row)
+        agent_id = item.data(Qt.UserRole)
+        if not agent_id:
+            # 兜底：从文本中提取
+            item_text = item.text()
+            agent_id = item_text.split(" ")[0]
 
         reply = QMessageBox.question(
             self, "确认卸载",
