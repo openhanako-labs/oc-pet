@@ -21,8 +21,12 @@ logger = logging.getLogger(__name__)
 ENV_PATH = Path(__file__).parent / ".env"
 
 
-def _load_env():
-    """读取 .env 文件到 os.environ（不覆盖已有值）"""
+def _load_env(force: bool = False):
+    """读取 .env 文件到 os.environ
+    
+    Args:
+        force: 是否强制重新加载（覆盖已有值）
+    """
     if not ENV_PATH.exists():
         return
     try:
@@ -35,8 +39,10 @@ def _load_env():
             key, _, value = line.partition("=")
             key = key.strip()
             value = value.strip()
-            if key and key not in os.environ:
-                os.environ[key] = value
+            if key:
+                # 强制模式或值不存在时才更新
+                if force or key not in os.environ:
+                    os.environ[key] = value
     except Exception as e:
         logger.warning("Failed to load .env: %s", e)
 
@@ -47,11 +53,16 @@ _load_env()
 
 def get_llm_config() -> dict:
     """获取 LLM 配置 - .env 优先，回退到 Hanako
+    
+    每次调用都重新读取 .env 文件，确保配置实时更新。
 
     Returns:
         {"base_url": ..., "api_key": ..., "model": ...}
         如果 .env 没配则返回空 dict（调用方用 Hanako 的）
     """
+    # 每次都重新读取 .env 文件
+    _load_env(force=True)
+    
     base_url = os.environ.get("LLM_BASE_URL", "").strip()
     api_key = os.environ.get("LLM_API_KEY", "").strip()
     model = os.environ.get("LLM_MODEL", "").strip()
@@ -62,7 +73,11 @@ def get_llm_config() -> dict:
 
 
 def get_tts_api_config() -> dict:
-    """获取 TTS API 配置"""
+    """获取 TTS API 配置
+    
+    每次调用都重新读取 .env 文件，确保配置实时更新。
+    """
+    _load_env(force=True)
     return {
         "base_url": os.environ.get("TTS_BASE_URL", "").strip(),
         "api_key": os.environ.get("TTS_API_KEY", "").strip(),
@@ -72,7 +87,11 @@ def get_tts_api_config() -> dict:
 
 
 def get_asr_api_config() -> dict:
-    """获取 ASR API 配置"""
+    """获取 ASR API 配置
+    
+    每次调用都重新读取 .env 文件，确保配置实时更新。
+    """
+    _load_env(force=True)
     return {
         "base_url": os.environ.get("ASR_BASE_URL", "").strip(),
         "api_key": os.environ.get("ASR_API_KEY", "").strip(),
@@ -83,12 +102,14 @@ def get_asr_api_config() -> dict:
 def get_vision_config() -> dict:
     """获取视觉模型配置（屏幕感知专用）
     
+    每次调用都重新读取 .env 文件，确保配置实时更新。
     优先使用视觉专用配置，回退到 LLM 配置。
     
     Returns:
         {"base_url": ..., "api_key": ..., "model": ...}
         如果没有配置则返回空 dict
     """
+    _load_env(force=True)
     base_url = os.environ.get("VISION_BASE_URL", "").strip()
     api_key = os.environ.get("VISION_API_KEY", "").strip()
     model = os.environ.get("VISION_MODEL", "").strip()
