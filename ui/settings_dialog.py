@@ -459,6 +459,34 @@ class SettingsDialog(QDialog):
         self.asr_model.lineEdit().setPlaceholderText("whisper-1（OpenAI 默认）")
         api_form.addRow("ASR 模型", self.asr_model)
 
+        # ── 视觉模型配置（M2 屏幕感知专用）──
+        vision_separator = QLabel("─── 视觉模型（屏幕感知专用）───")
+        vision_separator.setStyleSheet("color: #888; font-weight: bold; margin-top: 10px;")
+        api_form.addRow(vision_separator)
+
+        vision_hint = QLabel("留空则使用 LLM 配置。建议使用支持图片的模型（如 agnes-2.0-flash、GPT-4V 等）")
+        vision_hint.setWordWrap(True)
+        vision_hint.setStyleSheet("color: #666; font-size: 11px;")
+        api_form.addRow(vision_hint)
+
+        self.vision_url = QLineEdit()
+        self.vision_url.setPlaceholderText("视觉 API 地址（留空用 LLM 配置）")
+        api_form.addRow("视觉地址", self.vision_url)
+
+        self.vision_key = QLineEdit()
+        self.vision_key.setEchoMode(QLineEdit.Password)
+        self.vision_key.setPlaceholderText("视觉 API Key（留空用 LLM 配置）")
+        api_form.addRow("视觉 Key", self.vision_key)
+
+        self.vision_model = QComboBox()
+        self.vision_model.setEditable(True)
+        # 推荐的视觉模型
+        vision_models = ["agnes-2.0-flash", "gpt-4o", "gpt-4-vision-preview", "claude-3-opus", "claude-3-sonnet"]
+        self.vision_model.addItems(vision_models)
+        self.vision_model.setCurrentText("")
+        self.vision_model.lineEdit().setPlaceholderText("留空用 LLM 模型")
+        api_form.addRow("视觉模型", self.vision_model)
+
         api_layout.addWidget(api_group)
         api_layout.addStretch()
         tabs.addTab(api_tab, "API")
@@ -843,6 +871,17 @@ class SettingsDialog(QDialog):
                         self.asr_model.setCurrentIndex(idx)
                     else:
                         self.asr_model.setEditText(val)
+                # 视觉模型配置
+                elif key == "VISION_BASE_URL" and val:
+                    self.vision_url.setText(val)
+                elif key == "VISION_API_KEY" and val:
+                    self.vision_key.setText(val)
+                elif key == "VISION_MODEL" and val:
+                    idx = self.vision_model.findText(val)
+                    if idx >= 0:
+                        self.vision_model.setCurrentIndex(idx)
+                    else:
+                        self.vision_model.setEditText(val)
         except Exception:
             pass
 
@@ -876,6 +915,11 @@ class SettingsDialog(QDialog):
             f"ASR_BASE_URL={self.asr_url.text().strip()}",
             f"ASR_API_KEY={self.asr_key.text().strip()}",
             f"ASR_MODEL={self.asr_model.currentText().strip() or 'whisper-1'}",
+            "",
+            "# Vision API（屏幕感知专用，留空用 LLM 配置）",
+            f"VISION_BASE_URL={self.vision_url.text().strip()}",
+            f"VISION_API_KEY={self.vision_key.text().strip()}",
+            f"VISION_MODEL={self.vision_model.currentText().strip()}",
         ]
         ENV_PATH.write_text("\n".join(lines) + "\n", "utf-8")
 

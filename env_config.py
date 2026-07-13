@@ -78,3 +78,21 @@ def get_asr_api_config() -> dict:
         "api_key": os.environ.get("ASR_API_KEY", "").strip(),
         "model": os.environ.get("ASR_MODEL", "whisper-1").strip(),
     }
+
+
+def get_vision_config() -> dict:
+    """获取视觉模型配置（屏幕感知专用）
+    
+    优先使用视觉专用配置，回退到 LLM 配置。
+    
+    Returns:
+        {"base_url": ..., "api_key": ..., "model": ...}
+        如果没有配置则返回空 dict
+    """
+    base_url = os.environ.get("VISION_BASE_URL", "").strip()
+    api_key = os.environ.get("VISION_API_KEY", "").strip()
+    model = os.environ.get("VISION_MODEL", "").strip()
+    
+    if base_url and api_key:
+        return {"base_url": base_url, "api_key": api_key, "model": model}
+    return {}
