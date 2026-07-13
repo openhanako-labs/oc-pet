@@ -43,6 +43,7 @@ from avatar.sprite_renderer import SpriteRenderer
 from core.conversation_engine import ConversationEngine
 from core.narrative_engine import NarrativeEngine
 from motion.mouse_tracker import MouseTracker
+from core.window_interaction import WindowInteraction
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +264,9 @@ class PetWindow(QWidget):
         # ── 物理引擎（委托）──
         self._physics = PhysicsEngine(self)
         self._motion = MotionStateMachine(self._physics, self)
+
+        # ── 窗口互动模块 ──
+        self._window_interaction = WindowInteraction(self)
 
         self._setup_menu()
         self._setup_tray()
@@ -1348,12 +1352,19 @@ class PetWindow(QWidget):
             logger.error("_foreground_tick error: %s", e)
 
     def _on_foreground_change(self, app_name: str, app_category: str, title: str):
-        """前台窗口变化 → 重置 idle 计时器"""
+        """前台窗口变化 → 重置 idle 计时器 + 窗口互动"""
         going = self._idle_stage
         self._last_interaction = time.time()
         self._idle_stage = None
         if going is not None:
             self._show_bubble("你回来啦~", emotion="happy")
+        
+        # 窗口互动：桌宠靠近当前窗口
+        if hasattr(self, '_window_interaction'):
+            try:
+                self._window_interaction.move_near_window()
+            except Exception as e:
+                logger.debug("Window interaction failed: %s", e)
 
     def _on_proactive_trigger(self, prompt_text: str):
         """Proactive 调度器触发 -> 直接显示给用户（不经过对话引擎）"""
