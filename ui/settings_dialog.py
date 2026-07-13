@@ -469,6 +469,14 @@ class SettingsDialog(QDialog):
         vision_hint.setStyleSheet("color: #666; font-size: 11px;")
         api_form.addRow(vision_hint)
 
+        # 视觉 Provider 快速选择
+        self.vision_provider_select = QComboBox()
+        self.vision_provider_select.addItem("手动填写", "")
+        for pid in self._catalog_models.get("providers", []):
+            self.vision_provider_select.addItem(pid, pid)
+        self.vision_provider_select.currentIndexChanged.connect(self._on_vision_provider_select)
+        api_form.addRow("视觉 Provider", self.vision_provider_select)
+
         self.vision_url = QLineEdit()
         self.vision_url.setPlaceholderText("视觉 API 地址（留空用 LLM 配置）")
         api_form.addRow("视觉地址", self.vision_url)
@@ -802,6 +810,38 @@ class SettingsDialog(QDialog):
             pass
         self.asr_model.addItems([m for m in models if m])
 
+    def _on_vision_provider_select(self, idx: int):
+        """视觉 provider 下拉选择 → 自动填充 URL、Key、模型列表"""
+        prov_id = self.vision_provider_select.itemData(idx)
+        if not prov_id:
+            return
+        cfg = self._catalog_models.get("provider_configs", {}).get(prov_id, {})
+        if cfg.get("base_url"):
+            self.vision_url.setText(cfg["base_url"])
+        if cfg.get("api_key"):
+            self.vision_key.setText(cfg["api_key"])
+        # 保留推荐模型，追加该 provider 的模型列表
+        current_models = ["agnes-2.0-flash", "gpt-4o", "gpt-4-vision-preview", "claude-3-opus", "claude-3-sonnet"]
+        try:
+            from pathlib import Path
+            import json
+            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+            data = json.loads(catalog_path.read_text("utf-8"))
+            prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
+            for m in prov_models:
+                if isinstance(m, dict):
+                    model_id = m.get("id", "")
+                elif isinstance(m, str):
+                    model_id = m
+                else:
+                    continue
+                if model_id and model_id not in current_models:
+                    current_models.append(model_id)
+        except Exception:
+            pass
+        self.vision_model.clear()
+        self.vision_model.addItems(current_models)
+
     # ── .env 读写 ──
 
     def _load_env_to_ui(self):
@@ -872,6 +912,11 @@ class SettingsDialog(QDialog):
                     else:
                         self.asr_model.setEditText(val)
                 # 视觉模型配置
+                elif key == "VISION_PROVIDER" and val:
+                    for i in range(self.vision_provider_select.count()):
+                        if self.vision_provider_select.itemData(i) == val:
+                            self.vision_provider_select.setCurrentIndex(i)
+                            break
                 elif key == "VISION_BASE_URL" and val:
                     self.vision_url.setText(val)
                 elif key == "VISION_API_KEY" and val:
@@ -917,6 +962,7 @@ class SettingsDialog(QDialog):
             f"ASR_MODEL={self.asr_model.currentText().strip() or 'whisper-1'}",
             "",
             "# Vision API（屏幕感知专用，留空用 LLM 配置）",
+            f"VISION_PROVIDER={self.vision_provider_select.currentData() or ''}",
             f"VISION_BASE_URL={self.vision_url.text().strip()}",
             f"VISION_API_KEY={self.vision_key.text().strip()}",
             f"VISION_MODEL={self.vision_model.currentText().strip()}",
