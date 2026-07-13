@@ -1308,6 +1308,12 @@ class PetWindow(QWidget):
     def _break_check(self):
         """每 30 秒检查: idle 感知 + proactive 主动对话"""
         logger.debug("_break_check called")
+        try:
+            self._break_check_inner()
+        except Exception as e:
+            logger.error("_break_check error: %s", e)
+    
+    def _break_check_inner(self):
         now = time.time()
         idle_secs = now - self._last_interaction
 
@@ -1338,8 +1344,8 @@ class PetWindow(QWidget):
         logger.debug("_foreground_tick called")
         try:
             self._foreground_watcher.tick()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("_foreground_tick error: %s", e)
 
     def _on_foreground_change(self, app_name: str, app_category: str):
         """前台窗口变化 → 重置 idle 计时器"""
