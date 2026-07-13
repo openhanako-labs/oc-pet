@@ -218,7 +218,7 @@ class ConversationEngine:
             help_text = self._get_builtin_help_text()
             anim = "extra"
             emotion = "happy"
-            logger.info("内置使用说明 [emotion:%s]: %s", emotion, help_text[:60])
+            logger.info("内置使用说明 [emotion:%s]: %s", emotion, help_text)
             # 直接回调，不调用 LLM
             self.on_reply(help_text, emotion, anim, "")
             return
