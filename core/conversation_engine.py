@@ -113,6 +113,40 @@ class ConversationEngine:
         with self._lock:
             self._queue.clear()
 
+    def _get_builtin_help_text(self) -> str:
+        """返回桌宠内置的使用说明"""
+        return """喵~ 我是你的桌面宠物助手！这是我能做的事情：
+
+**🎭 叙事引擎**
+- 我会自动生成桌面小事件，陪你聊天解闷
+- 每隔一段时间，我会主动和你说话
+
+**👁️ 环境感知**
+- 我能识别你正在用什么应用和文件
+- 根据你的活动，我会给出有趣的评论
+
+**💾 记忆快照**
+- 我能导出我们的对话记忆，方便备份
+- 也可以导入记忆，恢复之前的对话
+
+**🐾 多宠协作**
+- 如果你运行多个桌宠，我们可以互相聊天
+- 我们会一起关心你，给你送虚拟礼物
+
+**📦 角色包**
+- 我能打包成角色包，方便分享给其他人
+- 也可以导入别人分享的角色包
+
+**🎤 语音交互**
+- 我能用语音和你说话（如果配置了 TTS）
+- 也能听你说话（如果配置了 ASR）
+
+**⚙️ 设置面板**
+- 右键点击我可以打开设置
+- 在那里可以配置 API、TTS、ASR 等
+
+有什么想问我的吗？"""
+
     def send(self, text: str, character: str = ""):
         """发送消息（异步，结果通过 on_reply 回调）"""
         with self._lock:
@@ -162,6 +196,16 @@ class ConversationEngine:
         character = msg["character"]
 
         logger.info("处理消息 [%s]: %s", character, text[:50])
+
+        # 内置使用说明：当用户问“你能干什么”时，返回桌宠自身的功能说明
+        help_keywords = ["你能干什么", "你会什么", "你有什么功能", "你能做什么", "怎么用你", "使用说明", "功能介绍"]
+        if any(keyword in text for keyword in help_keywords):
+            help_text = self._get_builtin_help_text()
+            anim = "extra"
+            emotion = "happy"
+            # 直接回调，不调用 LLM
+            self.on_reply(help_text, emotion, anim, "")
+            return
 
         # 1. LLM 回复（可能返回 tool_calls）
         try:
