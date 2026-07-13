@@ -24,8 +24,23 @@ logger = logging.getLogger(__name__)
 
 
 def map_emotion_to_anim(emotion: str) -> str:
-    """情绪 -> 动画序列"""
-    return "extra" if emotion in ("happy", "angry", "surprised", "thinking") else "idle"
+    """情绪 -> 动画序列
+    
+    与 pet.py 中的情绪动画映射保持一致：
+    - happy -> waving
+    - surprised -> jumping
+    - thinking -> running
+    - sad -> failed
+    - 其他 -> idle
+    """
+    anim_map = {
+        'happy': 'waving',
+        'angry': 'waving',
+        'surprised': 'jumping',
+        'thinking': 'running',
+        'sad': 'failed',
+    }
+    return anim_map.get(emotion, 'idle')
 
 
 class ConversationEngine:
