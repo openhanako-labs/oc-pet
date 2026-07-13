@@ -231,6 +231,9 @@ APP_CATEGORY_MAP: dict[str, str] = {
     # Design
     "figma": "design", "sketch": "design", "canva": "design",
     "affinity": "design", "inkscape": "design", "draw.io": "design",
+    
+    # Desktop Pet / AI Assistant
+    "hanako": "desktop_pet", "hana": "desktop_pet",
 }
 
 
