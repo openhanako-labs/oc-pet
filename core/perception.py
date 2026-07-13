@@ -290,7 +290,12 @@ class ScreenPerception:
         
         if vision_cfg:
             # 使用视觉专用配置
-            api_url = vision_cfg["base_url"].rstrip("/") + "/v1/chat/completions"
+            base_url = vision_cfg["base_url"].rstrip("/")
+            # 如果 base_url 已经包含 /v1，则不再添加
+            if base_url.endswith("/v1"):
+                api_url = base_url + "/chat/completions"
+            else:
+                api_url = base_url + "/v1/chat/completions"
             api_key = vision_cfg["api_key"]
             model = vision_cfg["model"]
             logger.debug("Using vision-specific model: %s", model)
