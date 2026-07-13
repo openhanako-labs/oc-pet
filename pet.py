@@ -41,6 +41,7 @@ from motion.physics import PhysicsEngine, MotionStateMachine, PhysicsCallbacks
 from avatar.sprite_renderer import SpriteRenderer
 
 from core.conversation_engine import ConversationEngine
+from core.narrative_engine import NarrativeEngine
 from motion.mouse_tracker import MouseTracker
 
 logger = logging.getLogger(__name__)
@@ -196,6 +197,26 @@ class PetWindow(QWidget):
         self._engine.on_reply = self._on_engine_reply
         self._engine.on_status = self._on_engine_status
         self._engine.on_tts_ready = lambda: logger.info("Engine TTS ready")
+
+        # ── M1: 叙事引擎 ──
+        self._narrative_enabled = True  # 可通过配置开关
+        narrative_cfg = self.config.get("narrative", {})
+        self._narrative_enabled = narrative_cfg.get("enabled", True)
+        self._narrative = NarrativeEngine(
+            character_id=self._current_char,
+            perception=self._perception,
+            adapter=self._engine._adapter if self._engine else None,
+            cooldown_minutes=narrative_cfg.get("cooldown_minutes", 15),
+        )
+        # 将叙事事件注入气泡显示流程
+        self._narrative.on_event = self._on_narrative_event
+        # 启动后台叙事循环（每 10 分钟尝试一次，实际受冷却控制）
+        if self._narrative_enabled:
+            try:
+                self._narrative.start_background_loop(interval_seconds=600)
+                logger.info("NarrativeEngine started for %s", self._current_char)
+            except Exception as e:
+                logger.warning("Failed to start NarrativeEngine: %s", e)
         # 连接跨线程信号
         self.engine_reply_signal.connect(self._do_engine_reply)
         self.engine_status_signal.connect(self._do_engine_status)
@@ -1335,6 +1356,30 @@ class PetWindow(QWidget):
             self._show_bubble("思考中...", emotion="thinking")
             self._is_thinking = True
 
+    # ── M1: 叙事事件回调 ──
+
+    def _on_narrative_event(self, event):
+        """叙事引擎回调：将 NarrativeEvent 注入 UI 展示
+        
+        在后台线程调用，通过 _do_narrative_event 转主线程。
+        """
+        from PySide6.QtCore import QTimer
+        # 切回主线程执行
+        QTimer.singleShot(0, lambda: self._do_narrative_event(event))
+
+    def _do_narrative_event(self, event):
+        """在主线程处理叙事事件"""
+        try:
+            # 显示气泡（无 TTS，纯文字）
+            if event.content and event.content.strip():
+                self._show_bubble(event.content, emotion=event.emotion)
+                # 动画
+                anim = event.animation or "idle"
+                self._set_anim_seq(anim, emotion=event.emotion)
+                logger.info("Narrative displayed: [%s] %s | anim=%s", event.event_type, event.content[:30], anim)
+        except Exception as e:
+            logger.error("Narrative display failed: %s", e)
+
     # ── 鼠标交互反应 ──
 
     _mouse_reaction_cooldown: float = 0.0  # 上次反应时间
@@ -1572,6 +1617,13 @@ class PetWindow(QWidget):
                 # 等后台线程退出，避免 TTS 文件被截断
                 if self._engine._thread and self._engine._thread.is_alive():
                     self._engine._thread.join(timeout=3)
+            except Exception:
+                pass
+
+        # ── M1: 停止叙事引擎 ──
+        if hasattr(self, '_narrative'):
+            try:
+                self._narrative.stop_background_loop()
             except Exception:
                 pass
 

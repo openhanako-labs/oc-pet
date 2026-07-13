@@ -53,6 +53,15 @@ class ConversationEngine:
         self._thread = None
         self._tts_ready = False
 
+        # ── M3: 记忆快照管理器 ──
+        self._memory_snapshot_mgr = None
+        try:
+            from .memory_snapshot import MemorySnapshotManager
+            self._memory_snapshot_mgr = MemorySnapshotManager(character_id)
+            logger.info("MemorySnapshotManager initialized for %s", character_id)
+        except Exception as e:
+            logger.warning("MemorySnapshotManager not available: %s", e)
+
         # 回调（由 pet 设置）
         self.on_reply: callable = lambda reply, emotion, anim, audio_path: None
         self.on_status: callable = lambda msg: None  # 状态提示
@@ -278,3 +287,67 @@ class ConversationEngine:
             logger.info("角色切换: %s", character_id)
         except Exception as e:
             logger.error("角色切换失败: %s", e)
+
+    # ── M3: 记忆快照导出/导入 ──
+
+    def export_memory_snapshot(self, output_path: str = None, description: str = "") -> str | None:
+        """导出当前角色的记忆为 JSON 快照
+        
+        Args:
+            output_path: 输出路径，默认自动生成
+            description: 快照描述
+            
+        Returns:
+            输出的文件路径，失败返回 None
+        """
+        if not self._memory_snapshot_mgr:
+            logger.warning("MemorySnapshotManager not initialized")
+            return None
+        try:
+            path = self._memory_snapshot_mgr.export_snapshot(
+                output_path=output_path,
+                description=description or f"Export for {self._character_id}",
+            )
+            logger.info("Memory snapshot exported: %s", path)
+            return str(path)
+        except Exception as e:
+            logger.error("Failed to export memory snapshot: %s", e)
+            return None
+
+    def import_memory_snapshot(self, input_path: str, strategy: str = "smart") -> dict | None:
+        """从 JSON 快照导入记忆
+        
+        Args:
+            input_path: 快照 JSON 文件路径
+            strategy: 合并策略 (overwrite / smart / skip_existing)
+            
+        Returns:
+            操作结果统计 {imported, skipped, errors}，失败返回 None
+        """
+        if not self._memory_snapshot_mgr:
+            logger.warning("MemorySnapshotManager not initialized")
+            return None
+        try:
+            result = self._memory_snapshot_mgr.import_snapshot(
+                input_path=input_path,
+                strategy=strategy,
+            )
+            logger.info("Memory snapshot imported: %s", result)
+            return result
+        except Exception as e:
+            logger.error("Failed to import memory snapshot: %s", e)
+            return None
+
+    def list_memory_snapshots(self, directory: str = None) -> list:
+        """列出可用的记忆快照
+        
+        Returns:
+            快照列表 [{path, agent_id, created_at, description}, ...]
+        """
+        if not self._memory_snapshot_mgr:
+            return []
+        try:
+            return self._memory_snapshot_mgr.list_snapshots(directory=directory)
+        except Exception as e:
+            logger.error("Failed to list snapshots: %s", e)
+            return []

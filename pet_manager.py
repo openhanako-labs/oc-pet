@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -36,11 +37,31 @@ class PetManager:
     def __init__(self):
         self._windows: dict[str, object] = {}  # agent_id -> PetWindow
         self._config = self._load_config()
+        # ── M4: MultiPetBridge ──
+        self._bridge = None
+        self._bridge_enabled = True  # 可通过配置开关
 
     @property
     def agents(self) -> list[dict]:
         """返回所有配置的 agent 列表"""
         return self._config.get("agents", [])
+
+    @property
+    def bridge(self):
+        """M4: 暴露 bridge 引用（供外部访问）"""
+        return self._bridge
+
+    @property
+    def bridge_enabled(self) -> bool:
+        """M4: bridge 是否启用"""
+        return self._bridge_enabled
+
+    @bridge_enabled.setter
+    def bridge_enabled(self, value: bool):
+        self._bridge_enabled = value
+        if not value and self._bridge:
+            self._bridge.stop()
+            self._bridge = None
 
     @property
     def enabled_agents(self) -> list[dict]:
@@ -70,6 +91,35 @@ class PetManager:
             cfg_path.write_text(json.dumps(self._config, indent=2, ensure_ascii=False), "utf-8")
         except Exception as e:
             logger.warning("Failed to save config: %s", e)
+
+    # ── M4: Bridge 生命周期 ──
+
+    def start_bridge(self):
+        """启动 MultiPetBridge（后台事件调度线程）"""
+        if self._bridge:
+            logger.info("MultiPetBridge already running")
+            return
+        if not self._bridge_enabled:
+            return
+        try:
+            from core.multi_pet_bridge import MultiPetBridge
+            self._bridge = MultiPetBridge(pet_manager=self)
+            self._bridge.start()
+            logger.info("MultiPetBridge started")
+        except Exception as e:
+            logger.error("Failed to start MultiPetBridge: %s", e)
+
+    def stop_bridge(self):
+        """停止 MultiPetBridge"""
+        if self._bridge:
+            self._bridge.stop()
+            self._bridge = None
+            logger.info("MultiPetBridge stopped")
+
+    def restart_bridge(self):
+        """重启 bridge（先停后启）"""
+        self.stop_bridge()
+        self.start_bridge()
 
     # ── Agent 发现 ──
 
@@ -209,7 +259,10 @@ class PetManager:
     # ── 窗口管理 ──
 
     def launch_all(self):
-        """启动所有 enabled 的桌宠窗口"""
+        """启动所有 enabled 的桌宠窗口（自动启动 bridge）"""
+        # 确保 bridge 已启动
+        if self._bridge_enabled and not self._bridge:
+            self.start_bridge()
         for agent in self.enabled_agents:
             self.launch_window(agent["id"])
 
@@ -240,11 +293,27 @@ class PetManager:
             self._windows[agent_id] = window
             logger.info("Launched pet window for %s (sprites: %s)",
                         agent_id, sprite_dir or "default")
+
+            # ── M4: 注册桌宠到桥接器 ──
+            if self._bridge and self._bridge_enabled:
+                try:
+                    self._bridge.register_pet(agent_id, window)
+                    logger.info("Registered pet '%s' to MultiPetBridge", agent_id)
+                except Exception as e:
+                    logger.warning("Failed to register pet '%s' to bridge: %s", agent_id, e)
         except Exception as e:
             logger.error("Failed to launch pet for %s: %s", agent_id, e)
 
     def close_window(self, agent_id: str):
         """关闭单个桌宠窗口"""
+        # ── M4: 先从桥接器注销 ──
+        if self._bridge and self._bridge_enabled:
+            try:
+                self._bridge.unregister_pet(agent_id)
+                logger.info("Unregistered pet '%s' from MultiPetBridge", agent_id)
+            except Exception as e:
+                logger.warning("Failed to unregister pet '%s' from bridge: %s", agent_id, e)
+
         window = self._windows.pop(agent_id, None)
         if window:
             try:
@@ -253,9 +322,12 @@ class PetManager:
                 pass
 
     def close_all(self):
-        """关闭所有桌宠窗口"""
+        """关闭所有桌宠窗口（并停止 bridge）"""
         for agent_id in list(self._windows.keys()):
             self.close_window(agent_id)
+        # 全部关闭后停止 bridge
+        if self._bridge_enabled:
+            self.stop_bridge()
 
     def _get_agent_cfg(self, agent_id: str) -> dict:
         """从 config.json 获取 agent 的桌宠配置"""

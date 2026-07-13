@@ -12,9 +12,11 @@
   - 窗口：透明度、缩放
   - 久坐提醒：开关、间隔
   - API 配置：LLM/TTS/ASR
+  - 角色包管理 (M5)
 """
 from __future__ import annotations
 
+import logging
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QCheckBox, QSlider, QSpinBox, QComboBox,
@@ -305,6 +307,68 @@ class SettingsDialog(QDialog):
         func_layout.addStretch()
         tabs.addTab(func_tab, "功能")
 
+        # ── Tab 2.5: 角色包管理 (M5) ──
+        pkg_tab = QWidget()
+        pkg_layout = QVBoxLayout(pkg_tab)
+        pkg_layout.setContentsMargins(8, 8, 8, 8)
+        pkg_layout.setSpacing(6)
+
+        try:
+            from core.character_package import CharacterPackageManager
+            self._pkg_mgr = CharacterPackageManager()
+        except Exception as e:
+            self._pkg_mgr = None
+            logger = __import__('logging').getLogger(__name__)
+            logger.warning("CharacterPackageManager not available: %s", e)
+
+        pkg_group = QGroupBox("角色包管理 (M5)")
+        pkg_group_layout = QVBoxLayout(pkg_group)
+
+        # 已安装列表
+        self._pkg_list = QListWidget()
+        self._pkg_list.setMinimumHeight(100)
+        self._refresh_package_list()
+        pkg_group_layout.addWidget(self._pkg_list)
+
+        # 操作按钮行
+        pkg_btns_row1 = QHBoxLayout()
+
+        self._import_pkg_btn = QPushButton("📦 导入 .pet")
+        self._import_pkg_btn.clicked.connect(self._import_package)
+        pkg_btns_row1.addWidget(self._import_pkg_btn)
+
+        self._export_pkg_btn = QPushButton("💾 导出选中")
+        self._export_pkg_btn.clicked.connect(self._export_package)
+        self._export_pkg_btn.setEnabled(False)
+        self._pkg_list.currentRowChanged.connect(lambda r: self._export_pkg_btn.setEnabled(r >= 0))
+        pkg_btns_row1.addWidget(self._export_pkg_btn)
+
+        pkg_group_layout.addLayout(pkg_btns_row1)
+
+        pkg_btns_row2 = QHBoxLayout()
+
+        self._uninstall_pkg_btn = QPushButton("🗑️ 卸载选中")
+        self._uninstall_pkg_btn.setObjectName("danger")
+        self._uninstall_pkg_btn.clicked.connect(self._uninstall_package)
+        self._uninstall_pkg_btn.setEnabled(False)
+        self._pkg_list.currentRowChanged.connect(lambda r: self._uninstall_pkg_btn.setEnabled(r >= 0))
+        pkg_btns_row2.addWidget(self._uninstall_pkg_btn)
+
+        self._refresh_pkg_btn = QPushButton("🔄 刷新列表")
+        self._refresh_pkg_btn.clicked.connect(self._refresh_package_list)
+        pkg_btns_row2.addWidget(self._refresh_pkg_btn)
+
+        pkg_group_layout.addLayout(pkg_btns_row2)
+
+        # 状态标签
+        self._pkg_status_label = QLabel("就绪")
+        self._pkg_status_label.setStyleSheet("color: #666688; font-size: 10px;")
+        pkg_group_layout.addWidget(self._pkg_status_label)
+
+        pkg_layout.addWidget(pkg_group)
+        pkg_layout.addStretch()
+        tabs.addTab(pkg_tab, "角色包")
+
         # ── Tab 3: API 配置 ──
         api_tab = QWidget()
         api_layout = QVBoxLayout(api_tab)
@@ -484,6 +548,103 @@ class SettingsDialog(QDialog):
         new_state = not agent.get("enabled", True)
         self._pet_manager.set_enabled(agent["id"], new_state)
         self._refresh_agent_list()
+
+    # ── M5: 角色包管理 ──
+
+    def _refresh_package_list(self):
+        """刷新角色包列表"""
+        if not hasattr(self, '_pkg_list') or not self._pkg_mgr:
+            return
+        self._pkg_list.clear()
+        try:
+            packages = self._pkg_mgr.list_installed_packages()
+            for pkg in packages:
+                version_tag = f" v{pkg.version}" if pkg.version and pkg.version != "?" else ""
+                desc_tag = f" - {pkg.description}" if pkg.description and pkg.description != "(无 manifest)" else ""
+                self._pkg_list.addItem(f"{pkg.name}{version_tag}{desc_tag}")
+            self._pkg_status_label.setText(f"共 {len(packages)} 个已安装角色")
+        except Exception as e:
+            self._pkg_status_label.setText(f"加载失败: {e}")
+
+    def _import_package(self):
+        """导入 .pet 文件"""
+        if not self._pkg_mgr:
+            QMessageBox.warning(self, "提示", "角色包管理器不可用")
+            return
+
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入角色包", "",
+            "角色包 (*.pet);;所有文件 (*)"
+        )
+        if not path:
+            return
+
+        try:
+            result = self._pkg_mgr.install_package(path, overwrite=False)
+            self._pkg_status_label.setText(f"导入成功: {result}")
+            self._refresh_package_list()
+            QMessageBox.information(self, "成功", f"角色包安装成功！\n{result}")
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", str(e))
+            self._pkg_status_label.setText(f"导入失败: {e}")
+
+    def _export_package(self):
+        """导出选中的角色为 .pet 文件"""
+        if not self._pkg_mgr:
+            return
+        row = self._pkg_list.currentRow()
+        if row < 0:
+            return
+
+        # 从列表获取 agent_id
+        item_text = self._pkg_list.item(row).text()
+        agent_id = item_text.split(" ")[0]  # 取第一个词作为 agent_id
+
+        from PySide6.QtWidgets import QFileDialog
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, "导出角色包", f"{agent_id}.pet", "角色包 (*.pet)"
+        )
+        if not out_path:
+            return
+
+        try:
+            result_path = self._pkg_mgr.create_package(agent_id, output_path=out_path)
+            self._pkg_status_label.setText(f"导出成功: {result_path}")
+            QMessageBox.information(self, "成功", f"角色包已导出到:\n{result_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", str(e))
+            self._pkg_status_label.setText(f"导出失败: {e}")
+
+    def _uninstall_package(self):
+        """卸载选中的角色"""
+        if not self._pkg_mgr:
+            return
+        row = self._pkg_list.currentRow()
+        if row < 0:
+            return
+
+        item_text = self._pkg_list.item(row).text()
+        agent_id = item_text.split(" ")[0]
+
+        reply = QMessageBox.question(
+            self, "确认卸载",
+            f"确定要卸载角色 '{agent_id}' 吗？\n（精灵文件和配置将被删除）",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            success = self._pkg_mgr.uninstall_package(agent_id)
+            if success:
+                self._pkg_status_label.setText(f"已卸载: {agent_id}")
+                self._refresh_package_list()
+                QMessageBox.information(self, "成功", f"角色 '{agent_id}' 已卸载")
+            else:
+                QMessageBox.warning(self, "提示", f"角色 '{agent_id}' 不存在")
+        except Exception as e:
+            QMessageBox.critical(self, "卸载失败", str(e))
 
     # ── Provider Catalog ──
 

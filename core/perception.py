@@ -436,7 +436,7 @@ class ProactiveScheduler:
 # ════════════════════════════════════════════════════════════
 
 class PerceptionController:
-    """统一感知控制器 - 整合时间/情绪/日程/屏幕/主动对话
+    """统一感知控制器 - 整合时间/情绪/日程/屏幕/主动对话 + M2 增强环境扫描
 
     用法:
         ctrl = PerceptionController(character_id="ophelia")
@@ -463,6 +463,16 @@ class PerceptionController:
         self._proactive: ProactiveScheduler | None = None
         self._last_schedule_refresh = 0.0
 
+        # ── M2: 增强环境扫描器 ──
+        self._env_scanner = None
+        self._env_scanner_enabled = True
+        try:
+            from core.enhanced_environment import EnhancedEnvironmentScanner
+            self._env_scanner = EnhancedEnvironmentScanner()
+            logger.info("EnhancedEnvironmentScanner initialized for %s", character_id)
+        except Exception as e:
+            logger.warning("Failed to init EnhancedEnvironmentScanner: %s", e)
+
     @property
     def time(self) -> TimePerception:
         return self._time
@@ -482,6 +492,11 @@ class PerceptionController:
     @property
     def proactive(self) -> ProactiveScheduler | None:
         return self._proactive
+
+    @property
+    def env_scanner(self):
+        """M2: 暴露环境扫描器引用"""
+        return self._env_scanner
 
     # ── 屏幕 ──
 
@@ -518,7 +533,7 @@ class PerceptionController:
     # ── 统一 tick（每 30 秒）──
 
     def tick(self):
-        """每 30 秒调用，驱动情绪衰减 + 主动对话检查 + 日程刷新"""
+        """每 30 秒调用，驱动情绪衰减 + 主动对话检查 + 日程刷新 + M2 环境扫描"""
         self._emotion.tick()
         if self._proactive:
             self._proactive.tick()
@@ -526,6 +541,47 @@ class PerceptionController:
         if now - self._last_schedule_refresh > 600:
             self._schedule.refresh()
             self._last_schedule_refresh = now
+
+        # ── M2: 定期刷新环境扫描快照 ──
+        if self._env_scanner and self._env_scanner_enabled:
+            try:
+                self._scan_environment()
+            except Exception as e:
+                logger.debug("M2 env scan tick failed: %s", e)
+
+    def _scan_environment(self):
+        """M2: 扫描当前环境并更新上下文
+        
+        从 ForegroundWatcher 获取窗口标题，通过 EnhancedEnvironmentScanner
+        解析为结构化快照，注入到 ScreenPerception 的 on_update 回调中。
+        """
+        try:
+            # 尝试从前景窗口检测器获取最新标题
+            fg_title = ""
+            if hasattr(self, '_foreground_watcher') and self._foreground_watcher:
+                fg_title = getattr(self._foreground_watcher, 'last_title', '') or ''
+            elif hasattr(self._screen, '_foreground_watcher'):
+                fw = self._screen._foreground_watcher
+                if fw:
+                    fg_title = getattr(fw, 'last_title', '') or ''
+        except Exception:
+            fg_title = ""
+
+        # 时间上下文
+        time_ctx = self._time.get_context()
+
+        # 屏幕描述
+        screen_desc = self._screen.last_description if self._screen else ""
+
+        # 执行扫描
+        snapshot = self._env_scanner.scan(
+            window_title=fg_title,
+            screen_description=screen_desc,
+            time_context=time_ctx,
+        )
+        logger.debug("M2 env scan: app=%s cat=%s files=%s",
+                     snapshot.foreground_app, snapshot.category, snapshot.detected_files)
+        return snapshot
 
     # ── 构建 LLM 上下文 ──
 
@@ -544,4 +600,26 @@ class PerceptionController:
         screen_ctx = self._screen.get_context()
         if screen_ctx:
             parts.append(screen_ctx)
+
+        # ── M2: 注入环境扫描观察 ──
+        if self._env_scanner and self._env_scanner_enabled:
+            try:
+                # 从 ScreenPerception 获取最新的窗口标题
+                fg_title = ""
+                if hasattr(self._screen, '_foreground_watcher'):
+                    fw = self._screen._foreground_watcher
+                    if fw:
+                        fg_title = getattr(fw, 'last_title', '') or ''
+                if fg_title:
+                    snapshot = self._env_scanner.scan(
+                        window_title=fg_title,
+                        screen_description=self._screen.last_description,
+                        time_context=self._time.get_context(),
+                    )
+                    obs = self._env_scanner.get_observation(snapshot)
+                    if obs:
+                        parts.append(f"[环境观察] {obs}")
+            except Exception as e:
+                logger.debug("M2 build_context observation failed: %s", e)
+
         return "\n".join(parts) if parts else ""
