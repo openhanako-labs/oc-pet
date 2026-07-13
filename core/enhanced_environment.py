@@ -257,6 +257,68 @@ def infer_app_category(app_name: str) -> str:
         if name in lower:
             return category
 
+    # 智能推断（基于关键词）
+    return _infer_category_from_keywords(lower)
+
+
+def _infer_category_from_keywords(app_name: str) -> str:
+    """根据应用名关键词智能推断类别
+    
+    自动识别常见应用模式，无需手动添加
+    """
+    # 开发工具关键词
+    dev_keywords = ['code', 'studio', 'pycharm', 'intellij', 'idea', 'eclipse', 
+                    'sublime', 'atom', 'vim', 'emacs', 'terminal', 'cmd', 'powershell',
+                    'git', 'bash', 'shell', 'console', 'debug', 'compiler', 'ide']
+    
+    # 写作工具关键词
+    writing_keywords = ['word', 'document', 'text', 'editor', 'note', 'notebook',
+                       'markdown', 'typewriter', 'writer', 'journal', 'diary']
+    
+    # 游戏关键词
+    gaming_keywords = ['game', 'play', 'steam', 'epic', 'gog', 'origin', 'battle',
+                      'xbox', 'playstation', 'nintendo', 'switch', 'ps4', 'ps5']
+    
+    # 通讯工具关键词
+    comm_keywords = ['chat', 'message', 'mail', 'email', 'outlook', 'thunderbird',
+                    'slack', 'discord', 'teams', 'zoom', 'skype', 'whatsapp',
+                    'telegram', 'signal', 'wechat', 'qq']
+    
+    # 媒体工具关键词
+    media_keywords = ['player', 'media', 'video', 'audio', 'music', 'photo', 'image',
+                     'browser', 'chrome', 'firefox', 'edge', 'safari', 'opera',
+                     'youtube', 'bilibili', 'netflix', 'spotify']
+    
+    # 设计工具关键词
+    design_keywords = ['design', 'figma', 'sketch', 'photoshop', 'illustrator',
+                      'lightroom', 'premiere', 'after effects', 'blender', 'maya',
+                      '3d', 'cad']
+    
+    # 检查关键词匹配
+    for keyword in dev_keywords:
+        if keyword in app_name:
+            return "development"
+    
+    for keyword in writing_keywords:
+        if keyword in app_name:
+            return "writing"
+    
+    for keyword in gaming_keywords:
+        if keyword in app_name:
+            return "gaming"
+    
+    for keyword in comm_keywords:
+        if keyword in app_name:
+            return "communication"
+    
+    for keyword in media_keywords:
+        if keyword in app_name:
+            return "media"
+    
+    for keyword in design_keywords:
+        if keyword in app_name:
+            return "design"
+    
     return "other"
 
 
