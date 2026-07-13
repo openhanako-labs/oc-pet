@@ -581,6 +581,7 @@ class PetWindow(QWidget):
 
     def _anim_tick(self):
         """帧推进 - 委托给 SpriteRenderer"""
+        logger.debug("_anim_tick called")
         self._renderer._anim_tick()
         self._anim_idx = self._renderer._anim_idx
 
@@ -1306,6 +1307,7 @@ class PetWindow(QWidget):
 
     def _break_check(self):
         """每 30 秒检查: idle 感知 + proactive 主动对话"""
+        logger.debug("_break_check called")
         now = time.time()
         idle_secs = now - self._last_interaction
 
@@ -1333,6 +1335,7 @@ class PetWindow(QWidget):
 
     def _foreground_tick(self):
         """每 2 秒检测前台窗口"""
+        logger.debug("_foreground_tick called")
         try:
             self._foreground_watcher.tick()
         except Exception:
