@@ -327,7 +327,6 @@ class SettingsDialog(QDialog):
         # 已安装列表
         self._pkg_list = QListWidget()
         self._pkg_list.setMinimumHeight(100)
-        self._refresh_package_list()
         pkg_group_layout.addWidget(self._pkg_list)
 
         # 操作按钮行
@@ -364,6 +363,9 @@ class SettingsDialog(QDialog):
         self._pkg_status_label = QLabel("就绪")
         self._pkg_status_label.setStyleSheet("color: #666688; font-size: 10px;")
         pkg_group_layout.addWidget(self._pkg_status_label)
+
+        # 刷新列表（在 _pkg_status_label 创建之后）
+        self._refresh_package_list()
 
         pkg_layout.addWidget(pkg_group)
         pkg_layout.addStretch()
