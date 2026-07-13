@@ -224,7 +224,7 @@ class ConversationEngine:
 
             if not reply:
                 reply = "…"
-            logger.info("LLM 回复: %s [emotion:%s]", reply[:60], emotion)
+            logger.info("LLM 回复: %s [emotion:%s]", reply, emotion)
         except Exception as e:
             logger.error("LLM 失败: %s", e)
             reply = "…（信号不太好，你再说一遍？）"
