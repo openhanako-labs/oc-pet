@@ -102,6 +102,7 @@ class PhysicsEngine:
         self._vx = 0.0
         self._facing_right = facing_right
         self._is_walking = True
+        # 立即设置朝向和动画
         self._cb.on_facing_change(facing_right)
         self._cb.set_anim('walk')
 
