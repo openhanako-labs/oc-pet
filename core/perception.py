@@ -287,6 +287,13 @@ class ScreenPerception:
         img = ImageGrab.grab()
         new_size = (img.width // SCREENSHOT_SCALE, img.height // SCREENSHOT_SCALE)
         img = img.resize(new_size)
+        
+        # 隐私保护：对截图进行模糊处理（降低敏感信息可读性）
+        try:
+            from PIL import ImageFilter
+            img = img.filter(ImageFilter.GaussianBlur(radius=2))
+        except Exception:
+            pass  # 模糊失败不影响正常流程
 
         # 变化检测：对比上一帧 hash
         frame_hash = _hashlib.md5(img.tobytes()).hexdigest()

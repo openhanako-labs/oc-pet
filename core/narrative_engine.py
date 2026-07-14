@@ -273,7 +273,7 @@ class NarrativeEngine:
         character_id: str = "ophelia",
         perception: "PerceptionController" = None,
         adapter: "HanakoPetAdapter" = None,
-        cooldown_minutes: float = 15.0,
+        cooldown_minutes: float = 5.0,  # 测试用，正式版改回 15.0
         max_recent_events: int = 20,
         prefer_local_template: bool = False,
         enabled_scenarios: list[str] | None = None,

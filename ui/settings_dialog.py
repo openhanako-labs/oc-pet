@@ -139,6 +139,32 @@ class SettingsDialog(QDialog):
             agent_btns.addWidget(self._toggle_agent_btn)
 
             agent_layout.addLayout(agent_btns)
+            
+            # ── 角色包选择（自由搭配）──
+            pkg_select_layout = QHBoxLayout()
+            pkg_select_layout.addWidget(QLabel("角色包:"))
+            
+            self._pkg_select = QComboBox()
+            self._pkg_select.addItem("默认", "default")
+            # 加载已安装的角色包
+            try:
+                from core.character_package import CharacterPackageManager
+                pkg_mgr = CharacterPackageManager()
+                installed = pkg_mgr.list_installed()
+                for pkg in installed:
+                    self._pkg_select.addItem(pkg.get("name", "未知"), pkg.get("id", ""))
+            except Exception:
+                pass
+            
+            # 设置当前选中
+            current_pkg = config.get("character_package", "default")
+            idx = self._pkg_select.findData(current_pkg)
+            if idx >= 0:
+                self._pkg_select.setCurrentIndex(idx)
+            
+            pkg_select_layout.addWidget(self._pkg_select)
+            agent_layout.addLayout(pkg_select_layout)
+            
             basic_layout.addWidget(agent_group)
 
         # 行为模式
@@ -1043,6 +1069,12 @@ class SettingsDialog(QDialog):
 
         # API .env
         self._save_env()
+
+        # 角色包选择
+        if hasattr(self, '_pkg_select'):
+            pkg_data = self._pkg_select.currentData()
+            if pkg_data:
+                c["character_package"] = pkg_data
 
         self.accept()
 
