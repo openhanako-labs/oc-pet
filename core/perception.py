@@ -226,6 +226,7 @@ class ScreenPerception:
     def __init__(self, interval: int = 120):
         self._interval = interval
         self._base_interval = interval
+        self._enabled = True  # 可通过配置禁用
         self._running = False
         self._thread = None
         self._last_description: str = ""
@@ -247,10 +248,22 @@ class ScreenPerception:
         return ""
 
     def start(self):
+        if not self._enabled:
+            logger.info("ScreenPerception disabled by config")
+            return
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         logger.info("ScreenPerception started | interval=%ds", self._interval)
+    
+    def disable(self):
+        """禁用屏幕感知"""
+        self._enabled = False
+        self.stop()
+    
+    def enable(self):
+        """启用屏幕感知"""
+        self._enabled = True
 
     def stop(self):
         self._running = False

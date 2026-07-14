@@ -159,6 +159,12 @@ class PetWindow(QWidget):
         self._perception = PerceptionController(self._current_char)
         # 屏幕内容→情绪回调
         self._perception.screen.on_emotion = self._on_screen_emotion
+        
+        # ── 屏幕感知开关（从配置读取）──
+        screen_cfg = self.config.get("screen", {})
+        if not screen_cfg.get("enabled", True):
+            self._perception.screen.disable()
+            logger.info("Screen perception disabled by config")
 
         # ── 鼠标交互追踪器 ──
         self._mouse_tracker = MouseTracker(self._get_window_rect)
