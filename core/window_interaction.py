@@ -137,9 +137,11 @@ class WindowInteraction:
             target_x = max(target_x, 0)
             target_y = max(target_y, 0)
         
-        # 移动桌宠
-        self._pet.move_to(target_x, target_y)
-        logger.info("Moved pet near window: (%d, %d)", target_x, target_y)
+        # 使用物理引擎平滑移动（不是瞬移）
+        current_x = self._pet.pos().x()
+        direction = 1 if target_x > current_x else -1
+        self._pet._physics.start_walk(target_x, facing_right=(direction > 0))
+        logger.info("Walking pet near window: (%d, %d)", target_x, target_y)
         
         return True
     
