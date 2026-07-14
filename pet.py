@@ -165,6 +165,10 @@ class PetWindow(QWidget):
         if not screen_cfg.get("enabled", True):
             self._perception.screen.disable()
             logger.info("Screen perception disabled by config")
+        # 截图模糊开关
+        if not screen_cfg.get("blur", True):
+            self._perception.screen._blur_enabled = False
+            logger.info("Screen blur disabled by config")
 
         # ── 鼠标交互追踪器 ──
         self._mouse_tracker = MouseTracker(self._get_window_rect)

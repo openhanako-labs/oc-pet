@@ -227,6 +227,7 @@ class ScreenPerception:
         self._interval = interval
         self._base_interval = interval
         self._enabled = True  # 可通过配置禁用
+        self._blur_enabled = True  # 截图模糊（隐私保护），可通过配置关闭
         self._running = False
         self._thread = None
         self._last_description: str = ""
@@ -289,10 +290,11 @@ class ScreenPerception:
         img = img.resize(new_size)
         
         # 隐私保护：对截图进行模糊处理（降低敏感信息可读性）
-        try:
-            from PIL import ImageFilter
-            img = img.filter(ImageFilter.GaussianBlur(radius=2))
-        except Exception:
+        if self._blur_enabled:
+            try:
+                from PIL import ImageFilter
+                img = img.filter(ImageFilter.GaussianBlur(radius=2))
+            except Exception:
             pass  # 模糊失败不影响正常流程
 
         # 变化检测：对比上一帧 hash

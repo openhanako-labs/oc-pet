@@ -268,6 +268,10 @@ class SettingsDialog(QDialog):
         self.screen_enabled.setChecked(config.get("screen", {}).get("enabled", True))
         screen_layout.addRow(self.screen_enabled)
 
+        self.screen_blur = QCheckBox("截图模糊（隐私保护）")
+        self.screen_blur.setChecked(config.get("screen", {}).get("blur", True))
+        screen_layout.addRow(self.screen_blur)
+
         self.screen_interval = QSpinBox()
         self.screen_interval.setRange(30, 600)
         self.screen_interval.setSuffix(" 秒")
@@ -1054,6 +1058,7 @@ class SettingsDialog(QDialog):
         # 屏幕感知
         c.setdefault("screen", {})["enabled"] = self.screen_enabled.isChecked()
         c["screen"]["interval"] = self.screen_interval.value()
+        c["screen"]["blur"] = self.screen_blur.isChecked()
 
         # 久坐提醒
         c.setdefault("break_reminder", {})["enabled"] = self.break_enabled.isChecked()
