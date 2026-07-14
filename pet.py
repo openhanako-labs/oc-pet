@@ -1367,27 +1367,21 @@ class PetWindow(QWidget):
                 logger.debug("Window interaction failed: %s", e)
 
     def _on_proactive_trigger(self, prompt_text: str):
-        """Proactive 调度器触发 -> 直接显示给用户（不经过对话引擎）"""
-        logger.info("Proactive message: %s", prompt_text)
+        """Proactive 调度器触发 -> 发送给模型生成回复 + TTS"""
+        logger.info("Proactive trigger: %s", prompt_text)
         
-        # 直接显示气泡（不发送给对话引擎）
-        self._show_bubble(prompt_text, emotion="happy")
+        # 将触发条件发送给对话引擎，让模型生成符合人格的回复
+        if self._engine:
+            # 包装成用户输入，让模型生成回复
+            proactive_prompt = f"[主动对话触发] {prompt_text}\n\n请根据你的人格设定，生成一段简短的、有个性的回应。不要复述触发消息，而是自然地表达你的想法。"
+            self._engine.send(proactive_prompt, character=self._current_char)
+            
+            # 显示思考中气泡
+            self._show_bubble("⏳ 思考中...", emotion="thinking")
+            self._is_thinking = True
         
         # 触发动画
         self._set_anim_seq("waving", emotion="happy")
-        
-        # TTS 播放（如果可用）
-        if self._tts_player and self._tts_player.is_ready:
-            try:
-                audio_path = self._tts_player.synthesize(
-                    prompt_text, 
-                    character_id=self._current_char,
-                    instruct="温柔"
-                )
-                if audio_path:
-                    self._tts_player.play(audio_path)
-            except Exception as e:
-                logger.warning("Proactive TTS failed: %s", e)
 
     # ── M1: 叙事事件回调 ──
 
