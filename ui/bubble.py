@@ -95,8 +95,9 @@ class ChatBubble(QWidget):
         else:
             self._typewriter_revealed = 0
 
-        if bright:
-            self._start_flash()
+        # 闪烁效果已移除（避免频繁闪烁）
+        # if bright:
+        #     self._start_flash()
 
         self.update()
 

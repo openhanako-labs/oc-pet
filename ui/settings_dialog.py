@@ -30,6 +30,13 @@ from PySide6.QtGui import QFont
 
 STYLE = """
 QDialog { background: #1a1820; color: #d4cec4; }
+QTabWidget::pane { border: 1px solid #3a3450; background: #1a1820; }
+QTabBar::tab {
+    background: #252330; color: #8888aa; border: 1px solid #3a3450;
+    padding: 8px 16px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px;
+}
+QTabBar::tab:selected { background: #3a3458; color: #d4cec4; border-bottom: 2px solid #88aacc; }
+QTabBar::tab:hover { background: #4a4478; color: #d4cec4; }
 QGroupBox {
     border: 1px solid #3a3450; border-radius: 8px;
     margin-top: 12px; padding-top: 16px;

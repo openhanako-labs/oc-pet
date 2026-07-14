@@ -180,9 +180,9 @@ class PhysicsEngine:
         # 惯性
         self._vx = self._vx * INERTIA_FACTOR + desired_vx * INTENT_FACTOR
 
-        # 朝向
-        if abs(self._vx) > 0.5:
-            facing = (self._vx > 0)
+        # 朝向 - 只有当速度足够大且方向明确时才更新
+        if abs(self._vx) > 1.0 and abs(dx) > 5:
+            facing = (dx > 0)  # 用目标方向而不是速度方向
             self._cb.on_facing_change(facing)
 
         # 死区
