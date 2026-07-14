@@ -180,7 +180,12 @@ class SchedulePerception:
 
 SCREENSHOT_SCALE = 4
 JPEG_QUALITY = 50
-VISION_PROMPT = "用一句话简短描述用户当前在屏幕上做什么（不超过20字）"
+VISION_PROMPT = """用一句话简短描述用户当前在屏幕上做什么（不超过20字）。
+
+注意隐私保护：
+- 不要读取或提及任何密码、验证码、密钥、token
+- 不要读取或提及银行账户、信用卡号、身份证号等敏感信息
+- 如果屏幕包含敏感信息，请描述为'用户正在处理私密信息'"""
 
 # 屏幕内容→情绪映射
 SCREEN_EMOTION_MAP = {

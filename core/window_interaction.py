@@ -128,20 +128,35 @@ class WindowInteraction:
         target_x = window.right + offset_x
         target_y = window.y + offset_y
         
-        # 确保不超出屏幕
+        # 确保不超出屏幕，并留出安全边距
         screen = self._pet.screen()
         if screen:
             screen_rect = screen.availableGeometry()
-            target_x = min(target_x, screen_rect.width() - self._pet.width())
-            target_y = min(target_y, screen_rect.height() - self._pet.height())
-            target_x = max(target_x, 0)
-            target_y = max(target_y, 0)
+            pet_w = self._pet.width()
+            pet_h = self._pet.height()
+            
+            # 安全边距（避免走到屏幕边缘）
+            margin = 50
+            target_x = min(target_x, screen_rect.width() - pet_w - margin)
+            target_y = min(target_y, screen_rect.height() - pet_h - margin)
+            target_x = max(target_x, margin)
+            target_y = max(target_y, margin)
+        
+        # 检查是否已经足够接近目标位置（避免反复移动）
+        current_pos = self._pet.pos()
+        current_x = current_pos.x()
+        current_y = current_pos.y()
+        distance = ((target_x - current_x) ** 2 + (target_y - current_y) ** 2) ** 0.5
+        
+        # 如果已经足够接近（100px内），则不移动
+        if distance < 100:
+            logger.debug("Already near window, skipping move")
+            return False
         
         # 使用物理引擎平滑移动（不是瞬移）
-        current_x = self._pet.pos().x()
         direction = 1 if target_x > current_x else -1
         self._pet._physics.start_walk(target_x, facing_right=(direction > 0))
-        logger.info("Walking pet near window: (%d, %d)", target_x, target_y)
+        logger.info("Walking pet near window: (%d, %d) from (%d, %d)", target_x, target_y, current_x, current_y)
         
         return True
     
