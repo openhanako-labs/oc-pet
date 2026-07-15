@@ -218,11 +218,26 @@ class SettingsDialog(QDialog):
         func_tab = QWidget()
         func_layout = QVBoxLayout(func_tab)
         func_layout.setContentsMargins(16, 16, 16, 16)
-        func_layout.setSpacing(20)
+        func_layout.setSpacing(16)
+
+        # 功能页子标签
+        func_sub_tabs = QTabWidget()
+        func_sub_tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #e5e2db; background: #ffffff; }
+            QTabBar::tab { background: #f7f6f3; color: #7a7a7a; padding: 6px 12px; }
+            QTabBar::tab:selected { background: #ffffff; color: #2c2c2c; border-bottom: 2px solid #4a90d9; }
+        """)
+
+        # ── 子标签 1: 语音 ──
+        voice_tab = QWidget()
+        voice_layout = QVBoxLayout(voice_tab)
+        voice_layout.setContentsMargins(12, 12, 12, 12)
+        voice_layout.setSpacing(16)
 
         # TTS
         tts_group = QGroupBox("语音输出")
         tts_layout = QFormLayout(tts_group)
+        tts_layout.setSpacing(10)
 
         self.tts_enabled = QCheckBox("启用 TTS 语音")
         self.tts_enabled.setChecked(self._config.get("tts", {}).get("enabled", True))
@@ -244,11 +259,34 @@ class SettingsDialog(QDialog):
         vol_row.addWidget(self.tts_vol_label)
         tts_layout.addRow("音量", vol_row)
 
-        func_layout.addWidget(tts_group)
+        voice_layout.addWidget(tts_group)
+
+        # ASR
+        asr_group = QGroupBox("语音输入")
+        asr_layout = QFormLayout(asr_group)
+        asr_layout.setSpacing(10)
+
+        self.asr_provider = QComboBox()
+        self.asr_provider.addItems(["本地 Whisper", "MIMO ASR", "API 调用"])
+        asr_prov_map = {"whisper_local": 0, "mimo": 1, "api": 2}
+        self.asr_provider.setCurrentIndex(asr_prov_map.get(self._config.get("asr", {}).get("provider", "whisper_local"), 0))
+        asr_layout.addRow("ASR 引擎", self.asr_provider)
+
+        voice_layout.addWidget(asr_group)
+        voice_layout.addStretch()
+
+        func_sub_tabs.addTab(voice_tab, "语音")
+
+        # ── 子标签 2: 交互 ──
+        interact_tab = QWidget()
+        interact_layout = QVBoxLayout(interact_tab)
+        interact_layout.setContentsMargins(12, 12, 12, 12)
+        interact_layout.setSpacing(16)
 
         # 主动对话
         pro_group = QGroupBox("主动对话")
         pro_layout = QFormLayout(pro_group)
+        pro_layout.setSpacing(10)
 
         self.pro_enabled = QCheckBox("启用主动搭话")
         self.pro_enabled.setChecked(self._config.get("proactive", {}).get("enabled", True))
@@ -260,11 +298,12 @@ class SettingsDialog(QDialog):
         self.pro_cooldown.setValue(self._config.get("proactive", {}).get("cooldown_minutes", 10))
         pro_layout.addRow("冷却时间", self.pro_cooldown)
 
-        func_layout.addWidget(pro_group)
+        interact_layout.addWidget(pro_group)
 
         # 屏幕感知
         screen_group = QGroupBox("屏幕感知")
         screen_layout = QFormLayout(screen_group)
+        screen_layout.setSpacing(10)
 
         self.screen_enabled = QCheckBox("启用屏幕截屏分析")
         self.screen_enabled.setChecked(self._config.get("screen", {}).get("enabled", True))
@@ -280,11 +319,12 @@ class SettingsDialog(QDialog):
         self.screen_interval.setValue(self._config.get("screen", {}).get("interval", 120))
         screen_layout.addRow("截屏间隔", self.screen_interval)
 
-        func_layout.addWidget(screen_group)
+        interact_layout.addWidget(screen_group)
 
         # 窗口互动
         wi_group = QGroupBox("窗口互动")
         wi_layout = QFormLayout(wi_group)
+        wi_layout.setSpacing(10)
 
         self.wi_enabled = QCheckBox("启用窗口互动")
         self.wi_enabled.setChecked(self._config.get("window_interaction", {}).get("enabled", True))
@@ -296,11 +336,12 @@ class SettingsDialog(QDialog):
         self.wi_cooldown.setValue(self._config.get("window_interaction", {}).get("cooldown_seconds", 30))
         wi_layout.addRow("冷却时间", self.wi_cooldown)
 
-        func_layout.addWidget(wi_group)
+        interact_layout.addWidget(wi_group)
 
         # 久坐提醒
         break_group = QGroupBox("久坐提醒")
         break_layout = QFormLayout(break_group)
+        break_layout.setSpacing(10)
 
         self.break_enabled = QCheckBox("启用久坐提醒")
         self.break_enabled.setChecked(self._config.get("break_reminder", {}).get("enabled", True))
@@ -318,23 +359,21 @@ class SettingsDialog(QDialog):
         self.break_cooldown.setValue(self._config.get("break_reminder", {}).get("cooldown_minutes", 30))
         break_layout.addRow("提醒间隔", self.break_cooldown)
 
-        func_layout.addWidget(break_group)
+        interact_layout.addWidget(break_group)
+        interact_layout.addStretch()
 
-        # ASR
-        asr_group = QGroupBox("语音输入")
-        asr_layout = QFormLayout(asr_group)
+        func_sub_tabs.addTab(interact_tab, "交互")
 
-        self.asr_provider = QComboBox()
-        self.asr_provider.addItems(["本地 Whisper", "MIMO ASR", "API 调用"])
-        asr_prov_map = {"whisper_local": 0, "mimo": 1, "api": 2}
-        self.asr_provider.setCurrentIndex(asr_prov_map.get(self._config.get("asr", {}).get("provider", "whisper_local"), 0))
-        asr_layout.addRow("ASR 引擎", self.asr_provider)
-
-        func_layout.addWidget(asr_group)
+        # ── 子标签 3: 记忆 ──
+        memory_tab = QWidget()
+        memory_layout = QVBoxLayout(memory_tab)
+        memory_layout.setContentsMargins(12, 12, 12, 12)
+        memory_layout.setSpacing(16)
 
         # 记忆注入
         mem_group = QGroupBox("记忆注入")
         mem_layout = QFormLayout(mem_group)
+        mem_layout.setSpacing(10)
 
         mem_mode = self._config.get("memory", {}).get("budget_mode", "auto")
         self.mem_mode = QComboBox()
@@ -357,9 +396,12 @@ class SettingsDialog(QDialog):
         self.mem_hint.setStyleSheet("color: #666688; font-size: 10px;")
         mem_layout.addRow(self.mem_hint)
 
-        func_layout.addWidget(mem_group)
+        memory_layout.addWidget(mem_group)
+        memory_layout.addStretch()
 
-        func_layout.addStretch()
+        func_sub_tabs.addTab(memory_tab, "记忆")
+
+        func_layout.addWidget(func_sub_tabs)
         tabs.addTab(func_tab, "功能")
 
         # ── Tab 2.5: 角色包管理 (M5) ──
