@@ -23,33 +23,33 @@ logger = logging.getLogger(__name__)
 HANAKO_PLUGINS = Path.home() / ".hanako" / "plugins"
 
 STYLE = """
-QDialog { background: #1a1a2e; color: #e0e0e0; }
+QDialog { background: #f7f6f3; color: #2c2c2c; }
 QTreeWidget {
-    background: #16213e; color: #e0e0e0;
-    border: 1px solid #2a2a4a; border-radius: 4px;
+    background: #ffffff; color: #2c2c2c;
+    border: 1px solid #e5e2db; border-radius: 4px;
     font-size: 13px;
 }
 QTreeWidget::item { padding: 4px 8px; }
-QTreeWidget::item:selected { background: #0f3460; }
-QTreeWidget::item:hover { background: #1f2b47; }
-QLabel { color: #8899aa; font-size: 11px; }
+QTreeWidget::item:selected { background: #e8f0fc; }
+QTreeWidget::item:hover { background: #f7f6f3; }
+QLabel { color: #7a7a7a; font-size: 11px; }
 QLineEdit {
-    background: #16213e; color: #e0e0e0;
-    border: 1px solid #2a2a4a; border-radius: 4px; padding: 6px 10px;
+    background: #ffffff; color: #2c2c2c;
+    border: 1px solid #e5e2db; border-radius: 4px; padding: 6px 10px;
 }
 QTextEdit {
-    background: #16213e; color: #aaaacc;
-    border: 1px solid #2a2a4a; border-radius: 4px; padding: 8px;
+    background: #ffffff; color: #2c2c2c;
+    border: 1px solid #e5e2db; border-radius: 4px; padding: 8px;
     font-size: 12px;
 }
 QPushButton {
-    background: #0f3460; color: #e0e0e0; border: none;
+    background: #4a90d9; color: #ffffff; border: none;
     border-radius: 4px; padding: 8px 20px; font-size: 13px;
 }
-QPushButton:hover { background: #1a4a7a; }
-QPushButton#send { background: #1a7a3a; }
-QPushButton#send:hover { background: #2a8a4a; }
-QPushButton:disabled { background: #1a1a2e; color: #555; }
+QPushButton:hover { background: #5fa0e9; }
+QPushButton#send { background: #34c759; }
+QPushButton#send:hover { background: #44d769; }
+QPushButton:disabled { background: #e5e2db; color: #7a7a7a; }
 """
 
 

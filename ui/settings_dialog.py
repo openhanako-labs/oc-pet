@@ -30,25 +30,26 @@ from config import load_config
 
 
 STYLE = """
-QDialog { background: #1a1a2e; color: #e0e0e0; }
-QTabWidget::pane { border: 1px solid #2a2a4a; background: #1a1a2e; }
+QDialog { background: #f7f6f3; color: #2c2c2c; }
+QTabWidget::pane { border: 1px solid #e5e2db; background: #ffffff; }
 QTabBar::tab {
-    background: #16213e; color: #8899aa; border: 1px solid #2a2a4a;
+    background: #f7f6f3; color: #7a7a7a; border: 1px solid #e5e2db;
     padding: 8px 16px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px;
 }
-QTabBar::tab:selected { background: #1a1a2e; color: #e0e0e0; border-bottom: 2px solid #0071e3; }
-QTabBar::tab:hover { background: #1f2b47; color: #e0e0e0; }
+QTabBar::tab:selected { background: #ffffff; color: #2c2c2c; border-bottom: 2px solid #4a90d9; }
+QTabBar::tab:hover { background: #ffffff; color: #2c2c2c; }
 QGroupBox {
-    border: 1px solid #2a2a4a; border-radius: 8px;
+    border: 1px solid #e5e2db; border-radius: 8px;
     margin-top: 12px; padding-top: 16px;
-    color: #8899aa; font-weight: bold;
+    color: #7a7a7a; font-weight: bold;
+    background: #ffffff;
 }
 QGroupBox::title { left: 12px; padding: 0 6px; }
-QLabel { color: #e0e0e0; }
-QCheckBox { color: #e0e0e0; }
+QLabel { color: #2c2c2c; }
+QCheckBox { color: #2c2c2c; }
 QComboBox {
-    background: #16213e; color: #e0e0e0;
-    border: 1px solid #2a2a4a; border-radius: 4px; padding: 4px 8px;
+    background: #ffffff; color: #2c2c2c;
+    border: 1px solid #e5e2db; border-radius: 4px; padding: 4px 8px;
     min-height: 22px;
 }
 QComboBox::drop-down {
@@ -61,33 +62,33 @@ QComboBox::down-arrow {
     image: none;
     border-left: 5px solid transparent;
     border-right: 5px solid transparent;
-    border-top: 6px solid #8899aa;
+    border-top: 6px solid #7a7a7a;
     margin-right: 6px;
 }
 QComboBox QAbstractItemView {
-    background: #16213e; color: #e0e0e0; selection-background-color: #0f3460;
-    border: 1px solid #2a2a4a;
+    background: #ffffff; color: #2c2c2c; selection-background-color: #e8f0fc;
+    border: 1px solid #e5e2db;
 }
-QSlider::groove:horizontal { height: 4px; background: #2a2a4a; border-radius: 2px; }
+QSlider::groove:horizontal { height: 4px; background: #e5e2db; border-radius: 2px; }
 QSlider::handle:horizontal {
-    background: #0071e3; width: 14px; height: 14px;
+    background: #4a90d9; width: 14px; height: 14px;
     margin: -5px 0; border-radius: 7px;
 }
 QPushButton {
-    background: #0f3460; color: #e0e0e0; border: none;
+    background: #4a90d9; color: #ffffff; border: none;
     border-radius: 4px; padding: 8px 24px; font-size: 13px;
 }
-QPushButton:hover { background: #1a4a7a; }
-QPushButton#save { background: #1a7a3a; }
-QPushButton#save:hover { background: #2a8a4a; }
-QPushButton#danger { background: #7a1a1a; }
-QPushButton#danger:hover { background: #8a2a2a; }
+QPushButton:hover { background: #5fa0e9; }
+QPushButton#save { background: #34c759; }
+QPushButton#save:hover { background: #44d769; }
+QPushButton#danger { background: #ff3b30; }
+QPushButton#danger:hover { background: #ff4b40; }
 QListWidget {
-    background: #16213e; color: #e0e0e0;
-    border: 1px solid #2a2a4a; border-radius: 4px;
+    background: #ffffff; color: #2c2c2c;
+    border: 1px solid #e5e2db; border-radius: 4px;
 }
 QListWidget::item { padding: 4px 8px; }
-QListWidget::item:selected { background: #0f3460; }
+QListWidget::item:selected { background: #e8f0fc; }
 """
 
 
@@ -216,8 +217,8 @@ class SettingsDialog(QDialog):
         # ── Tab 2: 功能设置 ──
         func_tab = QWidget()
         func_layout = QVBoxLayout(func_tab)
-        func_layout.setContentsMargins(8, 8, 8, 8)
-        func_layout.setSpacing(6)
+        func_layout.setContentsMargins(12, 12, 12, 12)
+        func_layout.setSpacing(16)
 
         # TTS
         tts_group = QGroupBox("语音输出")
@@ -364,8 +365,8 @@ class SettingsDialog(QDialog):
         # ── Tab 2.5: 角色包管理 (M5) ──
         pkg_tab = QWidget()
         pkg_layout = QVBoxLayout(pkg_tab)
-        pkg_layout.setContentsMargins(8, 8, 8, 8)
-        pkg_layout.setSpacing(6)
+        pkg_layout.setContentsMargins(12, 12, 12, 12)
+        pkg_layout.setSpacing(16)
 
         try:
             from core.character_package import CharacterPackageManager
@@ -412,6 +413,13 @@ class SettingsDialog(QDialog):
         pkg_btns_row2.addWidget(self._refresh_pkg_btn)
 
         pkg_group_layout.addLayout(pkg_btns_row2)
+
+        # 切换桌宠按钮
+        self._switch_pet_btn = QPushButton("🔄 切换选中桌宠")
+        self._switch_pet_btn.clicked.connect(self._switch_pet)
+        self._switch_pet_btn.setEnabled(False)
+        self._pkg_list.currentRowChanged.connect(lambda r: self._switch_pet_btn.setEnabled(r >= 0))
+        pkg_group_layout.addWidget(self._switch_pet_btn)
 
         # 状态标签
         self._pkg_status_label = QLabel("就绪")
@@ -749,6 +757,23 @@ class SettingsDialog(QDialog):
                 QMessageBox.warning(self, "提示", f"角色 '{agent_id}' 不存在")
         except Exception as e:
             QMessageBox.critical(self, "卸载失败", str(e))
+
+    def _switch_pet(self):
+        """切换到选中的桌宠"""
+        row = self._pkg_list.currentRow()
+        if row < 0:
+            return
+        
+        item = self._pkg_list.item(row)
+        agent_id = item.data(Qt.UserRole)
+        if not agent_id:
+            item_text = item.text()
+            agent_id = item_text.split(" ")[0]
+        
+        # 保存到配置
+        self._config["character"] = agent_id
+        self._pkg_status_label.setText(f"已切换到: {agent_id}")
+        QMessageBox.information(self, "切换成功", f"桌宠已切换为 '{agent_id}'，重启后生效")
 
     # ── Provider Catalog ──
 
