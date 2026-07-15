@@ -280,6 +280,22 @@ class SettingsDialog(QDialog):
 
         func_layout.addWidget(screen_group)
 
+        # 窗口互动
+        wi_group = QGroupBox("窗口互动")
+        wi_layout = QFormLayout(wi_group)
+
+        self.wi_enabled = QCheckBox("启用窗口互动")
+        self.wi_enabled.setChecked(config.get("window_interaction", {}).get("enabled", True))
+        wi_layout.addRow(self.wi_enabled)
+
+        self.wi_cooldown = QSpinBox()
+        self.wi_cooldown.setRange(5, 300)
+        self.wi_cooldown.setSuffix(" 秒")
+        self.wi_cooldown.setValue(config.get("window_interaction", {}).get("cooldown_seconds", 30))
+        wi_layout.addRow("冷却时间", self.wi_cooldown)
+
+        func_layout.addWidget(wi_group)
+
         # 久坐提醒
         break_group = QGroupBox("久坐提醒")
         break_layout = QFormLayout(break_group)
@@ -1059,6 +1075,10 @@ class SettingsDialog(QDialog):
         c.setdefault("screen", {})["enabled"] = self.screen_enabled.isChecked()
         c["screen"]["interval"] = self.screen_interval.value()
         c["screen"]["blur"] = self.screen_blur.isChecked()
+
+        # 窗口互动
+        c.setdefault("window_interaction", {})["enabled"] = self.wi_enabled.isChecked()
+        c["window_interaction"]["cooldown_seconds"] = self.wi_cooldown.value()
 
         # 久坐提醒
         c.setdefault("break_reminder", {})["enabled"] = self.break_enabled.isChecked()
