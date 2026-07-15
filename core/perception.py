@@ -404,11 +404,17 @@ class ScreenPerception:
                 return
 
     def _check_screen_proactive(self, description: str):
-        """根据屏幕内容触发主动对话"""
+        """根据屏幕内容触发主动对话（智能触发，不每次都触发）"""
+        import random
+        
         # 冷却检查（避免频繁触发）
         if not hasattr(self, '_last_screen_proactive'):
             self._last_screen_proactive = 0
         if time.time() - self._last_screen_proactive < 300:  # 5分钟冷却
+            return
+        
+        # 随机触发（30%概率，不每次都打扰）
+        if random.random() > 0.3:
             return
         
         desc_lower = description.lower()

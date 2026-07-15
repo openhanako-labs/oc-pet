@@ -93,9 +93,9 @@ QListWidget::item:selected { background: #0f3460; }
 class SettingsDialog(QDialog):
     """配置面板"""
 
-    def __init__(self, config: dict, pet_manager=None, parent=None):
+    def __init__(self, config: dict = None, pet_manager=None, parent=None):
         super().__init__(parent)
-        self._config = config
+        self._config = config or load_config()
         self._pet_manager = pet_manager
         self.setWindowTitle("设置")
         self.setMinimumSize(460, 600)
