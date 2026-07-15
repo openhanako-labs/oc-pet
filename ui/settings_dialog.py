@@ -158,7 +158,7 @@ class SettingsDialog(QDialog):
                 pass
             
             # 设置当前选中
-            current_pkg = config.get("character_package", "default")
+            current_pkg = self._config.get("character_package", "default")
             idx = self._pkg_select.findData(current_pkg)
             if idx >= 0:
                 self._pkg_select.setCurrentIndex(idx)
@@ -175,7 +175,7 @@ class SettingsDialog(QDialog):
         self.behavior = QComboBox()
         self.behavior.addItems(["静默 (quiet)", "正常 (normal)", "活跃 (active)", "黏人 (cling)"])
         beh_map = {"quiet": 0, "normal": 1, "active": 2, "cling": 3}
-        self.behavior.setCurrentIndex(beh_map.get(config.get("behavior", "normal"), 1))
+        self.behavior.setCurrentIndex(beh_map.get(self._config.get("behavior", "normal"), 1))
         beh_layout.addRow("模式", self.behavior)
 
         basic_layout.addWidget(beh_group)
@@ -186,7 +186,7 @@ class SettingsDialog(QDialog):
 
         self.opacity = QSlider(Qt.Horizontal)
         self.opacity.setRange(20, 100)
-        self.opacity.setValue(int(config.get("opacity", 1.0) * 100))
+        self.opacity.setValue(int(self._config.get("opacity", 1.0) * 100))
         self._opacity_label = QLabel(f"{self.opacity.value()}%")
         self.opacity.valueChanged.connect(lambda v: self._opacity_label.setText(f"{v}%"))
         op_row = QHBoxLayout()
@@ -196,7 +196,7 @@ class SettingsDialog(QDialog):
 
         self.scale = QSlider(Qt.Horizontal)
         self.scale.setRange(50, 200)
-        self.scale.setValue(int(config.get("scale", 1.0) * 100))
+        self.scale.setValue(int(self._config.get("scale", 1.0) * 100))
         self._scale_label = QLabel(f"{self.scale.value()}%")
         self.scale.valueChanged.connect(lambda v: self._scale_label.setText(f"{v}%"))
         sc_row = QHBoxLayout()
@@ -205,7 +205,7 @@ class SettingsDialog(QDialog):
         win_layout.addRow("缩放", sc_row)
 
         self.mouse_interaction = QCheckBox("鼠标交互（视线跟随 + 反应）")
-        self.mouse_interaction.setChecked(config.get("mouse_interaction", True))
+        self.mouse_interaction.setChecked(self._config.get("mouse_interaction", True))
         win_layout.addRow(self.mouse_interaction)
 
         basic_layout.addWidget(win_group)
@@ -224,18 +224,18 @@ class SettingsDialog(QDialog):
         tts_layout = QFormLayout(tts_group)
 
         self.tts_enabled = QCheckBox("启用 TTS 语音")
-        self.tts_enabled.setChecked(config.get("tts", {}).get("enabled", True))
+        self.tts_enabled.setChecked(self._config.get("tts", {}).get("enabled", True))
         tts_layout.addRow(self.tts_enabled)
 
         self.tts_provider = QComboBox()
         self.tts_provider.addItems(["本地 CosyVoice", "MIMO TTS", "API 调用"])
         tts_prov_map = {"cosyvoice": 0, "mimo": 1, "api": 2}
-        self.tts_provider.setCurrentIndex(tts_prov_map.get(config.get("tts", {}).get("provider", "cosyvoice"), 0))
+        self.tts_provider.setCurrentIndex(tts_prov_map.get(self._config.get("tts", {}).get("provider", "cosyvoice"), 0))
         tts_layout.addRow("TTS 引擎", self.tts_provider)
 
         self.tts_volume = QSlider(Qt.Horizontal)
         self.tts_volume.setRange(0, 100)
-        self.tts_volume.setValue(int(config.get("tts", {}).get("volume", 0.8) * 100))
+        self.tts_volume.setValue(int(self._config.get("tts", {}).get("volume", 0.8) * 100))
         self.tts_vol_label = QLabel(f"{self.tts_volume.value()}%")
         self.tts_volume.valueChanged.connect(lambda v: self.tts_vol_label.setText(f"{v}%"))
         vol_row = QHBoxLayout()
@@ -250,13 +250,13 @@ class SettingsDialog(QDialog):
         pro_layout = QFormLayout(pro_group)
 
         self.pro_enabled = QCheckBox("启用主动搭话")
-        self.pro_enabled.setChecked(config.get("proactive", {}).get("enabled", True))
+        self.pro_enabled.setChecked(self._config.get("proactive", {}).get("enabled", True))
         pro_layout.addRow(self.pro_enabled)
 
         self.pro_cooldown = QSpinBox()
         self.pro_cooldown.setRange(1, 120)
         self.pro_cooldown.setSuffix(" 分钟")
-        self.pro_cooldown.setValue(config.get("proactive", {}).get("cooldown_minutes", 10))
+        self.pro_cooldown.setValue(self._config.get("proactive", {}).get("cooldown_minutes", 10))
         pro_layout.addRow("冷却时间", self.pro_cooldown)
 
         func_layout.addWidget(pro_group)
@@ -266,17 +266,17 @@ class SettingsDialog(QDialog):
         screen_layout = QFormLayout(screen_group)
 
         self.screen_enabled = QCheckBox("启用屏幕截屏分析")
-        self.screen_enabled.setChecked(config.get("screen", {}).get("enabled", True))
+        self.screen_enabled.setChecked(self._config.get("screen", {}).get("enabled", True))
         screen_layout.addRow(self.screen_enabled)
 
         self.screen_blur = QCheckBox("截图模糊（隐私保护）")
-        self.screen_blur.setChecked(config.get("screen", {}).get("blur", True))
+        self.screen_blur.setChecked(self._config.get("screen", {}).get("blur", True))
         screen_layout.addRow(self.screen_blur)
 
         self.screen_interval = QSpinBox()
         self.screen_interval.setRange(30, 600)
         self.screen_interval.setSuffix(" 秒")
-        self.screen_interval.setValue(config.get("screen", {}).get("interval", 120))
+        self.screen_interval.setValue(self._config.get("screen", {}).get("interval", 120))
         screen_layout.addRow("截屏间隔", self.screen_interval)
 
         func_layout.addWidget(screen_group)
@@ -286,13 +286,13 @@ class SettingsDialog(QDialog):
         wi_layout = QFormLayout(wi_group)
 
         self.wi_enabled = QCheckBox("启用窗口互动")
-        self.wi_enabled.setChecked(config.get("window_interaction", {}).get("enabled", True))
+        self.wi_enabled.setChecked(self._config.get("window_interaction", {}).get("enabled", True))
         wi_layout.addRow(self.wi_enabled)
 
         self.wi_cooldown = QSpinBox()
         self.wi_cooldown.setRange(5, 300)
         self.wi_cooldown.setSuffix(" 秒")
-        self.wi_cooldown.setValue(config.get("window_interaction", {}).get("cooldown_seconds", 30))
+        self.wi_cooldown.setValue(self._config.get("window_interaction", {}).get("cooldown_seconds", 30))
         wi_layout.addRow("冷却时间", self.wi_cooldown)
 
         func_layout.addWidget(wi_group)
@@ -302,19 +302,19 @@ class SettingsDialog(QDialog):
         break_layout = QFormLayout(break_group)
 
         self.break_enabled = QCheckBox("启用久坐提醒")
-        self.break_enabled.setChecked(config.get("break_reminder", {}).get("enabled", True))
+        self.break_enabled.setChecked(self._config.get("break_reminder", {}).get("enabled", True))
         break_layout.addRow(self.break_enabled)
 
         self.break_idle = QSpinBox()
         self.break_idle.setRange(5, 120)
         self.break_idle.setSuffix(" 分钟")
-        self.break_idle.setValue(config.get("break_reminder", {}).get("idle_minutes", 15))
+        self.break_idle.setValue(self._config.get("break_reminder", {}).get("idle_minutes", 15))
         break_layout.addRow("空闲阈值", self.break_idle)
 
         self.break_cooldown = QSpinBox()
         self.break_cooldown.setRange(5, 120)
         self.break_cooldown.setSuffix(" 分钟")
-        self.break_cooldown.setValue(config.get("break_reminder", {}).get("cooldown_minutes", 30))
+        self.break_cooldown.setValue(self._config.get("break_reminder", {}).get("cooldown_minutes", 30))
         break_layout.addRow("提醒间隔", self.break_cooldown)
 
         func_layout.addWidget(break_group)
@@ -326,7 +326,7 @@ class SettingsDialog(QDialog):
         self.asr_provider = QComboBox()
         self.asr_provider.addItems(["本地 Whisper", "MIMO ASR", "API 调用"])
         asr_prov_map = {"whisper_local": 0, "mimo": 1, "api": 2}
-        self.asr_provider.setCurrentIndex(asr_prov_map.get(config.get("asr", {}).get("provider", "whisper_local"), 0))
+        self.asr_provider.setCurrentIndex(asr_prov_map.get(self._config.get("asr", {}).get("provider", "whisper_local"), 0))
         asr_layout.addRow("ASR 引擎", self.asr_provider)
 
         func_layout.addWidget(asr_group)
@@ -335,7 +335,7 @@ class SettingsDialog(QDialog):
         mem_group = QGroupBox("记忆注入")
         mem_layout = QFormLayout(mem_group)
 
-        mem_mode = config.get("memory", {}).get("budget_mode", "auto")
+        mem_mode = self._config.get("memory", {}).get("budget_mode", "auto")
         self.mem_mode = QComboBox()
         self.mem_mode.addItems(["自动（按模型上下文 1%）", "手动指定"])
         self.mem_mode.setCurrentIndex(0 if mem_mode == "auto" else 1)
@@ -345,7 +345,7 @@ class SettingsDialog(QDialog):
         self.mem_budget.setRange(200, 20000)
         self.mem_budget.setSuffix(" 字符")
         self.mem_budget.setSingleStep(200)
-        self.mem_budget.setValue(config.get("memory", {}).get("budget_chars", 3000))
+        self.mem_budget.setValue(self._config.get("memory", {}).get("budget_chars", 3000))
         self.mem_budget.setEnabled(mem_mode != "auto")
         self.mem_mode.currentIndexChanged.connect(
             lambda idx: self.mem_budget.setEnabled(idx == 1)
