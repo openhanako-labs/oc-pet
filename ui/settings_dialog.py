@@ -399,7 +399,7 @@ class SettingsDialog(QDialog):
         api_tab = QWidget()
         api_layout = QVBoxLayout(api_tab)
         api_layout.setContentsMargins(16, 16, 16, 16)
-        api_layout.setSpacing(16)
+        api_layout.setSpacing(20)
 
         # TTS 基础设置
         tts_basic_group = QGroupBox("语音输出")
@@ -435,6 +435,7 @@ class SettingsDialog(QDialog):
 
         api_group = QGroupBox("API 配置（留空 = 用 Hanako 默认）")
         api_form = QFormLayout(api_group)
+        api_form.setSpacing(12)
 
         # 读取 provider catalog 获取可用模型
         self._catalog_models = self._load_catalog_models()
