@@ -165,4 +165,4 @@ A: 在设置面板的"Agent 管理"中添加，或在 `~/.hanako/agents/` 下创
 
 ## 许可证
 
-MIT License
+[GNU AGPL v3](https://www.gnu.org/licenses/agpl-3.0.html)
