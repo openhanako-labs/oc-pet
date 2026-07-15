@@ -102,3 +102,68 @@ def get_vision_config() -> dict:
     if base_url and api_key:
         return {"base_url": base_url, "api_key": api_key, "model": model}
     return {}
+
+
+def save_env(
+    llm_provider: str = "",
+    llm_base_url: str = "",
+    llm_api_key: str = "",
+    llm_model: str = "",
+    tts_base_url: str = "",
+    tts_api_key: str = "",
+    tts_model: str = "",
+    tts_voice: str = "",
+    asr_base_url: str = "",
+    asr_api_key: str = "",
+    asr_model: str = "",
+    vision_base_url: str = "",
+    vision_api_key: str = "",
+    vision_model: str = "",
+):
+    """保存 API 配置到 .env 文件"""
+    lines = []
+    
+    # LLM
+    if llm_provider:
+        lines.append(f"LLM_PROVIDER={llm_provider}")
+    if llm_base_url:
+        lines.append(f"LLM_BASE_URL={llm_base_url}")
+    if llm_api_key:
+        lines.append(f"LLM_API_KEY={llm_api_key}")
+    if llm_model:
+        lines.append(f"LLM_MODEL={llm_model}")
+    
+    # TTS
+    if tts_base_url:
+        lines.append(f"TTS_BASE_URL={tts_base_url}")
+    if tts_api_key:
+        lines.append(f"TTS_API_KEY={tts_api_key}")
+    if tts_model:
+        lines.append(f"TTS_MODEL={tts_model}")
+    if tts_voice:
+        lines.append(f"TTS_VOICE={tts_voice}")
+    
+    # ASR
+    if asr_base_url:
+        lines.append(f"ASR_BASE_URL={asr_base_url}")
+    if asr_api_key:
+        lines.append(f"ASR_API_KEY={asr_api_key}")
+    if asr_model:
+        lines.append(f"ASR_MODEL={asr_model}")
+    
+    # Vision
+    if vision_base_url:
+        lines.append(f"VISION_BASE_URL={vision_base_url}")
+    if vision_api_key:
+        lines.append(f"VISION_API_KEY={vision_api_key}")
+    if vision_model:
+        lines.append(f"VISION_MODEL={vision_model}")
+    
+    # 写入文件
+    try:
+        ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        logger.info("Saved .env config")
+        # 重新加载
+        _load_env(force=True)
+    except Exception as e:
+        logger.error("Failed to save .env: %s", e)
