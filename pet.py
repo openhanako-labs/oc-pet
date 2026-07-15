@@ -260,7 +260,7 @@ class PetWindow(QWidget):
 
         # 状态
         self._visible = True
-        self._mousePassthrough = True
+        self._mousePassthrough = False
 
         self._setup_window()
         self._setup_ui()
@@ -489,6 +489,7 @@ class PetWindow(QWidget):
         self._renderer = SpriteRenderer(self)
         # 兼容别名(供 pet.py 其他部分使用)
         self.char_label = self._renderer.label
+        self.char_label.installEventFilter(self)
 
         # 启动画面
         self._startup_screen = StartupScreen(self)
