@@ -453,6 +453,10 @@ class PetWindow(QWidget):
         QTimer.singleShot(50, self._reposition_status_label)
         QTimer.singleShot(50, self._reposition_bubble)
 
+    def _apply_scale(self):
+        """应用缩放设置"""
+        self._recalc_geometry()
+
     def _rescale_current_frame(self):
         """把当前帧缩放到 char_label 大小"""
         frames = self._anim_frames.get(self._anim_seq, [])
@@ -813,6 +817,17 @@ class PetWindow(QWidget):
 
     def _apply_settings(self):
         """应用配置变更"""
+        # 窗口透明度和缩放
+        new_opacity = self.config.get("opacity", 1.0)
+        if hasattr(self, '_pet_opacity') and self._pet_opacity != new_opacity:
+            self._pet_opacity = new_opacity
+            self.setWindowOpacity(new_opacity)
+        
+        new_scale = self.config.get("scale", 1.0)
+        if hasattr(self, '_pet_scale') and self._pet_scale != new_scale:
+            self._pet_scale = new_scale
+            self._apply_scale()
+        
         # TTS
         tts_cfg = self.config.get("tts", {})
         if tts_cfg.get("enabled", True):
