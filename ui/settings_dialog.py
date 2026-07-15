@@ -1,226 +1,209 @@
-"""配置面板 - GUI 设置对话框
-
-可配置项：
-  - Agent 管理：启用/禁用桌宠、新增/移除
-  - TTS：开关、音量、引擎
-  - 行为模式：静默/正常/活跃/黏人
-  - 鼠标交互：开关
-  - 主动对话：开关、冷却时间
-  - 屏幕感知：开关、截屏间隔
-  - 语音输入：引擎选择
-  - 记忆注入：预算模式、上限
-  - 窗口：透明度、缩放
-  - 久坐提醒：开关、间隔
-  - API 配置：LLM/TTS/ASR
-  - 角色包管理 (M5)
-"""
-from __future__ import annotations
-
-import logging
+"""设置对话框"""
+import json
+import os
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QCheckBox, QSlider, QSpinBox, QComboBox,
-    QPushButton, QLabel, QGroupBox, QTabWidget, QWidget,
-    QLineEdit, QListWidget, QListWidgetItem, QAbstractItemView,
-    QMessageBox
+    QComboBox, QSlider, QCheckBox, QPushButton, QLabel, QGroupBox, QTabWidget, QWidget,
+    QLineEdit, QSpinBox, QDoubleSpinBox, QListWidget, QListWidgetItem, QInputDialog,
+    QMessageBox, QFileDialog, QScrollArea
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from config import load_config, save_config, DEFAULT_CONFIG
 
-
+# ── Apple-style 亮色主题 ──
 STYLE = """
-QDialog { background: #1a1820; color: #d4cec4; }
-QTabWidget::pane { border: 1px solid #3a3450; background: #1a1820; }
+QDialog { background: #f5f5f7; color: #1d1d1f; }
+QScrollArea { background: #f5f5f7; border: none; }
+QTabWidget::pane { border: 1px solid #d2d2d7; background: #ffffff; border-radius: 8px; }
 QTabBar::tab {
-    background: #252330; color: #8888aa; border: 1px solid #3a3450;
-    padding: 8px 16px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px;
+    background: #e8e8ed; color: #86868b; border: 1px solid #d2d2d7;
+    padding: 10px 20px; margin-right: 4px; border-top-left-radius: 8px; border-top-right-radius: 8px;
+    font-size: 13px;
 }
-QTabBar::tab:selected { background: #3a3458; color: #d4cec4; border-bottom: 2px solid #88aacc; }
-QTabBar::tab:hover { background: #4a4478; color: #d4cec4; }
+QTabBar::tab:selected { background: #ffffff; color: #1d1d1f; border-bottom: 2px solid #0071e3; font-weight: bold; }
+QTabBar::tab:hover { background: #f5f5f7; color: #1d1d1f; }
 QGroupBox {
-    border: 1px solid #3a3450; border-radius: 8px;
-    margin-top: 12px; padding-top: 16px;
-    color: #8888aa; font-weight: bold;
+    border: 1px solid #d2d2d7; border-radius: 12px;
+    margin-top: 20px; padding-top: 24px;
+    color: #86868b; font-weight: bold; font-size: 13px;
+    background: #ffffff;
 }
-QGroupBox::title { left: 12px; padding: 0 6px; }
-QLabel { color: #d4cec4; }
-QCheckBox { color: #d4cec4; }
+QGroupBox::title { left: 16px; padding: 0 10px; }
+QLabel { color: #1d1d1f; font-size: 13px; }
+QCheckBox { color: #1d1d1f; spacing: 10px; font-size: 13px; }
 QComboBox {
-    background: #252330; color: #d4cec4;
-    border: 1px solid #3a3450; border-radius: 4px; padding: 4px 8px;
-    min-height: 22px;
+    background: #ffffff; color: #1d1d1f;
+    border: 1px solid #d2d2d7; border-radius: 8px; padding: 8px 14px;
+    min-height: 32px; font-size: 13px;
 }
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: center right;
-    width: 20px;
+    width: 28px;
     border: none;
 }
 QComboBox::down-arrow {
     image: none;
     border-left: 5px solid transparent;
     border-right: 5px solid transparent;
-    border-top: 6px solid #8888aa;
-    margin-right: 6px;
+    border-top: 6px solid #86868b;
+    margin-right: 10px;
 }
 QComboBox QAbstractItemView {
-    background: #252330; color: #d4cec4; selection-background-color: #3a3458;
-    border: 1px solid #3a3450;
+    background: #ffffff; color: #1d1d1f; selection-background-color: #e8e8ed;
+    border: 1px solid #d2d2d7; border-radius: 8px;
 }
-QSlider::groove:horizontal { height: 4px; background: #3a3450; border-radius: 2px; }
+QSlider::groove:horizontal { height: 6px; background: #d2d2d7; border-radius: 3px; }
 QSlider::handle:horizontal {
-    background: #88aacc; width: 14px; height: 14px;
-    margin: -5px 0; border-radius: 7px;
+    background: #0071e3; width: 20px; height: 20px;
+    margin: -7px 0; border-radius: 10px;
 }
 QPushButton {
-    background: #3a3458; color: #d4cec4; border: none;
-    border-radius: 4px; padding: 8px 24px; font-size: 13px;
+    background: #0071e3; color: #ffffff; border: none;
+    border-radius: 8px; padding: 10px 28px; font-size: 13px; font-weight: bold;
 }
-QPushButton:hover { background: #4a4478; }
-QPushButton#save { background: #3a5844; }
-QPushButton#save:hover { background: #4a7844; }
-QPushButton#danger { background: #583a3a; }
-QPushButton#danger:hover { background: #784444; }
+QPushButton:hover { background: #0077ed; }
+QPushButton:pressed { background: #006edb; }
+QPushButton#save { background: #34c759; }
+QPushButton#save:hover { background: #30d158; }
+QPushButton#save:pressed { background: #2db84e; }
+QPushButton#danger { background: #ff3b30; }
+QPushButton#danger:hover { background: #ff453a; }
+QPushButton#danger:pressed { background: #e0342a; }
+QSpinBox, QDoubleSpinBox {
+    background: #ffffff; color: #1d1d1f;
+    border: 1px solid #d2d2d7; border-radius: 8px; padding: 8px 14px;
+    min-height: 32px; font-size: 13px;
+}
+QLineEdit {
+    background: #ffffff; color: #1d1d1f;
+    border: 1px solid #d2d2d7; border-radius: 8px; padding: 8px 14px;
+    min-height: 32px; font-size: 13px;
+}
+QLineEdit:focus { border: 2px solid #0071e3; }
 QListWidget {
-    background: #252330; color: #d4cec4;
-    border: 1px solid #3a3450; border-radius: 4px;
+    background: #ffffff; color: #1d1d1f;
+    border: 1px solid #d2d2d7; border-radius: 8px; font-size: 13px;
 }
-QListWidget::item { padding: 4px 8px; }
-QListWidget::item:selected { background: #3a3458; }
+QListWidget::item { padding: 8px 12px; border-radius: 6px; margin: 2px 4px; }
+QListWidget::item:selected { background: #e8e8ed; }
+QListWidget::item:hover { background: #f5f5f7; }
 """
 
 
 class SettingsDialog(QDialog):
-    """配置面板"""
+    """设置对话框"""
 
-    def __init__(self, config: dict, pet_manager=None, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._config = config
-        self._pet_manager = pet_manager
-        self.setWindowTitle("设置")
-        self.setMinimumSize(460, 600)
+        self.setWindowTitle("⚙️ 设置")
+        self.setMinimumWidth(520)
+        self._config = load_config()
         self.setStyleSheet(STYLE)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
+        layout.setSpacing(12)
+
+        # 创建滚动区域
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setContentsMargins(4, 4, 4, 4)
+        scroll_layout.setSpacing(8)
 
         tabs = QTabWidget()
-        layout.addWidget(tabs)
+        scroll_layout.addWidget(tabs)
 
         # ── Tab 1: 基础设置 ──
         basic_tab = QWidget()
         basic_layout = QVBoxLayout(basic_tab)
-        basic_layout.setContentsMargins(8, 8, 8, 8)
-        basic_layout.setSpacing(6)
+        basic_layout.setContentsMargins(12, 12, 12, 12)
+        basic_layout.setSpacing(10)
 
-        # Agent 管理
-        if pet_manager:
-            agent_group = QGroupBox("桌宠管理")
-            agent_layout = QVBoxLayout(agent_group)
-
-            self._agent_list = QListWidget()
-            self._agent_list.setMinimumHeight(120)
-            self._refresh_agent_list()
-            agent_layout.addWidget(self._agent_list)
-
-            agent_btns = QHBoxLayout()
-            self._add_agent_btn = QPushButton("+ 添加")
-            self._add_agent_btn.clicked.connect(self._add_agent)
-            agent_btns.addWidget(self._add_agent_btn)
-
-            self._remove_agent_btn = QPushButton("- 移除")
-            self._remove_agent_btn.setObjectName("danger")
-            self._remove_agent_btn.clicked.connect(self._remove_agent)
-            agent_btns.addWidget(self._remove_agent_btn)
-
-            self._toggle_agent_btn = QPushButton("启用/禁用")
-            self._toggle_agent_btn.clicked.connect(self._toggle_agent)
-            agent_btns.addWidget(self._toggle_agent_btn)
-
-            agent_layout.addLayout(agent_btns)
-            
-            # ── 角色包选择（自由搭配）──
-            pkg_select_layout = QHBoxLayout()
-            pkg_select_layout.addWidget(QLabel("角色包:"))
-            
-            self._pkg_select = QComboBox()
-            self._pkg_select.addItem("默认", "default")
-            # 加载已安装的角色包
-            try:
-                from core.character_package import CharacterPackageManager
-                pkg_mgr = CharacterPackageManager()
-                installed = pkg_mgr.list_installed()
-                for pkg in installed:
-                    self._pkg_select.addItem(pkg.get("name", "未知"), pkg.get("id", ""))
-            except Exception:
-                pass
-            
-            # 设置当前选中
-            current_pkg = config.get("character_package", "default")
-            idx = self._pkg_select.findData(current_pkg)
-            if idx >= 0:
-                self._pkg_select.setCurrentIndex(idx)
-            
-            pkg_select_layout.addWidget(self._pkg_select)
-            agent_layout.addLayout(pkg_select_layout)
-            
-            basic_layout.addWidget(agent_group)
-
-        # 行为模式
-        beh_group = QGroupBox("行为模式")
-        beh_layout = QFormLayout(beh_group)
+        # 行为
+        behavior_group = QGroupBox("行为模式")
+        behavior_layout = QFormLayout(behavior_group)
+        behavior_layout.setSpacing(12)
+        behavior_layout.setContentsMargins(16, 20, 16, 16)
 
         self.behavior = QComboBox()
-        self.behavior.addItems(["静默 (quiet)", "正常 (normal)", "活跃 (active)", "黏人 (cling)"])
-        beh_map = {"quiet": 0, "normal": 1, "active": 2, "cling": 3}
-        self.behavior.setCurrentIndex(beh_map.get(config.get("behavior", "normal"), 1))
-        beh_layout.addRow("模式", self.behavior)
+        self.behavior.addItems(["安静", "普通", "活跃", "粘人"])
+        mode_map = {"quiet": 0, "normal": 1, "active": 2, "cling": 3}
+        self.behavior.setCurrentIndex(mode_map.get(self._config.get("behavior", "normal"), 1))
+        behavior_layout.addRow("模式", self.behavior)
 
-        basic_layout.addWidget(beh_group)
+        basic_layout.addWidget(behavior_group)
 
         # 窗口
-        win_group = QGroupBox("窗口")
-        win_layout = QFormLayout(win_group)
+        window_group = QGroupBox("窗口")
+        window_layout = QFormLayout(window_group)
+        window_layout.setSpacing(12)
+        window_layout.setContentsMargins(16, 20, 16, 16)
 
         self.opacity = QSlider(Qt.Horizontal)
-        self.opacity.setRange(20, 100)
-        self.opacity.setValue(int(config.get("opacity", 1.0) * 100))
-        self._opacity_label = QLabel(f"{self.opacity.value()}%")
-        self.opacity.valueChanged.connect(lambda v: self._opacity_label.setText(f"{v}%"))
+        self.opacity.setRange(30, 100)
+        self.opacity.setValue(int(self._config.get("opacity", 1.0) * 100))
+        self.opacity_label = QLabel(f"{self.opacity.value()}%")
+        self.opacity.valueChanged.connect(lambda v: self.opacity_label.setText(f"{v}%"))
         op_row = QHBoxLayout()
         op_row.addWidget(self.opacity)
-        op_row.addWidget(self._opacity_label)
-        win_layout.addRow("透明度", op_row)
+        op_row.addWidget(self.opacity_label)
+        window_layout.addRow("透明度", op_row)
 
         self.scale = QSlider(Qt.Horizontal)
         self.scale.setRange(50, 200)
-        self.scale.setValue(int(config.get("scale", 1.0) * 100))
-        self._scale_label = QLabel(f"{self.scale.value()}%")
-        self.scale.valueChanged.connect(lambda v: self._scale_label.setText(f"{v}%"))
+        self.scale.setValue(int(self._config.get("scale", 1.0) * 100))
+        self.scale_label = QLabel(f"{self.scale.value()}%")
+        self.scale.valueChanged.connect(lambda v: self.scale_label.setText(f"{v}%"))
         sc_row = QHBoxLayout()
         sc_row.addWidget(self.scale)
-        sc_row.addWidget(self._scale_label)
-        win_layout.addRow("缩放", sc_row)
+        sc_row.addWidget(self.scale_label)
+        window_layout.addRow("缩放", sc_row)
 
-        self.mouse_interaction = QCheckBox("鼠标交互（视线跟随 + 反应）")
-        self.mouse_interaction.setChecked(config.get("mouse_interaction", True))
-        win_layout.addRow(self.mouse_interaction)
+        self.mouse_interaction = QCheckBox("鼠标交互 (视线跟随 + 反应)")
+        self.mouse_interaction.setChecked(self._config.get("mouse_interaction", True))
+        window_layout.addRow(self.mouse_interaction)
 
-        basic_layout.addWidget(win_group)
+        basic_layout.addWidget(window_group)
 
+        # 角色选择
+        char_group = QGroupBox("角色")
+        char_layout = QFormLayout(char_group)
+        char_layout.setSpacing(12)
+        char_layout.setContentsMargins(16, 20, 16, 16)
+
+        self.character = QComboBox()
+        from config import CHARACTER_INFO
+        for cid, info in CHARACTER_INFO.items():
+            self.character.addItem(info["name"], cid)
+        current_char = self._config.get("character", "yuexinmiao")
+        for i in range(self.character.count()):
+            if self.character.itemData(i) == current_char:
+                self.character.setCurrentIndex(i)
+                break
+        char_layout.addRow("当前角色", self.character)
+
+        basic_layout.addWidget(char_group)
         basic_layout.addStretch()
+
         tabs.addTab(basic_tab, "基础")
 
         # ── Tab 2: 功能设置 ──
         func_tab = QWidget()
         func_layout = QVBoxLayout(func_tab)
-        func_layout.setContentsMargins(8, 8, 8, 8)
-        func_layout.setSpacing(6)
+        func_layout.setContentsMargins(12, 12, 12, 12)
+        func_layout.setSpacing(10)
+
+        config = self._config
 
         # TTS
         tts_group = QGroupBox("语音输出")
         tts_layout = QFormLayout(tts_group)
+        tts_layout.setSpacing(12)
+        tts_layout.setContentsMargins(16, 20, 16, 16)
 
         self.tts_enabled = QCheckBox("启用 TTS 语音")
         self.tts_enabled.setChecked(config.get("tts", {}).get("enabled", True))
@@ -247,6 +230,8 @@ class SettingsDialog(QDialog):
         # 主动对话
         pro_group = QGroupBox("主动对话")
         pro_layout = QFormLayout(pro_group)
+        pro_layout.setSpacing(12)
+        pro_layout.setContentsMargins(16, 20, 16, 16)
 
         self.pro_enabled = QCheckBox("启用主动搭话")
         self.pro_enabled.setChecked(config.get("proactive", {}).get("enabled", True))
@@ -263,6 +248,8 @@ class SettingsDialog(QDialog):
         # 屏幕感知
         screen_group = QGroupBox("屏幕感知")
         screen_layout = QFormLayout(screen_group)
+        screen_layout.setSpacing(12)
+        screen_layout.setContentsMargins(16, 20, 16, 16)
 
         self.screen_enabled = QCheckBox("启用屏幕截屏分析")
         self.screen_enabled.setChecked(config.get("screen", {}).get("enabled", True))
@@ -283,6 +270,8 @@ class SettingsDialog(QDialog):
         # 窗口互动
         wi_group = QGroupBox("窗口互动")
         wi_layout = QFormLayout(wi_group)
+        wi_layout.setSpacing(12)
+        wi_layout.setContentsMargins(16, 20, 16, 16)
 
         self.wi_enabled = QCheckBox("启用窗口互动")
         self.wi_enabled.setChecked(config.get("window_interaction", {}).get("enabled", True))
@@ -299,6 +288,8 @@ class SettingsDialog(QDialog):
         # 久坐提醒
         break_group = QGroupBox("久坐提醒")
         break_layout = QFormLayout(break_group)
+        break_layout.setSpacing(12)
+        break_layout.setContentsMargins(16, 20, 16, 16)
 
         self.break_enabled = QCheckBox("启用久坐提醒")
         self.break_enabled.setChecked(config.get("break_reminder", {}).get("enabled", True))
@@ -321,6 +312,8 @@ class SettingsDialog(QDialog):
         # ASR
         asr_group = QGroupBox("语音输入")
         asr_layout = QFormLayout(asr_group)
+        asr_layout.setSpacing(12)
+        asr_layout.setContentsMargins(16, 20, 16, 16)
 
         self.asr_provider = QComboBox()
         self.asr_provider.addItems(["本地 Whisper", "MIMO ASR", "API 调用"])
@@ -333,6 +326,8 @@ class SettingsDialog(QDialog):
         # 记忆注入
         mem_group = QGroupBox("记忆注入")
         mem_layout = QFormLayout(mem_group)
+        mem_layout.setSpacing(12)
+        mem_layout.setContentsMargins(16, 20, 16, 16)
 
         mem_mode = config.get("memory", {}).get("budget_mode", "auto")
         self.mem_mode = QComboBox()
@@ -352,703 +347,327 @@ class SettingsDialog(QDialog):
         mem_layout.addRow("记忆上限", self.mem_budget)
 
         self.mem_hint = QLabel("agnes-2.0-flash (1M tokens) → 自动预算 6000 字符")
-        self.mem_hint.setStyleSheet("color: #666688; font-size: 10px;")
+        self.mem_hint.setStyleSheet("color: #86868b; font-size: 11px;")
         mem_layout.addRow(self.mem_hint)
 
         func_layout.addWidget(mem_group)
 
         func_layout.addStretch()
+
         tabs.addTab(func_tab, "功能")
 
         # ── Tab 2.5: 角色包管理 (M5) ──
         pkg_tab = QWidget()
         pkg_layout = QVBoxLayout(pkg_tab)
-        pkg_layout.setContentsMargins(8, 8, 8, 8)
-        pkg_layout.setSpacing(6)
+        pkg_layout.setContentsMargins(12, 12, 12, 12)
+        pkg_layout.setSpacing(10)
 
-        try:
-            from core.character_package import CharacterPackageManager
-            self._pkg_mgr = CharacterPackageManager()
-        except Exception as e:
-            self._pkg_mgr = None
-            logger = __import__('logging').getLogger(__name__)
-            logger.warning("CharacterPackageManager not available: %s", e)
+        pkg_group = QGroupBox("角色包")
+        pkg_inner = QVBoxLayout(pkg_group)
+        pkg_inner.setSpacing(12)
+        pkg_inner.setContentsMargins(16, 20, 16, 16)
 
-        pkg_group = QGroupBox("角色包管理 (M5)")
-        pkg_group_layout = QVBoxLayout(pkg_group)
+        # 当前角色包选择
+        pkg_form = QFormLayout()
+        pkg_form.setSpacing(12)
+        self._pkg_select = QComboBox()
+        self._load_packages()
+        pkg_form.addRow("当前角色包", self._pkg_select)
+        pkg_inner.addLayout(pkg_form)
 
-        # 已安装列表
+        # 角色包列表
         self._pkg_list = QListWidget()
-        self._pkg_list.setMinimumHeight(100)
-        pkg_group_layout.addWidget(self._pkg_list)
+        self._pkg_list.setMinimumHeight(120)
+        self._refresh_pkg_list()
+        pkg_inner.addWidget(self._pkg_list)
 
-        # 操作按钮行
-        pkg_btns_row1 = QHBoxLayout()
+        # 操作按钮
+        pkg_btns = QHBoxLayout()
+        pkg_btns.setSpacing(10)
+        btn_install = QPushButton("📦 安装角色包")
+        btn_install.clicked.connect(self._install_package)
+        btn_remove = QPushButton("🗑️ 移除选中")
+        btn_remove.setObjectName("danger")
+        btn_remove.clicked.connect(self._remove_package)
+        btn_refresh = QPushButton("🔄 刷新")
+        btn_refresh.clicked.connect(self._refresh_pkg_list)
+        pkg_btns.addWidget(btn_install)
+        pkg_btns.addWidget(btn_remove)
+        pkg_btns.addWidget(btn_refresh)
+        pkg_inner.addLayout(pkg_btns)
 
-        self._import_pkg_btn = QPushButton("📦 导入 .pet")
-        self._import_pkg_btn.clicked.connect(self._import_package)
-        pkg_btns_row1.addWidget(self._import_pkg_btn)
-
-        self._export_pkg_btn = QPushButton("💾 导出选中")
-        self._export_pkg_btn.clicked.connect(self._export_package)
-        self._export_pkg_btn.setEnabled(False)
-        self._pkg_list.currentRowChanged.connect(lambda r: self._export_pkg_btn.setEnabled(r >= 0))
-        pkg_btns_row1.addWidget(self._export_pkg_btn)
-
-        pkg_group_layout.addLayout(pkg_btns_row1)
-
-        pkg_btns_row2 = QHBoxLayout()
-
-        self._uninstall_pkg_btn = QPushButton("🗑️ 卸载选中")
-        self._uninstall_pkg_btn.setObjectName("danger")
-        self._uninstall_pkg_btn.clicked.connect(self._uninstall_package)
-        self._uninstall_pkg_btn.setEnabled(False)
-        self._pkg_list.currentRowChanged.connect(lambda r: self._uninstall_pkg_btn.setEnabled(r >= 0))
-        pkg_btns_row2.addWidget(self._uninstall_pkg_btn)
-
-        self._refresh_pkg_btn = QPushButton("🔄 刷新列表")
-        self._refresh_pkg_btn.clicked.connect(self._refresh_package_list)
-        pkg_btns_row2.addWidget(self._refresh_pkg_btn)
-
-        pkg_group_layout.addLayout(pkg_btns_row2)
-
-        # 状态标签
-        self._pkg_status_label = QLabel("就绪")
-        self._pkg_status_label.setStyleSheet("color: #666688; font-size: 10px;")
-        pkg_group_layout.addWidget(self._pkg_status_label)
-
-        # 刷新列表（在 _pkg_status_label 创建之后）
-        self._refresh_package_list()
+        self._pkg_status_label = QLabel("")
+        self._pkg_status_label.setStyleSheet("color: #86868b; font-size: 11px;")
+        pkg_inner.addWidget(self._pkg_status_label)
 
         pkg_layout.addWidget(pkg_group)
         pkg_layout.addStretch()
+
         tabs.addTab(pkg_tab, "角色包")
 
         # ── Tab 3: API 配置 ──
         api_tab = QWidget()
         api_layout = QVBoxLayout(api_tab)
-        api_layout.setContentsMargins(8, 8, 8, 8)
+        api_layout.setContentsMargins(12, 12, 12, 12)
+        api_layout.setSpacing(10)
 
-        api_group = QGroupBox("API 配置（留空 = 用 Hanako 默认）")
-        api_form = QFormLayout(api_group)
+        # LLM
+        llm_group = QGroupBox("LLM 大语言模型")
+        llm_layout = QFormLayout(llm_group)
+        llm_layout.setSpacing(12)
+        llm_layout.setContentsMargins(16, 20, 16, 16)
 
-        # 读取 provider catalog 获取可用模型
-        self._catalog_models = self._load_catalog_models()
+        self.llm_provider = QComboBox()
+        self.llm_provider.addItems(["deepseek", "openai", "openrouter", "siliconflow", "自定义"])
+        llm_layout.addRow("Provider", self.llm_provider)
 
-        # LLM Provider 快速选择
-        self.llm_provider_select = QComboBox()
-        self.llm_provider_select.addItem("手动填写", "")
-        for pid in self._catalog_models.get("providers", []):
-            self.llm_provider_select.addItem(pid, pid)
-        self.llm_provider_select.currentIndexChanged.connect(self._on_llm_provider_select)
-        api_form.addRow("LLM Provider", self.llm_provider_select)
+        self.llm_base_url = QLineEdit()
+        self.llm_base_url.setPlaceholderText("https://api.deepseek.com")
+        llm_layout.addRow("Base URL", self.llm_base_url)
 
-        self.llm_url = QLineEdit()
-        self.llm_url.setPlaceholderText("留空用 Hanako")
-        api_form.addRow("LLM 地址", self.llm_url)
-
-        self.llm_key = QLineEdit()
-        self.llm_key.setEchoMode(QLineEdit.Password)
-        self.llm_key.setPlaceholderText("留空用 Hanako")
-        api_form.addRow("LLM Key", self.llm_key)
+        self.llm_api_key = QLineEdit()
+        self.llm_api_key.setEchoMode(QLineEdit.Password)
+        self.llm_api_key.setPlaceholderText("sk-xxx")
+        llm_layout.addRow("API Key", self.llm_api_key)
 
         self.llm_model = QComboBox()
         self.llm_model.setEditable(True)
-        self.llm_model.addItems(self._catalog_models.get("llm", []))
-        self.llm_model.setCurrentText("")
-        self.llm_model.lineEdit().setPlaceholderText("留空用 Hanako")
-        api_form.addRow("LLM 模型", self.llm_model)
+        llm_layout.addRow("Model", self.llm_model)
 
-        # TTS API provider 快速选择
-        self.tts_provider_select = QComboBox()
-        self.tts_provider_select.addItem("手动填写", "")
-        for pid in self._catalog_models.get("providers", []):
-            self.tts_provider_select.addItem(pid, pid)
-        self.tts_provider_select.currentIndexChanged.connect(self._on_tts_provider_select)
-        api_form.addRow("TTS Provider", self.tts_provider_select)
+        self._load_env_to_ui()
+        self.llm_provider.currentIndexChanged.connect(self._on_provider_change)
 
-        self.tts_url = QLineEdit()
-        self.tts_url.setPlaceholderText("TTS API 地址")
-        api_form.addRow("TTS 地址", self.tts_url)
+        api_layout.addWidget(llm_group)
 
-        self.tts_key = QLineEdit()
-        self.tts_key.setEchoMode(QLineEdit.Password)
-        self.tts_key.setPlaceholderText("TTS Key")
-        api_form.addRow("TTS Key", self.tts_key)
+        # TTS API
+        tts_api_group = QGroupBox("TTS API (可选)")
+        tts_api_layout = QFormLayout(tts_api_group)
+        tts_api_layout.setSpacing(12)
+        tts_api_layout.setContentsMargins(16, 20, 16, 16)
+
+        self.tts_base_url = QLineEdit()
+        self.tts_base_url.setPlaceholderText("留空使用 Provider 默认")
+        tts_api_layout.addRow("Base URL", self.tts_base_url)
+
+        self.tts_api_key = QLineEdit()
+        self.tts_api_key.setEchoMode(QLineEdit.Password)
+        tts_api_layout.addRow("API Key", self.tts_api_key)
 
         self.tts_model = QComboBox()
         self.tts_model.setEditable(True)
-        self.tts_model.lineEdit().setPlaceholderText("tts-1（OpenAI 默认）")
-        api_form.addRow("TTS 模型", self.tts_model)
+        tts_api_layout.addRow("Model", self.tts_model)
 
         self.tts_voice = QComboBox()
         self.tts_voice.setEditable(True)
-        # MIMO + 通用音色
-        mimo_voices = ["mimo_default", "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean"]
-        openai_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
-        self.tts_voice.addItems(mimo_voices + ["─── OpenAI ───"] + openai_voices)
-        self.tts_voice.lineEdit().setPlaceholderText("选择或输入音色")
-        api_form.addRow("TTS 音色", self.tts_voice)
+        tts_api_layout.addRow("Voice", self.tts_voice)
 
-        # ASR API provider 快速选择
-        self.asr_provider_select = QComboBox()
-        self.asr_provider_select.addItem("手动填写", "")
-        for pid in self._catalog_models.get("providers", []):
-            self.asr_provider_select.addItem(pid, pid)
-        self.asr_provider_select.currentIndexChanged.connect(self._on_asr_provider_select)
-        api_form.addRow("ASR Provider", self.asr_provider_select)
+        api_layout.addWidget(tts_api_group)
 
-        self.asr_url = QLineEdit()
-        self.asr_url.setPlaceholderText("ASR API 地址")
-        api_form.addRow("ASR 地址", self.asr_url)
+        # ASR API
+        asr_api_group = QGroupBox("ASR API (可选)")
+        asr_api_layout = QFormLayout(asr_api_group)
+        asr_api_layout.setSpacing(12)
+        asr_api_layout.setContentsMargins(16, 20, 16, 16)
 
-        self.asr_key = QLineEdit()
-        self.asr_key.setEchoMode(QLineEdit.Password)
-        self.asr_key.setPlaceholderText("ASR Key")
-        api_form.addRow("ASR Key", self.asr_key)
+        self.asr_base_url = QLineEdit()
+        self.asr_base_url.setPlaceholderText("留空使用 Provider 默认")
+        asr_api_layout.addRow("Base URL", self.asr_base_url)
+
+        self.asr_api_key = QLineEdit()
+        self.asr_api_key.setEchoMode(QLineEdit.Password)
+        asr_api_layout.addRow("API Key", self.asr_api_key)
 
         self.asr_model = QComboBox()
         self.asr_model.setEditable(True)
-        self.asr_model.lineEdit().setPlaceholderText("whisper-1（OpenAI 默认）")
-        api_form.addRow("ASR 模型", self.asr_model)
+        asr_api_layout.addRow("Model", self.asr_model)
 
-        # ── 视觉模型配置（M2 屏幕感知专用）──
-        vision_separator = QLabel("─── 视觉模型（屏幕感知专用）───")
-        vision_separator.setStyleSheet("color: #888; font-weight: bold; margin-top: 10px;")
-        api_form.addRow(vision_separator)
+        api_layout.addWidget(asr_api_group)
 
-        vision_hint = QLabel("留空则使用 LLM 配置。建议使用支持图片的模型（如 agnes-2.0-flash、GPT-4V 等）")
-        vision_hint.setWordWrap(True)
-        vision_hint.setStyleSheet("color: #666; font-size: 11px;")
-        api_form.addRow(vision_hint)
+        # Vision API
+        vision_group = QGroupBox("Vision API (屏幕感知)")
+        vision_layout = QFormLayout(vision_group)
+        vision_layout.setSpacing(12)
+        vision_layout.setContentsMargins(16, 20, 16, 16)
 
-        # 视觉 Provider 快速选择
-        self.vision_provider_select = QComboBox()
-        self.vision_provider_select.addItem("手动填写", "")
-        for pid in self._catalog_models.get("providers", []):
-            self.vision_provider_select.addItem(pid, pid)
-        self.vision_provider_select.currentIndexChanged.connect(self._on_vision_provider_select)
-        api_form.addRow("视觉 Provider", self.vision_provider_select)
+        self.vision_base_url = QLineEdit()
+        self.vision_base_url.setPlaceholderText("https://api.siliconflow.cn")
+        vision_layout.addRow("Base URL", self.vision_base_url)
 
-        self.vision_url = QLineEdit()
-        self.vision_url.setPlaceholderText("视觉 API 地址（留空用 LLM 配置）")
-        api_form.addRow("视觉地址", self.vision_url)
-
-        self.vision_key = QLineEdit()
-        self.vision_key.setEchoMode(QLineEdit.Password)
-        self.vision_key.setPlaceholderText("视觉 API Key（留空用 LLM 配置）")
-        api_form.addRow("视觉 Key", self.vision_key)
+        self.vision_api_key = QLineEdit()
+        self.vision_api_key.setEchoMode(QLineEdit.Password)
+        vision_layout.addRow("API Key", self.vision_api_key)
 
         self.vision_model = QComboBox()
         self.vision_model.setEditable(True)
-        # 推荐的视觉模型
-        vision_models = ["agnes-2.0-flash", "gpt-4o", "gpt-4-vision-preview", "claude-3-opus", "claude-3-sonnet"]
-        self.vision_model.addItems(vision_models)
-        self.vision_model.setCurrentText("")
-        self.vision_model.lineEdit().setPlaceholderText("留空用 LLM 模型")
-        api_form.addRow("视觉模型", self.vision_model)
+        vision_layout.addRow("Model", self.vision_model)
 
-        api_layout.addWidget(api_group)
+        vision_hint = QLabel("留空则回退到 LLM 配置")
+        vision_hint.setStyleSheet("color: #86868b; font-size: 11px;")
+        vision_layout.addRow(vision_hint)
+
+        api_layout.addWidget(vision_group)
         api_layout.addStretch()
+
         tabs.addTab(api_tab, "API")
 
-        # 加载已有 .env 值
-        self._load_env_to_ui()
+        # 设置滚动区域
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
 
-        # ── 按钮 ──
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-
-        cancel_btn = QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(cancel_btn)
-
-        save_btn = QPushButton("保存")
+        # 按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+        save_btn = QPushButton("💾 保存")
         save_btn.setObjectName("save")
         save_btn.clicked.connect(self._save)
-        btn_row.addWidget(save_btn)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(save_btn)
+        layout.addLayout(btn_layout)
 
-        layout.addLayout(btn_row)
+    def _load_packages(self):
+        """扫描并加载可用的角色包"""
+        import sys
+        sys.path.insert(0, os.path.dirname(__file__))
+        try:
+            from core.character_package import CharacterPackageManager
+            mgr = CharacterPackageManager()
+            pkgs = mgr.list_installed()
 
-    # ── Agent 管理 ──
+            self._pkg_select.clear()
+            self._pkg_select.addItem("默认", "default")
+            for pkg in pkgs:
+                self._pkg_select.addItem(pkg.get("name", pkg.get("id", "?")), pkg.get("id"))
 
-    def _refresh_agent_list(self):
-        """刷新 agent 列表"""
-        if not self._pet_manager:
-            return
-        self._agent_list.clear()
-        for agent in self._pet_manager.agents:
-            agent_id = agent["id"]
-            enabled = agent.get("enabled", True)
-            status = "✅" if enabled else "❌"
-            has_sprites = self._pet_manager._has_sprites(agent_id)
-            sprite_tag = "🎨" if has_sprites else "⬜"
-            # 从 discovered 列表获取名称
-            name = agent_id
-            for d in self._pet_manager.discover_agents():
-                if d["id"] == agent_id:
-                    name = d["name"]
+            # 选中当前
+            current = self._config.get("character_package", "default")
+            for i in range(self._pkg_select.count()):
+                if self._pkg_select.itemData(i) == current:
+                    self._pkg_select.setCurrentIndex(i)
                     break
-            self._agent_list.addItem(f"{status} {sprite_tag} {name} ({agent_id})")
+        except Exception:
+            pass
 
-    def _add_agent(self):
-        """新增 agent"""
-        if not self._pet_manager:
-            return
-        discovered = self._pet_manager.discover_agents()
-        existing_ids = {a["id"] for a in self._pet_manager.agents}
-        available = [d for d in discovered if d["id"] not in existing_ids]
-        if not available:
-            QMessageBox.information(self, "提示", "所有 agent 都已添加")
-            return
-
-        # 简单选择对话框
-        from PySide6.QtWidgets import QInputDialog
-        items = [f"{d['name']} ({d['id']})" for d in available]
-        item, ok = QInputDialog.getItem(self, "添加桌宠", "选择 Agent:", items, 0, False)
-        if ok and item:
-            idx = items.index(item)
-            agent_id = available[idx]["id"]
-            self._pet_manager.add_agent(agent_id)
-            self._refresh_agent_list()
-
-    def _remove_agent(self):
-        """移除选中的 agent"""
-        if not self._pet_manager:
-            return
-        row = self._agent_list.currentRow()
-        if row < 0:
-            return
-        agent = self._pet_manager.agents[row]
-        reply = QMessageBox.question(
-            self, "确认", f"移除 {agent['id']} 的桌宠？\n（不会删除 Hanako agent 本身）",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            self._pet_manager.remove_agent(agent["id"])
-            self._refresh_agent_list()
-
-    def _toggle_agent(self):
-        """切换 agent 启用状态"""
-        if not self._pet_manager:
-            return
-        row = self._agent_list.currentRow()
-        if row < 0:
-            return
-        agent = self._pet_manager.agents[row]
-        new_state = not agent.get("enabled", True)
-        self._pet_manager.set_enabled(agent["id"], new_state)
-        self._refresh_agent_list()
-
-    # ── M5: 角色包管理 ──
-
-    def _refresh_package_list(self):
+    def _refresh_pkg_list(self):
         """刷新角色包列表"""
-        if not hasattr(self, '_pkg_list') or not self._pkg_mgr:
-            return
+        import sys
+        sys.path.insert(0, os.path.dirname(__file__))
         self._pkg_list.clear()
         try:
-            packages = self._pkg_mgr.list_installed_packages()
-            for pkg in packages:
-                version_tag = f" v{pkg.version}" if pkg.version and pkg.version != "?" else ""
-                desc_tag = f" - {pkg.description}" if pkg.description and pkg.description != "(无 manifest)" else ""
-                display_text = f"{pkg.name}{version_tag}{desc_tag}"
-                item = QListWidgetItem(display_text)
-                item.setData(Qt.UserRole, pkg.agent_id)  # 存储 agent_id
+            from core.character_package import CharacterPackageManager
+            mgr = CharacterPackageManager()
+            pkgs = mgr.list_installed()
+            for pkg in pkgs:
+                item = QListWidgetItem(f"🎭 {pkg.get('name', '?')} ({pkg.get('id', '?')})")
+                item.setData(Qt.UserRole, pkg.get("id"))
                 self._pkg_list.addItem(item)
-            self._pkg_status_label.setText(f"共 {len(packages)} 个已安装角色")
+            self._pkg_status_label.setText(f"共 {len(pkgs)} 个已安装角色包")
         except Exception as e:
-            self._pkg_status_label.setText(f"加载失败: {e}")
+            self._pkg_status_label.setText(f"扫描失败: {e}")
 
-    def _import_package(self):
-        """导入 .pet 文件"""
-        if not self._pkg_mgr:
-            QMessageBox.warning(self, "提示", "角色包管理器不可用")
-            return
-
-        from PySide6.QtWidgets import QFileDialog
-        path, _ = QFileDialog.getOpenFileName(
-            self, "导入角色包", "",
-            "角色包 (*.pet);;所有文件 (*)"
-        )
+    def _install_package(self):
+        """安装角色包（zip 文件）"""
+        path, _ = QFileDialog.getOpenFileName(self, "选择角色包", "", "ZIP 文件 (*.zip)")
         if not path:
             return
-
+        import sys
+        sys.path.insert(0, os.path.dirname(__file__))
         try:
-            result = self._pkg_mgr.install_package(path, overwrite=False)
-            self._pkg_status_label.setText(f"导入成功: {result}")
-            self._refresh_package_list()
-            QMessageBox.information(self, "成功", f"角色包安装成功！\n{result}")
+            from core.character_package import CharacterPackageManager
+            mgr = CharacterPackageManager()
+            result = mgr.install(path)
+            self._pkg_status_label.setText(f"✅ 安装成功: {result.get('name', '?')}")
+            self._refresh_pkg_list()
+            self._load_packages()
         except Exception as e:
-            QMessageBox.critical(self, "导入失败", str(e))
-            self._pkg_status_label.setText(f"导入失败: {e}")
+            self._pkg_status_label.setText(f"❌ 安装失败: {e}")
 
-    def _export_package(self):
-        """导出选中的角色为 .pet 文件"""
-        if not self._pkg_mgr:
+    def _remove_package(self):
+        """移除选中的角色包"""
+        item = self._pkg_list.currentItem()
+        if not item:
             return
-        row = self._pkg_list.currentRow()
-        if row < 0:
+        pkg_id = item.data(Qt.UserRole)
+        if not pkg_id:
             return
-
-        # 从 UserRole 数据获取 agent_id
-        item = self._pkg_list.item(row)
-        agent_id = item.data(Qt.UserRole)
-        if not agent_id:
-            # 兜底：从文本中提取
-            item_text = item.text()
-            agent_id = item_text.split(" ")[0]
-
-        from PySide6.QtWidgets import QFileDialog
-        out_path, _ = QFileDialog.getSaveFileName(
-            self, "导出角色包", f"{agent_id}.pet", "角色包 (*.pet)"
-        )
-        if not out_path:
-            return
-
-        try:
-            result_path = self._pkg_mgr.create_package(agent_id, output_path=out_path)
-            self._pkg_status_label.setText(f"导出成功: {result_path}")
-            QMessageBox.information(self, "成功", f"角色包已导出到:\n{result_path}")
-        except Exception as e:
-            QMessageBox.critical(self, "导出失败", str(e))
-            self._pkg_status_label.setText(f"导出失败: {e}")
-
-    def _uninstall_package(self):
-        """卸载选中的角色"""
-        if not self._pkg_mgr:
-            return
-        row = self._pkg_list.currentRow()
-        if row < 0:
-            return
-
-        # 从 UserRole 数据获取 agent_id
-        item = self._pkg_list.item(row)
-        agent_id = item.data(Qt.UserRole)
-        if not agent_id:
-            # 兜底：从文本中提取
-            item_text = item.text()
-            agent_id = item_text.split(" ")[0]
-
-        reply = QMessageBox.question(
-            self, "确认卸载",
-            f"确定要卸载角色 '{agent_id}' 吗？\n（精灵文件和配置将被删除）",
-            QMessageBox.Yes | QMessageBox.No,
-        )
+        reply = QMessageBox.question(self, "确认移除", f"确定要移除角色包 {pkg_id} 吗？",
+                                     QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
-
+        import sys
+        sys.path.insert(0, os.path.dirname(__file__))
         try:
-            success = self._pkg_mgr.uninstall_package(agent_id)
-            if success:
-                self._pkg_status_label.setText(f"已卸载: {agent_id}")
-                self._refresh_package_list()
-                QMessageBox.information(self, "成功", f"角色 '{agent_id}' 已卸载")
-            else:
-                QMessageBox.warning(self, "提示", f"角色 '{agent_id}' 不存在")
+            from core.character_package import CharacterPackageManager
+            mgr = CharacterPackageManager()
+            mgr.remove(pkg_id)
+            self._pkg_status_label.setText(f"✅ 已移除: {pkg_id}")
+            self._refresh_pkg_list()
+            self._load_packages()
         except Exception as e:
-            QMessageBox.critical(self, "卸载失败", str(e))
-
-    # ── Provider Catalog ──
-
-    @staticmethod
-    def _load_catalog_models() -> dict:
-        """从 provider-catalog.json 读取所有可用模型
-
-        Returns:
-            {"llm": [...], "providers": [...], "provider_map": {...},
-             "provider_configs": {"prov_id": {base_url, api_key, models}}}
-        """
-        import json
-        from pathlib import Path
-        catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
-        llm_models = []
-        provider_map = {}
-        provider_configs = {}
-        try:
-            if catalog_path.exists():
-                data = json.loads(catalog_path.read_text("utf-8"))
-                for prov_id, prov_cfg in data.get("providers", {}).items():
-                    provider_configs[prov_id] = {
-                        "base_url": prov_cfg.get("base_url", ""),
-                        "api_key": prov_cfg.get("api_key", ""),
-                    }
-                    for m in prov_cfg.get("models", []):
-                        if isinstance(m, dict):
-                            mid = m.get("id", "")
-                            if mid:
-                                label = f"{mid}  [{prov_id}]"
-                                llm_models.append(label)
-                                provider_map[label] = prov_id
-                        elif isinstance(m, str) and m:
-                            label = f"{m}  [{prov_id}]"
-                            llm_models.append(label)
-                            provider_map[label] = prov_id
-        except Exception:
-            pass
-        return {
-            "llm": sorted(set(llm_models)),
-            "providers": sorted(provider_configs.keys()),
-            "provider_map": provider_map,
-            "provider_configs": provider_configs,
-        }
-
-    def _on_llm_provider_select(self, idx: int):
-        """LLM provider 下拉选择 → 自动填充 URL、Key、模型列表"""
-        prov_id = self.llm_provider_select.itemData(idx)
-        if not prov_id:
-            return
-        cfg = self._catalog_models.get("provider_configs", {}).get(prov_id, {})
-        if cfg.get("base_url"):
-            self.llm_url.setText(cfg["base_url"])
-        if cfg.get("api_key"):
-            self.llm_key.setText(cfg["api_key"])
-        self.llm_model.clear()
-        models = []
-        try:
-            from pathlib import Path
-            import json
-            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
-            data = json.loads(catalog_path.read_text("utf-8"))
-            prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
-            for m in prov_models:
-                if isinstance(m, dict):
-                    models.append(m.get("id", ""))
-                elif isinstance(m, str):
-                    models.append(m)
-        except Exception:
-            pass
-        self.llm_model.addItems([m for m in models if m])
-
-    def _on_tts_provider_select(self, idx: int):
-        """TTS provider 下拉选择 → 自动填充 URL、Key、模型列表"""
-        prov_id = self.tts_provider_select.itemData(idx)
-        if not prov_id:
-            return
-        
-        # 只在 TTS 引擎是 "本地 CosyVoice"（索引 0）时才联动
-        # 如果用户已经手动选择了 "MIMO TTS" 或 "API 调用"，则不覆盖
-        if self.tts_provider.currentIndex() == 0:
-            # TTS 引擎下拉框选项：["本地 CosyVoice", "MIMO TTS", "API 调用"]，索引 2 是 "API 调用"
-            self.tts_provider.setCurrentIndex(2)
-        
-        cfg = self._catalog_models.get("provider_configs", {}).get(prov_id, {})
-        if cfg.get("base_url"):
-            self.tts_url.setText(cfg["base_url"])
-        if cfg.get("api_key"):
-            self.tts_key.setText(cfg["api_key"])
-        # 填充该 provider 的模型列表
-        self.tts_model.clear()
-        models = []
-        try:
-            from pathlib import Path
-            import json
-            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
-            data = json.loads(catalog_path.read_text("utf-8"))
-            prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
-            for m in prov_models:
-                if isinstance(m, dict):
-                    models.append(m.get("id", ""))
-                elif isinstance(m, str):
-                    models.append(m)
-        except Exception:
-            pass
-        self.tts_model.addItems([m for m in models if m])
-
-    def _on_asr_provider_select(self, idx: int):
-        """ASR provider 下拉选择 → 自动填充 URL、Key、模型列表"""
-        prov_id = self.asr_provider_select.itemData(idx)
-        if not prov_id:
-            return
-        
-        # 只在 ASR 引擎是 "本地 Whisper"（索引 0）时才联动
-        # 如果用户已经手动选择了 "MIMO ASR" 或 "API 调用"，则不覆盖
-        if self.asr_provider.currentIndex() == 0:
-            # ASR 引擎下拉框选项：["本地 Whisper", "MIMO ASR", "API 调用"]，索引 2 是 "API 调用"
-            self.asr_provider.setCurrentIndex(2)
-        
-        cfg = self._catalog_models.get("provider_configs", {}).get(prov_id, {})
-        if cfg.get("base_url"):
-            self.asr_url.setText(cfg["base_url"])
-        if cfg.get("api_key"):
-            self.asr_key.setText(cfg["api_key"])
-        self.asr_model.clear()
-        models = []
-        try:
-            from pathlib import Path
-            import json
-            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
-            data = json.loads(catalog_path.read_text("utf-8"))
-            prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
-            for m in prov_models:
-                if isinstance(m, dict):
-                    models.append(m.get("id", ""))
-                elif isinstance(m, str):
-                    models.append(m)
-        except Exception:
-            pass
-        self.asr_model.addItems([m for m in models if m])
-
-    def _on_vision_provider_select(self, idx: int):
-        """视觉 provider 下拉选择 → 自动填充 URL、Key、模型列表"""
-        prov_id = self.vision_provider_select.itemData(idx)
-        if not prov_id:
-            return
-        cfg = self._catalog_models.get("provider_configs", {}).get(prov_id, {})
-        if cfg.get("base_url"):
-            self.vision_url.setText(cfg["base_url"])
-        if cfg.get("api_key"):
-            self.vision_key.setText(cfg["api_key"])
-        # 保留推荐模型，追加该 provider 的模型列表
-        current_models = ["agnes-2.0-flash", "gpt-4o", "gpt-4-vision-preview", "claude-3-opus", "claude-3-sonnet"]
-        try:
-            from pathlib import Path
-            import json
-            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
-            data = json.loads(catalog_path.read_text("utf-8"))
-            prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
-            for m in prov_models:
-                if isinstance(m, dict):
-                    model_id = m.get("id", "")
-                elif isinstance(m, str):
-                    model_id = m
-                else:
-                    continue
-                if model_id and model_id not in current_models:
-                    current_models.append(model_id)
-        except Exception:
-            pass
-        self.vision_model.clear()
-        self.vision_model.addItems(current_models)
-
-    # ── .env 读写 ──
+            self._pkg_status_label.setText(f"❌ 移除失败: {e}")
 
     def _load_env_to_ui(self):
-        from env_config import ENV_PATH
-        if not ENV_PATH.exists():
-            return
-        try:
-            for line in ENV_PATH.read_text("utf-8").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, val = line.partition("=")
-                key = key.strip()
-                val = val.strip()
-                mapping = {
-                    "LLM_BASE_URL": self.llm_url,
-                    "LLM_API_KEY": self.llm_key,
-                    "TTS_BASE_URL": self.tts_url,
-                    "TTS_API_KEY": self.tts_key,
-                    "ASR_BASE_URL": self.asr_url,
-                    "ASR_API_KEY": self.asr_key,
-                }
-                if key in mapping:
-                    mapping[key].setText(val)
-                elif key == "LLM_PROVIDER" and val:
-                    for i in range(self.llm_provider_select.count()):
-                        if self.llm_provider_select.itemData(i) == val:
-                            self.llm_provider_select.setCurrentIndex(i)
-                            break
-                elif key == "TTS_PROVIDER" and val:
-                    for i in range(self.tts_provider_select.count()):
-                        if self.tts_provider_select.itemData(i) == val:
-                            self.tts_provider_select.setCurrentIndex(i)
-                            break
-                elif key == "ASR_PROVIDER" and val:
-                    for i in range(self.asr_provider_select.count()):
-                        if self.asr_provider_select.itemData(i) == val:
-                            self.asr_provider_select.setCurrentIndex(i)
-                            break
-                elif key == "LLM_MODEL" and val:
-                    # 先精确匹配，再按 model_id 前缀匹配
-                    idx = self.llm_model.findText(val)
-                    if idx < 0:
-                        for i in range(self.llm_model.count()):
-                            if self.llm_model.itemText(i).startswith(val):
-                                idx = i
-                                break
-                    if idx >= 0:
-                        self.llm_model.setCurrentIndex(idx)
-                    else:
-                        self.llm_model.setEditText(val)
-                elif key == "TTS_MODEL" and val:
-                    idx = self.tts_model.findText(val)
-                    if idx >= 0:
-                        self.tts_model.setCurrentIndex(idx)
-                    else:
-                        self.tts_model.setEditText(val)
-                elif key == "TTS_VOICE" and val:
-                    idx = self.tts_voice.findText(val)
-                    if idx >= 0:
-                        self.tts_voice.setCurrentIndex(idx)
-                    else:
-                        self.tts_voice.setEditText(val)
-                elif key == "ASR_MODEL" and val:
-                    idx = self.asr_model.findText(val)
-                    if idx >= 0:
-                        self.asr_model.setCurrentIndex(idx)
-                    else:
-                        self.asr_model.setEditText(val)
-                # 视觉模型配置
-                elif key == "VISION_PROVIDER" and val:
-                    for i in range(self.vision_provider_select.count()):
-                        if self.vision_provider_select.itemData(i) == val:
-                            self.vision_provider_select.setCurrentIndex(i)
-                            break
-                elif key == "VISION_BASE_URL" and val:
-                    self.vision_url.setText(val)
-                elif key == "VISION_API_KEY" and val:
-                    self.vision_key.setText(val)
-                elif key == "VISION_MODEL" and val:
-                    idx = self.vision_model.findText(val)
-                    if idx >= 0:
-                        self.vision_model.setCurrentIndex(idx)
-                    else:
-                        self.vision_model.setEditText(val)
-        except Exception:
-            pass
+        """从 .env 加载 API 配置到 UI"""
+        from env_config import get_llm_config, get_tts_api_config, get_asr_api_config, get_vision_config
+        llm = get_llm_config()
+        if llm:
+            self.llm_base_url.setText(llm.get("base_url", ""))
+            self.llm_api_key.setText(llm.get("api_key", ""))
+            model = llm.get("model", "")
+            if model:
+                self.llm_model.setCurrentText(model)
 
-    @staticmethod
-    def _strip_provider_suffix(text: str) -> str:
-        """去掉 'model_id  [provider]' 后缀，返回纯 model_id"""
-        import re
-        return re.sub(r"\s{2,}\[[^\]]+\]\s*$", "", text).strip()
+        tts = get_tts_api_config()
+        if tts:
+            self.tts_base_url.setText(tts.get("base_url", ""))
+            self.tts_api_key.setText(tts.get("api_key", ""))
+            self.tts_model.setCurrentText(tts.get("model", ""))
+            self.tts_voice.setCurrentText(tts.get("voice", ""))
+
+        asr = get_asr_api_config()
+        if asr:
+            self.asr_base_url.setText(asr.get("base_url", ""))
+            self.asr_api_key.setText(asr.get("api_key", ""))
+            self.asr_model.setCurrentText(asr.get("model", ""))
+
+        vision = get_vision_config()
+        if vision:
+            self.vision_base_url.setText(vision.get("base_url", ""))
+            self.vision_api_key.setText(vision.get("api_key", ""))
+            self.vision_model.setCurrentText(vision.get("model", ""))
+
+    def _on_provider_change(self, idx):
+        """Provider 切换时自动填充 Base URL"""
+        urls = {
+            0: "https://api.deepseek.com",
+            1: "https://api.openai.com",
+            2: "https://openrouter.ai/api",
+            3: "https://api.siliconflow.cn",
+        }
+        if idx in urls:
+            self.llm_base_url.setText(urls[idx])
 
     def _save_env(self):
-        from env_config import ENV_PATH
-        lines = [
-            "# OC Desktop Pet - API 配置",
-            "# 留空则回退到 Hanako 的默认配置",
-            "",
-            "# LLM",
-            f"LLM_PROVIDER={self.llm_provider_select.currentData() or ''}",
-            f"LLM_BASE_URL={self.llm_url.text().strip()}",
-            f"LLM_API_KEY={self.llm_key.text().strip()}",
-            f"LLM_MODEL={self._strip_provider_suffix(self.llm_model.currentText())}",
-            "",
-            "# TTS API",
-            f"TTS_PROVIDER={self.tts_provider_select.currentData() or ''}",
-            f"TTS_BASE_URL={self.tts_url.text().strip()}",
-            f"TTS_API_KEY={self.tts_key.text().strip()}",
-            f"TTS_MODEL={self.tts_model.currentText().strip() or 'tts-1'}",
-            f"TTS_VOICE={self.tts_voice.currentText().strip() or 'mimo_default'}",
-            "",
-            "# ASR API",
-            f"ASR_PROVIDER={self.asr_provider_select.currentData() or ''}",
-            f"ASR_BASE_URL={self.asr_url.text().strip()}",
-            f"ASR_API_KEY={self.asr_key.text().strip()}",
-            f"ASR_MODEL={self.asr_model.currentText().strip() or 'whisper-1'}",
-            "",
-            "# Vision API（屏幕感知专用，留空用 LLM 配置）",
-            f"VISION_PROVIDER={self.vision_provider_select.currentData() or ''}",
-            f"VISION_BASE_URL={self.vision_url.text().strip()}",
-            f"VISION_API_KEY={self.vision_key.text().strip()}",
-            f"VISION_MODEL={self.vision_model.currentText().strip()}",
-        ]
-        ENV_PATH.write_text("\n".join(lines) + "\n", "utf-8")
-
-    # ── 保存 ──
+        """保存 API 配置到 .env"""
+        from env_config import save_env
+        save_env(
+            llm_provider=self.llm_provider.currentText(),
+            llm_base_url=self.llm_base_url.text().strip(),
+            llm_api_key=self.llm_api_key.text().strip(),
+            llm_model=self.llm_model.currentText().strip(),
+            tts_base_url=self.tts_base_url.text().strip(),
+            tts_api_key=self.tts_api_key.text().strip(),
+            tts_model=self.tts_model.currentText().strip(),
+            tts_voice=self.tts_voice.currentText().strip(),
+            asr_base_url=self.asr_base_url.text().strip(),
+            asr_api_key=self.asr_api_key.text().strip(),
+            asr_model=self.asr_model.currentText().strip(),
+            vision_base_url=self.vision_base_url.text().strip(),
+            vision_api_key=self.vision_api_key.text().strip(),
+            vision_model=self.vision_model.currentText().strip(),
+        )
 
     def _save(self):
         c = self._config
