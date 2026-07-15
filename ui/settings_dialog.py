@@ -40,7 +40,7 @@ QTabBar::tab:selected { background: #ffffff; color: #2c2c2c; border-bottom: 2px 
 QTabBar::tab:hover { background: #ffffff; color: #2c2c2c; }
 QGroupBox {
     border: 1px solid #e5e2db; border-radius: 8px;
-    margin-top: 12px; padding-top: 16px;
+    margin-top: 16px; padding-top: 20px;
     color: #7a7a7a; font-weight: bold;
     background: #ffffff;
 }
@@ -114,7 +114,7 @@ class SettingsDialog(QDialog):
         basic_tab = QWidget()
         basic_layout = QVBoxLayout(basic_tab)
         basic_layout.setContentsMargins(8, 8, 8, 8)
-        basic_layout.setSpacing(6)
+        basic_layout.setSpacing(12)
 
         # Agent 管理
         if pet_manager:
@@ -217,8 +217,8 @@ class SettingsDialog(QDialog):
         # ── Tab 2: 功能设置 ──
         func_tab = QWidget()
         func_layout = QVBoxLayout(func_tab)
-        func_layout.setContentsMargins(12, 12, 12, 12)
-        func_layout.setSpacing(16)
+        func_layout.setContentsMargins(16, 16, 16, 16)
+        func_layout.setSpacing(20)
 
         # TTS
         tts_group = QGroupBox("语音输出")
