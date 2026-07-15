@@ -23,33 +23,37 @@ logger = logging.getLogger(__name__)
 HANAKO_PLUGINS = Path.home() / ".hanako" / "plugins"
 
 STYLE = """
-QDialog { background: #1a1820; color: #d4cec4; }
+QDialog { background: #f5f5f7; color: #1d1d1f; }
 QTreeWidget {
-    background: #252330; color: #d4cec4;
-    border: 1px solid #3a3450; border-radius: 6px;
+    background: #ffffff; color: #1d1d1f;
+    border: 1px solid #d2d2d7; border-radius: 8px;
     font-size: 13px;
 }
-QTreeWidget::item { padding: 4px 8px; }
-QTreeWidget::item:selected { background: #3a3458; }
-QTreeWidget::item:hover { background: #2a2540; }
-QLabel { color: #8888aa; font-size: 11px; }
+QTreeWidget::item { padding: 6px 10px; border-radius: 4px; margin: 2px 4px; }
+QTreeWidget::item:selected { background: #e8e8ed; }
+QTreeWidget::item:hover { background: #f5f5f7; }
+QLabel { color: #86868b; font-size: 11px; }
 QLineEdit {
-    background: #252330; color: #d4cec4;
-    border: 1px solid #3a3450; border-radius: 4px; padding: 6px 10px;
+    background: #ffffff; color: #1d1d1f;
+    border: 1px solid #d2d2d7; border-radius: 8px; padding: 8px 12px;
+    min-height: 32px; font-size: 13px;
 }
+QLineEdit:focus { border: 2px solid #0071e3; }
 QTextEdit {
-    background: #252330; color: #aaaacc;
-    border: 1px solid #3a3450; border-radius: 4px; padding: 8px;
-    font-size: 12px;
+    background: #ffffff; color: #1d1d1f;
+    border: 1px solid #d2d2d7; border-radius: 8px; padding: 10px;
+    font-size: 13px;
 }
 QPushButton {
-    background: #3a3458; color: #d4cec4; border: none;
-    border-radius: 4px; padding: 8px 20px; font-size: 13px;
+    background: #0071e3; color: #ffffff; border: none;
+    border-radius: 8px; padding: 10px 24px; font-size: 13px; font-weight: bold;
 }
-QPushButton:hover { background: #4a4478; }
-QPushButton#send { background: #3a5844; }
-QPushButton#send:hover { background: #4a7844; }
-QPushButton:disabled { background: #2a2530; color: #555; }
+QPushButton:hover { background: #0077ed; }
+QPushButton:pressed { background: #006edb; }
+QPushButton#send { background: #34c759; }
+QPushButton#send:hover { background: #30d158; }
+QPushButton#send:pressed { background: #2db84e; }
+QPushButton:disabled { background: #e8e8ed; color: #86868b; }
 """
 
 
@@ -209,8 +213,8 @@ class PluginPanel(QDialog):
             p_id = data["plugin"]
             self._detail.setHtml(
                 f"<b>{t['name']}</b> ({p_id})<br>"
-                f"<span style='color:#888'>{t['source']}</span><br>"
-                f"<span style='color:#aaa'>{t['desc']}</span>"
+                f"<span style='color:#86868b'>{t['source']}</span><br>"
+                f"<span style='color:#1d1d1f'>{t['desc']}</span>"
             )
             # 预填指令
             self._cmd_input.setText(f"帮我用{p_id}的{t['name']}功能")
@@ -223,7 +227,7 @@ class PluginPanel(QDialog):
             )
             self._detail.setHtml(
                 f"<b>{p['name']}</b> ({p['id']})<br>"
-                f"<span style='color:#888'>{p['desc']}</span><br><br>"
+                f"<span style='color:#86868b'>{p['desc']}</span><br><br>"
                 f"<b>工具 ({len(p['tools'])})：</b><br>{tools_list}"
             )
 

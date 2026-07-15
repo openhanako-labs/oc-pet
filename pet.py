@@ -789,7 +789,7 @@ class PetWindow(QWidget):
     def _open_settings(self):
         """打开配置面板"""
         from ui.settings_dialog import SettingsDialog
-        dialog = SettingsDialog(self.config, pet_manager=self._pet_manager, parent=self)
+        dialog = SettingsDialog(parent=self)
         if dialog.exec():
             self.config = dialog.get_config()
             save_config(self.config)
