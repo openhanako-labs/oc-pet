@@ -23,37 +23,33 @@ logger = logging.getLogger(__name__)
 HANAKO_PLUGINS = Path.home() / ".hanako" / "plugins"
 
 STYLE = """
-QDialog { background: #f5f5f7; color: #1d1d1f; }
+QDialog { background: #1a1a2e; color: #e0e0e0; }
 QTreeWidget {
-    background: #ffffff; color: #1d1d1f;
-    border: 1px solid #d2d2d7; border-radius: 8px;
+    background: #16213e; color: #e0e0e0;
+    border: 1px solid #2a2a4a; border-radius: 4px;
     font-size: 13px;
 }
-QTreeWidget::item { padding: 6px 10px; border-radius: 4px; margin: 2px 4px; }
-QTreeWidget::item:selected { background: #e8e8ed; }
-QTreeWidget::item:hover { background: #f5f5f7; }
-QLabel { color: #86868b; font-size: 11px; }
+QTreeWidget::item { padding: 4px 8px; }
+QTreeWidget::item:selected { background: #0f3460; }
+QTreeWidget::item:hover { background: #1f2b47; }
+QLabel { color: #8899aa; font-size: 11px; }
 QLineEdit {
-    background: #ffffff; color: #1d1d1f;
-    border: 1px solid #d2d2d7; border-radius: 8px; padding: 8px 12px;
-    min-height: 32px; font-size: 13px;
+    background: #16213e; color: #e0e0e0;
+    border: 1px solid #2a2a4a; border-radius: 4px; padding: 6px 10px;
 }
-QLineEdit:focus { border: 2px solid #0071e3; }
 QTextEdit {
-    background: #ffffff; color: #1d1d1f;
-    border: 1px solid #d2d2d7; border-radius: 8px; padding: 10px;
-    font-size: 13px;
+    background: #16213e; color: #aaaacc;
+    border: 1px solid #2a2a4a; border-radius: 4px; padding: 8px;
+    font-size: 12px;
 }
 QPushButton {
-    background: #0071e3; color: #ffffff; border: none;
-    border-radius: 8px; padding: 10px 24px; font-size: 13px; font-weight: bold;
+    background: #0f3460; color: #e0e0e0; border: none;
+    border-radius: 4px; padding: 8px 20px; font-size: 13px;
 }
-QPushButton:hover { background: #0077ed; }
-QPushButton:pressed { background: #006edb; }
-QPushButton#send { background: #34c759; }
-QPushButton#send:hover { background: #30d158; }
-QPushButton#send:pressed { background: #2db84e; }
-QPushButton:disabled { background: #e8e8ed; color: #86868b; }
+QPushButton:hover { background: #1a4a7a; }
+QPushButton#send { background: #1a7a3a; }
+QPushButton#send:hover { background: #2a8a4a; }
+QPushButton:disabled { background: #1a1a2e; color: #555; }
 """
 
 
