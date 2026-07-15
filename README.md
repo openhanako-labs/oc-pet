@@ -1,5 +1,9 @@
 # OC Desktop Pet
 
+
+![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)
+
+
 基于 PySide6 的 AI 桌面伴侣，深度集成 Hanako 生态。支持多桌宠并行运行，每个 Hanako agent 可独立拥有一个桌宠窗口。
 
 ## 功能
