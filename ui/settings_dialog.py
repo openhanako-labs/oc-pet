@@ -220,32 +220,6 @@ class SettingsDialog(QDialog):
         func_layout.setContentsMargins(16, 16, 16, 16)
         func_layout.setSpacing(20)
 
-        # TTS
-        tts_group = QGroupBox("语音输出")
-        tts_layout = QFormLayout(tts_group)
-
-        self.tts_enabled = QCheckBox("启用 TTS 语音")
-        self.tts_enabled.setChecked(self._config.get("tts", {}).get("enabled", True))
-        tts_layout.addRow(self.tts_enabled)
-
-        self.tts_provider = QComboBox()
-        self.tts_provider.addItems(["本地 CosyVoice", "MIMO TTS", "API 调用"])
-        tts_prov_map = {"cosyvoice": 0, "mimo": 1, "api": 2}
-        self.tts_provider.setCurrentIndex(tts_prov_map.get(self._config.get("tts", {}).get("provider", "cosyvoice"), 0))
-        tts_layout.addRow("TTS 引擎", self.tts_provider)
-
-        self.tts_volume = QSlider(Qt.Horizontal)
-        self.tts_volume.setRange(0, 100)
-        self.tts_volume.setValue(int(self._config.get("tts", {}).get("volume", 0.8) * 100))
-        self.tts_vol_label = QLabel(f"{self.tts_volume.value()}%")
-        self.tts_volume.valueChanged.connect(lambda v: self.tts_vol_label.setText(f"{v}%"))
-        vol_row = QHBoxLayout()
-        vol_row.addWidget(self.tts_volume)
-        vol_row.addWidget(self.tts_vol_label)
-        tts_layout.addRow("音量", vol_row)
-
-        func_layout.addWidget(tts_group)
-
         # 主动对话
         pro_group = QGroupBox("主动对话")
         pro_layout = QFormLayout(pro_group)
@@ -319,18 +293,6 @@ class SettingsDialog(QDialog):
         break_layout.addRow("提醒间隔", self.break_cooldown)
 
         func_layout.addWidget(break_group)
-
-        # ASR
-        asr_group = QGroupBox("语音输入")
-        asr_layout = QFormLayout(asr_group)
-
-        self.asr_provider = QComboBox()
-        self.asr_provider.addItems(["本地 Whisper", "MIMO ASR", "API 调用"])
-        asr_prov_map = {"whisper_local": 0, "mimo": 1, "api": 2}
-        self.asr_provider.setCurrentIndex(asr_prov_map.get(self._config.get("asr", {}).get("provider", "whisper_local"), 0))
-        asr_layout.addRow("ASR 引擎", self.asr_provider)
-
-        func_layout.addWidget(asr_group)
 
         # 记忆注入
         mem_group = QGroupBox("记忆注入")
@@ -436,7 +398,40 @@ class SettingsDialog(QDialog):
         # ── Tab 3: API 配置 ──
         api_tab = QWidget()
         api_layout = QVBoxLayout(api_tab)
-        api_layout.setContentsMargins(8, 8, 8, 8)
+        api_layout.setContentsMargins(16, 16, 16, 16)
+        api_layout.setSpacing(16)
+
+        # TTS 基础设置
+        tts_basic_group = QGroupBox("语音输出")
+        tts_basic_layout = QFormLayout(tts_basic_group)
+
+        self.tts_enabled = QCheckBox("启用 TTS 语音")
+        self.tts_enabled.setChecked(self._config.get("tts", {}).get("enabled", True))
+        tts_basic_layout.addRow(self.tts_enabled)
+
+        self.tts_volume = QSlider(Qt.Horizontal)
+        self.tts_volume.setRange(0, 100)
+        self.tts_volume.setValue(int(self._config.get("tts", {}).get("volume", 0.8) * 100))
+        self.tts_vol_label = QLabel(f"{self.tts_volume.value()}%")
+        self.tts_volume.valueChanged.connect(lambda v: self.tts_vol_label.setText(f"{v}%"))
+        vol_row = QHBoxLayout()
+        vol_row.addWidget(self.tts_volume)
+        vol_row.addWidget(self.tts_vol_label)
+        tts_basic_layout.addRow("音量", vol_row)
+
+        api_layout.addWidget(tts_basic_group)
+
+        # ASR 引擎选择
+        asr_basic_group = QGroupBox("语音输入")
+        asr_basic_layout = QFormLayout(asr_basic_group)
+
+        self.asr_provider = QComboBox()
+        self.asr_provider.addItems(["本地 Whisper", "MIMO ASR", "API 调用"])
+        asr_prov_map = {"whisper_local": 0, "mimo": 1, "api": 2}
+        self.asr_provider.setCurrentIndex(asr_prov_map.get(self._config.get("asr", {}).get("provider", "whisper_local"), 0))
+        asr_basic_layout.addRow("ASR 引擎", self.asr_provider)
+
+        api_layout.addWidget(asr_basic_group)
 
         api_group = QGroupBox("API 配置（留空 = 用 Hanako 默认）")
         api_form = QFormLayout(api_group)
