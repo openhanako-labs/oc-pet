@@ -42,7 +42,16 @@
 
 ### 主动对话
 - 🤖 **规则引擎** -- 对话空闲时长 + 前台窗口分类 → 自动搭话
-- 📊 **屏幕内容触发** -- （待实现）根据屏幕分析结果主动搭话
+- 📊 **屏幕内容触发** -- 根据屏幕分析结果主动搭话（检测到视频/游戏/代码等关键词）
+- ⏱️ **冷却控制** -- 屏幕内容触发 5 分钟冷却，避免频繁打扰
+
+### Hanako 联动
+- 🔗 **状态监控** -- 实时读取 Hanako 状态（TODO/通知/对话回复）
+- 💬 **对话同步** -- Hanako 有新回复时，桌宠显示气泡 + 播放 TTS
+- 📋 **工作状态** -- 检测到 Hanako 有 TODO 时，桌宠显示"工作中"状态
+- 🔔 **通知转发** -- Hanako 通知显示为桌宠消息气泡
+- 🌐 **多桌宠协作** -- 多个桌宠之间可以互相"聊天"/反应/关心/送礼物
+- 📁 **记忆读取** -- 读取 Hanako 的置顶记忆和最近对话记录
 
 ### 记忆系统
 - 💾 **记忆快照** -- 导出/导入 Agent 记忆，支持 overwrite/smart/skip_existing 合并
@@ -199,6 +208,9 @@ oc-pet/
 │   ├── perception.py           # 感知系统（时间/情绪/屏幕/主动对话）
 │   ├── narrative_engine.py     # 叙事引擎
 │   ├── window_interaction.py   # 窗口互动
+│   ├── hanako_bridge.py        # Hanako 联动（状态读取）
+│   ├── hanako_monitor.py       # Hanako 监控（TODO/通知/回复）
+│   ├── multi_pet_bridge.py     # 多桌宠协作（事件通信）
 │   ├── tool_registry.py        # 工具注册表
 │   ├── tool_executor.py        # 工具执行器
 │   ├── hanako_context.py       # 上下文构建
