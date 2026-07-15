@@ -180,7 +180,13 @@ class SchedulePerception:
 
 SCREENSHOT_SCALE = 4
 JPEG_QUALITY = 50
-VISION_PROMPT = """用一句话简短描述用户当前在屏幕上做什么（不超过20字）。
+VISION_PROMPT = """详细描述用户当前在屏幕上做什么（2-3句话）。
+
+要求：
+- 描述用户正在使用的应用、网站或内容
+- 如果是视频/音乐，描述内容主题
+- 如果是代码/文档，描述工作内容
+- 如果是聊天/社交，描述在做什么
 
 注意隐私保护：
 - 不要读取或提及任何密码、验证码、密钥、token
@@ -404,7 +410,7 @@ class ScreenPerception:
                 return
 
     def _check_screen_proactive(self, description: str):
-        """根据屏幕内容触发主动对话（智能触发，不每次都触发）"""
+        """根据屏幕内容触发主动对话（使用 LLM 生成个性化回复）"""
         import random
         
         # 冷却检查（避免频繁触发）
@@ -417,40 +423,20 @@ class ScreenPerception:
         if random.random() > 0.3:
             return
         
-        desc_lower = description.lower()
+        # 构造带桌宠人格的提示词
+        prompt = f"""你是一只可爱的桌宠，名叫月薪喵。你看到用户正在屏幕上做以下事情：
+
+{description}
+
+请用你的个性表达你的想法和感受，要求：
+- 不超过两句话
+- 语气活泼可爱
+- 可以表达关心、好奇或鼓励
+- 不要太啰嗦"""
         
-        # 屏幕内容 → 主动对话提示词映射
-        SCREEN_PROACTIVE_MAP = {
-            "视频": "你在看什么视频呀？",
-            "电影": "这部电影好看吗？",
-            "游戏": "在玩什么游戏呢？",
-            "代码": "代码写得怎么样了？",
-            "编程": "编程顺利吗？",
-            "开发": "开发进度如何？",
-            "音乐": "在听什么歌呢？",
-            "歌": "这首歌好听吗？",
-            "聊天": "在和谁聊天呀？",
-            "微信": "有新消息吗？",
-            "淘宝": "在逛淘宝呀？想买什么？",
-            "京东": "在逛京东呀？",
-            "bilibili": "在刷B站呀？",
-            "b站": "在刷B站呀？",
-            "抖音": "在刷抖音呀？",
-            "微博": "在刷微博呀？",
-            "新闻": "有什么新闻吗？",
-            "学习": "学习辛苦了！",
-            "作业": "作业写完了吗？",
-            "工作": "工作辛苦了！",
-            "ppt": "在做PPT呀？",
-            "文档": "在写文档呀？",
-        }
-        
-        for keyword, prompt in SCREEN_PROACTIVE_MAP.items():
-            if keyword in desc_lower:
-                logger.info("Screen proactive triggered: '%s' from '%s'", prompt, description[:30])
-                self._last_screen_proactive = time.time()
-                self.on_screen_proactive(prompt)
-                return
+        logger.info("Screen proactive prompt: %s", prompt[:100])
+        self._last_screen_proactive = time.time()
+        self.on_screen_proactive(prompt)
 
 
 # ════════════════════════════════════════════════════════════
