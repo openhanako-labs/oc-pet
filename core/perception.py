@@ -222,6 +222,8 @@ class ScreenPerception:
     """
 
     MAX_CONSECUTIVE_FAILURES = 3
+    BASE_BACKOFF_SECONDS = 60  # 基础退避时间
+    MAX_BACKOFF_SECONDS = 600  # 最大退避时间（10分钟）
 
     def __init__(self, interval: int = 120):
         self._interval = interval
@@ -381,11 +383,13 @@ class ScreenPerception:
             logger.warning("Vision analysis failed: %s", e)
             self._consecutive_failures += 1
 
-        # 失败退避：连续失败时拉长间隔
+        # 失败退避：指数退避（连续失败时拉长间隔）
         if self._consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
-            self._interval = self._base_interval * 3
-            logger.warning("ScreenPerception backoff: interval=%ds (failures=%d)",
-                         self._interval, self._consecutive_failures)
+            backoff = min(self.BASE_BACKOFF_SECONDS * (2 ** (self._consecutive_failures - self.MAX_CONSECUTIVE_FAILURES)),
+                         self.MAX_BACKOFF_SECONDS)
+            self._interval = self._base_interval + backoff
+            logger.warning("ScreenPerception backoff: interval=%ds (failures=%d, backoff=%ds)",
+                         self._interval, self._consecutive_failures, backoff)
 
     def _detect_screen_emotion(self, description: str):
         """根据屏幕内容触发情绪"""

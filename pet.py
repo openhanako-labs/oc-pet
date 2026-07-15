@@ -1370,12 +1370,20 @@ class PetWindow(QWidget):
         if going is not None:
             self._show_bubble("你回来啦~", emotion="happy")
         
-        # 窗口互动：桌宠靠近当前窗口
+        # 窗口互动：桌宠靠近当前窗口（带冷却）
         if hasattr(self, '_window_interaction'):
-            try:
-                self._window_interaction.move_near_window()
-            except Exception as e:
-                logger.debug("Window interaction failed: %s", e)
+            wi_config = self.config.get('window_interaction', {})
+            if wi_config.get('enabled', True):
+                cooldown = wi_config.get('cooldown_seconds', 30)
+                now = time.time()
+                if not hasattr(self, '_last_move_near'):
+                    self._last_move_near = 0
+                if now - self._last_move_near >= cooldown:
+                    try:
+                        self._window_interaction.move_near_window()
+                        self._last_move_near = now
+                    except Exception as e:
+                        logger.debug("Window interaction failed: %s", e)
 
     def _on_proactive_trigger(self, prompt_text: str):
         """Proactive 调度器触发 -> 发送给模型生成回复 + TTS"""

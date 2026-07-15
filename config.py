@@ -58,6 +58,14 @@ DEFAULT_CONFIG = {
                 "weight": 0.3
             }
         ]
+    },
+    "window_interaction": {
+        "enabled": True,
+        "cooldown_seconds": 30
+    },
+    "memory": {
+        "budget_chars": 0,
+        "budget_percent": 1.0
     }
 }
 

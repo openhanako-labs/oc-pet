@@ -57,14 +57,27 @@ class HanakoPetAdapter:
             if builtin and (not self._base_url or not self._api_key):
                 self._load_default_from_catalog()
 
-        # 记忆预算: 模型 context 的 1%, 上限 6000 字符, 下限 800
-        if self._max_context > 0:
-            self._memory_budget = max(800, min(6000, self._max_context // 100))
+        # 记忆预算: 优先使用用户配置，否则按模型 context 的 1% 计算
+        from config import load_config
+        config = load_config()
+        memory_config = config.get('memory', {})
+        
+        user_budget = memory_config.get('budget_chars', 0)
+        user_percent = memory_config.get('budget_percent', 1.0)
+        
+        if user_budget > 0:
+            # 用户指定了固定字符数
+            self._memory_budget = user_budget
+            logger.info("Memory budget: %d chars (user configured)", self._memory_budget)
+        elif self._max_context > 0:
+            # 按模型 context 的百分比计算
+            self._memory_budget = max(800, min(6000, int(self._max_context * user_percent / 100)))
+            logger.info("Memory budget: %d chars (%.1f%% of %s)",
+                         self._memory_budget, user_percent,
+                         f"{self._max_context:,}" if self._max_context else "unknown")
         else:
             self._memory_budget = 800
-        logger.info("Memory budget: %d chars (model context: %s)",
-                     self._memory_budget,
-                     f"{self._max_context:,}" if self._max_context else "unknown")
+            logger.info("Memory budget: %d chars (default)", self._memory_budget)
 
         # 构建 system prompt
         self._system_prompt = self._context.build_prompt()
