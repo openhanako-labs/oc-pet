@@ -376,6 +376,10 @@ class SettingsDialog(QDialog):
         pkg_inner.addLayout(pkg_form)
 
         # 角色包列表
+        self._pkg_status_label = QLabel("")
+        self._pkg_status_label.setStyleSheet("color: #86868b; font-size: 11px;")
+        pkg_inner.addWidget(self._pkg_status_label)
+
         self._pkg_list = QListWidget()
         self._pkg_list.setMinimumHeight(120)
         self._refresh_pkg_list()
@@ -395,10 +399,6 @@ class SettingsDialog(QDialog):
         pkg_btns.addWidget(btn_remove)
         pkg_btns.addWidget(btn_refresh)
         pkg_inner.addLayout(pkg_btns)
-
-        self._pkg_status_label = QLabel("")
-        self._pkg_status_label.setStyleSheet("color: #86868b; font-size: 11px;")
-        pkg_inner.addWidget(self._pkg_status_label)
 
         pkg_layout.addWidget(pkg_group)
         pkg_layout.addStretch()
@@ -539,7 +539,7 @@ class SettingsDialog(QDialog):
             self._pkg_select.clear()
             self._pkg_select.addItem("默认", "default")
             for pkg in pkgs:
-                self._pkg_select.addItem(pkg.get("name", pkg.get("id", "?")), pkg.get("id"))
+                self._pkg_select.addItem(pkg.name, pkg.agent_id)
 
             # 选中当前
             current = self._config.get("character_package", "default")
@@ -560,8 +560,9 @@ class SettingsDialog(QDialog):
             mgr = CharacterPackageManager()
             pkgs = mgr.list_installed_packages()
             for pkg in pkgs:
-                item = QListWidgetItem(f"🎭 {pkg.get('name', '?')} ({pkg.get('id', '?')})")
-                item.setData(Qt.UserRole, pkg.get("id"))
+                # PackageManifest 是类，不是 dict
+                item = QListWidgetItem(f"🎭 {pkg.name} ({pkg.agent_id})")
+                item.setData(Qt.UserRole, pkg.agent_id)
                 self._pkg_list.addItem(item)
             self._pkg_status_label.setText(f"共 {len(pkgs)} 个已安装角色包")
         except Exception as e:

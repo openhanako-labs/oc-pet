@@ -66,7 +66,9 @@ class PluginPanel(QDialog):
         self.setWindowTitle("插件")
         self.setMinimumSize(560, 480)
         self.setStyleSheet(STYLE)
-        self.setWindowOpacity(1.0)  # 确保完全不透明
+        # 确保完全不透明（不继承父窗口透明度）
+        self.setWindowOpacity(1.0)
+        self.setAttribute(Qt.WA_TranslucentBackground, False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
