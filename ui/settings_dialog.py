@@ -434,7 +434,6 @@ class SettingsDialog(QDialog):
         self.llm_model.setEditable(True)
         llm_layout.addRow("Model", self.llm_model)
 
-        self._load_env_to_ui()
         self.llm_provider.currentIndexChanged.connect(self._on_provider_change)
 
         api_layout.addWidget(llm_group)
@@ -509,6 +508,9 @@ class SettingsDialog(QDialog):
         api_layout.addStretch()
 
         tabs.addTab(api_tab, "API")
+
+        # 加载 .env 配置到 UI（所有 UI 元素创建完成后）
+        self._load_env_to_ui()
 
         # 设置滚动区域
         scroll.setWidget(scroll_widget)
