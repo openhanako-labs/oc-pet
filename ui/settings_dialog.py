@@ -40,7 +40,7 @@ QTabBar::tab:selected { background: #ffffff; color: #2c2c2c; border-bottom: 2px 
 QTabBar::tab:hover { background: #ffffff; color: #2c2c2c; }
 QGroupBox {
     border: 1px solid #e5e2db; border-radius: 8px;
-    margin-top: 20px; padding-top: 24px;
+    margin-top: 16px; padding-top: 20px;
     color: #7a7a7a; font-weight: bold;
     background: #ffffff;
 }
@@ -218,7 +218,7 @@ class SettingsDialog(QDialog):
         func_tab = QWidget()
         func_layout = QVBoxLayout(func_tab)
         func_layout.setContentsMargins(16, 16, 16, 16)
-        func_layout.setSpacing(30)
+        func_layout.setSpacing(20)
 
         # TTS
         tts_group = QGroupBox("语音输出")
