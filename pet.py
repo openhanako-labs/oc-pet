@@ -65,6 +65,7 @@ class PetWindow(QWidget):
     engine_status_signal = Signal(str)  # status message
     voice_status_signal = Signal(str)  # voice input status
     screen_emotion_signal = Signal(str, float)  # emotion, intensity
+    screen_proactive_signal = Signal(str)  # prompt
 
     def __init__(self, agent_id: str = "ophelia", sprite_dir: str = None,
                  position: dict = None, scale: float = 1.0,
@@ -159,6 +160,7 @@ class PetWindow(QWidget):
         self._perception = PerceptionController(self._current_char)
         # 屏幕内容→情绪回调
         self._perception.screen.on_emotion = self._on_screen_emotion
+        self._perception.screen.on_screen_proactive = self._on_screen_proactive
         
         # ── 屏幕感知开关（从配置读取）──
         screen_cfg = self.config.get("screen", {})
@@ -233,6 +235,7 @@ class PetWindow(QWidget):
         self.engine_status_signal.connect(self._do_engine_status)
         self.voice_status_signal.connect(self._do_voice_status)
         self.screen_emotion_signal.connect(self._do_screen_emotion)
+        self.screen_proactive_signal.connect(self._do_screen_proactive)
         self._engine.start()
 
         # ── 语音输入（ASR）──
@@ -1507,6 +1510,10 @@ class PetWindow(QWidget):
         """屏幕内容触发的情绪（从后台线程调用，通过信号转主线程）"""
         self.screen_emotion_signal.emit(emotion, intensity)
 
+    def _on_screen_proactive(self, prompt: str):
+        """屏幕内容触发主动对话（从后台线程调用，通过信号转主线程）"""
+        self.screen_proactive_signal.emit(prompt)
+
     def _do_screen_emotion(self, emotion: str, intensity: float):
         """在主线程处理屏幕情绪"""
         try:
@@ -1520,6 +1527,17 @@ class PetWindow(QWidget):
                 self._set_anim_seq(anim, emotion=emotion)
         except Exception:
             pass
+
+    def _do_screen_proactive(self, prompt: str):
+        """在主线程处理屏幕内容主动对话"""
+        try:
+            # 显示气泡
+            self._show_bubble(prompt, emotion="thinking")
+            # 发送给对话引擎生成回复
+            if hasattr(self, '_conversation_engine') and self._conversation_engine:
+                self._conversation_engine.send(prompt)
+        except Exception as e:
+            logger.debug("Screen proactive failed: %s", e)
 
     def _show_bubble(self, text: str, emotion: str = "neutral"):
         """显示消息气泡"""

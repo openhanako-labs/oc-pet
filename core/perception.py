@@ -238,6 +238,7 @@ class ScreenPerception:
         self._lock = threading.Lock()
         self.on_update: callable = lambda desc: None
         self.on_emotion: callable = lambda emotion, intensity: None
+        self.on_screen_proactive: callable = lambda prompt: None  # 屏幕内容触发主动对话
 
     @property
     def last_description(self) -> str:
@@ -370,6 +371,8 @@ class ScreenPerception:
                     self.on_update(content)
                     # 触发屏幕情绪
                     self._detect_screen_emotion(content)
+                    # 触发屏幕内容主动对话
+                    self._check_screen_proactive(content)
                 else:
                     logger.warning("Vision API returned empty content")
                     self._consecutive_failures += 1
@@ -398,6 +401,49 @@ class ScreenPerception:
             if keyword in desc_lower:
                 logger.info("Screen emotion triggered: %s (%.1f) from '%s'", emotion, intensity, description[:30])
                 self.on_emotion(emotion, intensity)
+                return
+
+    def _check_screen_proactive(self, description: str):
+        """根据屏幕内容触发主动对话"""
+        # 冷却检查（避免频繁触发）
+        if not hasattr(self, '_last_screen_proactive'):
+            self._last_screen_proactive = 0
+        if time.time() - self._last_screen_proactive < 300:  # 5分钟冷却
+            return
+        
+        desc_lower = description.lower()
+        
+        # 屏幕内容 → 主动对话提示词映射
+        SCREEN_PROACTIVE_MAP = {
+            "视频": "你在看什么视频呀？",
+            "电影": "这部电影好看吗？",
+            "游戏": "在玩什么游戏呢？",
+            "代码": "代码写得怎么样了？",
+            "编程": "编程顺利吗？",
+            "开发": "开发进度如何？",
+            "音乐": "在听什么歌呢？",
+            "歌": "这首歌好听吗？",
+            "聊天": "在和谁聊天呀？",
+            "微信": "有新消息吗？",
+            "淘宝": "在逛淘宝呀？想买什么？",
+            "京东": "在逛京东呀？",
+            "bilibili": "在刷B站呀？",
+            "b站": "在刷B站呀？",
+            "抖音": "在刷抖音呀？",
+            "微博": "在刷微博呀？",
+            "新闻": "有什么新闻吗？",
+            "学习": "学习辛苦了！",
+            "作业": "作业写完了吗？",
+            "工作": "工作辛苦了！",
+            "ppt": "在做PPT呀？",
+            "文档": "在写文档呀？",
+        }
+        
+        for keyword, prompt in SCREEN_PROACTIVE_MAP.items():
+            if keyword in desc_lower:
+                logger.info("Screen proactive triggered: '%s' from '%s'", prompt, description[:30])
+                self._last_screen_proactive = time.time()
+                self.on_screen_proactive(prompt)
                 return
 
 
