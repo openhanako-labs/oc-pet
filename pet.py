@@ -1548,8 +1548,10 @@ class PetWindow(QWidget):
         try:
             # 显示气泡
             self._show_bubble(prompt, emotion="thinking")
-            # 发送给对话引擎生成回复
-            if hasattr(self, '_conversation_engine') and self._conversation_engine:
+            # 发送给对话引擎生成回复（会触发 TTS）
+            if hasattr(self, '_engine') and self._engine:
+                self._engine.send(prompt)
+            elif hasattr(self, '_conversation_engine') and self._conversation_engine:
                 self._conversation_engine.send(prompt)
         except Exception as e:
             logger.debug("Screen proactive failed: %s", e)

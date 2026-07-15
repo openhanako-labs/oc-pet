@@ -534,7 +534,7 @@ class SettingsDialog(QDialog):
         try:
             from core.character_package import CharacterPackageManager
             mgr = CharacterPackageManager()
-            pkgs = mgr.list_installed()
+            pkgs = mgr.list_installed_packages()
 
             self._pkg_select.clear()
             self._pkg_select.addItem("默认", "default")
@@ -558,7 +558,7 @@ class SettingsDialog(QDialog):
         try:
             from core.character_package import CharacterPackageManager
             mgr = CharacterPackageManager()
-            pkgs = mgr.list_installed()
+            pkgs = mgr.list_installed_packages()
             for pkg in pkgs:
                 item = QListWidgetItem(f"🎭 {pkg.get('name', '?')} ({pkg.get('id', '?')})")
                 item.setData(Qt.UserRole, pkg.get("id"))
