@@ -18,6 +18,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 HANAKO_PLUGINS = Path.home() / ".hanako" / "plugins"
+LOCAL_PLUGINS = Path(__file__).parent.parent / "plugins"
 
 
 class ToolDef:
@@ -60,11 +61,34 @@ class ToolRegistry:
 
     def discover(self):
         """扫描所有插件目录，提取工具定义"""
-        if not HANAKO_PLUGINS.exists():
-            logger.warning("Plugin dir not found: %s", HANAKO_PLUGINS)
+        # 扫描 Hanako 全局插件 + oc-pet 本地插件
+        plugin_dirs = []
+        if HANAKO_PLUGINS.exists():
+            plugin_dirs.append(HANAKO_PLUGINS)
+        if LOCAL_PLUGINS.exists():
+            plugin_dirs.append(LOCAL_PLUGINS)
+            logger.info("Local plugins dir: %s", LOCAL_PLUGINS)
+
+        if not plugin_dirs:
+            logger.warning("No plugin dirs found")
             return
 
-        for plugin_dir in sorted(HANAKO_PLUGINS.iterdir()):
+        for base_dir in plugin_dirs:
+            self._scan_dir(base_dir)
+
+        logger.info("Tool registry: %d tools from plugins", len(self._tools))
+
+        # 构建名称映射（sanitized -> original）
+        import re
+        for name in self._tools:
+            clean = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+            if not clean or not clean[0].isalpha():
+                clean = 'tool_' + clean
+            self._name_map[clean] = name
+
+    def _scan_dir(self, plugins_dir: Path):
+        """扫描单个插件目录"""
+        for plugin_dir in sorted(plugins_dir.iterdir()):
             if not plugin_dir.is_dir():
                 continue
             manifest = plugin_dir / "manifest.json"
@@ -116,16 +140,6 @@ class ToolRegistry:
 
             except Exception as e:
                 logger.warning("Failed to parse plugin %s: %s", plugin_dir.name, e)
-
-        logger.info("Tool registry: %d tools from plugins", len(self._tools))
-
-        # 构建名称映射（sanitized -> original）
-        import re
-        for name in self._tools:
-            clean = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
-            if not clean or not clean[0].isalpha():
-                clean = 'tool_' + clean
-            self._name_map[clean] = name
 
     def _parse_tool_file(self, path: Path, plugin_id: str) -> Optional[ToolDef]:
         """从 JS 工具文件提取 name/description/parameters"""

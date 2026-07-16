@@ -1,0 +1,23 @@
+{
+  "id": "linjian-peek",
+  "name": "掌心窗 · 手机感知与控制",
+  "version": "1.0.0",
+  "description": "通过 linjian-peek 服务获取手机状态、截图、控制手机",
+  "contributes": {
+    "tools": [
+      "./tools/phone-life-state.js",
+      "./tools/phone-state.js",
+      "./tools/phone-peek-screen.js",
+      "./tools/phone-open-app.js",
+      "./tools/phone-home.js",
+      "./tools/phone-notification.js",
+      "./tools/phone-alarm.js",
+      "./tools/phone-status.js"
+    ]
+  },
+  "env": {
+    "LINJIAN_URL": "linjian-peek 服务地址（如 https://xxx.onrender.com）",
+    "LINJIAN_TOKEN": "认证 token",
+    "LINJIAN_DEFAULT_DEVICE": "默认设备 ID（默认 my-phone）"
+  }
+}
