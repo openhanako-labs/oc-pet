@@ -15,6 +15,7 @@ import base64
 import io
 import json
 import logging
+import os
 import random
 import threading
 import time
@@ -559,6 +560,21 @@ class PerceptionController:
         except Exception as e:
             logger.warning("Failed to init EnhancedEnvironmentScanner: %s", e)
 
+        # ── 手机活动感知（MacroDroid HTTP 上报） ──
+        self._phone_activity = None
+        self._phone_receiver = None
+        self._phone_enabled = True
+        try:
+            from core.phone_activity import PhoneActivityPerception
+            from core.phone_receiver import PhoneActivityReceiver
+            self._phone_activity = PhoneActivityPerception()
+            auth_token = os.environ.get('PHONE_AUTH_TOKEN', '')
+            self._phone_receiver = PhoneActivityReceiver(self._phone_activity, auth_token=auth_token)
+            self._phone_receiver.start()
+            logger.info("PhoneActivityReceiver started on port %d", self._phone_receiver.port)
+        except Exception as e:
+            logger.warning("Failed to init PhoneActivityReceiver: %s", e)
+
     @property
     def time(self) -> TimePerception:
         return self._time
@@ -583,6 +599,16 @@ class PerceptionController:
     def env_scanner(self):
         """M2: 暴露环境扫描器引用"""
         return self._env_scanner
+
+    @property
+    def phone_activity(self):
+        """手机活动感知层（MacroDroid 上报）"""
+        return self._phone_activity
+
+    @property
+    def phone_receiver(self):
+        """手机活动 HTTP 接收器"""
+        return self._phone_receiver
 
     # ── 屏幕 ──
 
@@ -707,5 +733,14 @@ class PerceptionController:
                         parts.append(f"[环境观察] {obs}")
             except Exception as e:
                 logger.debug("M2 build_context observation failed: %s", e)
+
+        # ── 手机活动感知 ──
+        if self._phone_activity and self._phone_enabled:
+            try:
+                phone_ctx = self._phone_activity.format_for_prompt()
+                if phone_ctx:
+                    parts.append(phone_ctx)
+            except Exception as e:
+                logger.debug("Phone activity build_context failed: %s", e)
 
         return "\n".join(parts) if parts else ""

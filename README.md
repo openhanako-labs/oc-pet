@@ -26,6 +26,8 @@
 - 📸 **屏幕感知** -- 定时截屏 + 视觉模型分析，注入对话上下文
 - 🎭 **屏幕情绪检测** -- 从屏幕内容推断用户情绪（如"看视频" → happy）
 - 🪟 **前台窗口监听** -- 检测用户正在使用的应用，用于窗口互动和主动对话触发
+- 📱 **手机活动感知** -- MacroDroid 上报前台 App 切换，自动分类（娱乐/通讯/音乐/购物/阅读/工作/游戏）并注入上下文
+- 🔌 **掌心窗集成** -- 通过 linjian-peek 服务获取手机截图、生活状态（电量/网络）、远程控制（打开App/通知/闹钟）
 
 ### 叙事引擎
 - 📝 **微事件生成** -- 空闲时自动生成小事件（观察/关心/笑话/提问/问候）
@@ -52,6 +54,30 @@
 - 🔔 **通知转发** -- Hanako 通知显示为桌宠消息气泡
 - 🌐 **多桌宠协作** -- 多个桌宠之间可以互相"聊天"/反应/关心/送礼物
 - 📁 **记忆读取** -- 读取 Hanako 的置顶记忆和最近对话记录
+
+### 手机感知（双通道）
+
+桌宠通过两条独立通道感知手机状态，统一注入 LLM 上下文：
+
+**通道 1：MacroDroid 直连（常态感知）**
+- 📱 **前台 App 上报** -- MacroDroid 规则检测应用切换，HTTP POST 到桌宠本地接收器
+- 🏷️ **自动分类** -- 7 类应用（娱乐/通讯/音乐/购物/阅读/工作/游戏）+ 情绪映射
+- 📊 **活动摘要** -- "最近1小时使用了 小红书(3次)、微信(2次)"
+- ⏱️ **空闲检测** -- 距上次手机活动的分钟数
+- 🔒 **隐私优先** -- 数据不出本机，标准库 HTTP server，零外部依赖
+
+**通道 2：掌心窗集成（按需增强）**
+- 📸 **手机截图** -- 通过 linjian-peek 服务请求手机截图并返回
+- 🔋 **生活状态** -- 电量、充电、网络、当前 App、屏幕时间、解锁次数
+- 🎮 **远程控制** -- 打开应用、返回桌面、发送通知、设置闹钟
+- 🔌 **MCP 工具** -- 通过 Hanako 插件系统注册，LLM tool calling 触发
+
+**数据流：**
+```
+MacroDroid → HTTP POST → PhoneActivityReceiver → PhoneActivityPerception ─┐
+                                                                           ├→ PerceptionController.build_context()
+linjian-peek → MCP Plugin → Hanako tool calling ──────────────────────────┘
+```
 
 ### 记忆系统
 - 💾 **记忆快照** -- 导出/导入 Agent 记忆，支持 overwrite/smart/skip_existing 合并
@@ -157,7 +183,28 @@ VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct
 
 # ntfy 通知（可选）
 NTFY_TOPIC=your-topic-name
+
+# 手机活动感知 - MacroDroid 直连（可选）
+PHONE_RECEIVER_PORT=8077
+PHONE_AUTH_TOKEN=your-secret-token
+
+# 掌心窗 - linjian-peek 集成（可选）
+LINJIAN_URL=https://xxx.onrender.com
+LINJIAN_TOKEN=your-linjian-token
 ```
+
+### MacroDroid 配置（手机活动上报）
+
+1. 安装 [MacroDroid](https://play.google.com/store/apps/details?id=com.arlosoft.macrodroid)（Android）
+2. 创建新宏：触发器 = "应用启动/切换" → 动作 = "HTTP 请求"
+3. HTTP 请求配置：
+   - 方法：`POST`
+   - URL：`http://<电脑IP>:8077/phone/activity`
+   - Header：`X-Auth-Token: <你的token>`
+   - Body：`{"app": "{app_name}", "event": "switch"}`
+4. 保存并启用宏
+
+> 💡 如果桌宠和手机在同一局域网，用电脑的内网 IP。如果需要外网访问，考虑用 ngrok 或 frp 做内网穿透。
 
 ## 测试指南
 
@@ -171,6 +218,8 @@ NTFY_TOPIC=your-topic-name
 | 叙事引擎 | 等 10 分钟 | 桌宠自言自语 |
 | 聊天 | 左键点击桌宠 | 弹出聊天框 |
 | 设置 | 右键菜单 → 设置 | 打开设置面板 |
+| 手机感知 | MacroDroid POST 到 localhost:8077 | 日志显示 `Phone activity: app=小红书 event=switch` |
+| 掌心窗状态 | Hanako 对话中调用 `phone_status` | 返回服务在线状态 |
 
 ## 架构
 
@@ -181,6 +230,8 @@ PetManager（多桌宠管理器）
   │    ├─ MouseTracker (鼠标交互)
   │    ├─ PerceptionController (感知)
   │    │    ├─ ScreenWatcher (屏幕感知)
+  │    │    ├─ PhoneActivityPerception (手机活动)
+  │    │    ├─ PhoneActivityReceiver (MacroDroid HTTP)
   │    │    ├─ ProactiveScheduler (主动对话)
   │    │    └─ EmotionStateMachine (情绪)
   │    ├─ NarrativeEngine (叙事引擎)
@@ -205,7 +256,9 @@ oc-pet/
 ├── core/                   # 核心模块
 │   ├── conversation_engine.py  # 对话引擎
 │   ├── harness_adapter.py      # LLM 适配器
-│   ├── perception.py           # 感知系统（时间/情绪/屏幕/主动对话）
+│   ├── perception.py           # 感知系统（时间/情绪/屏幕/手机/主动对话）
+│   ├── phone_activity.py       # 手机活动数据管理 + 感知层
+│   ├── phone_receiver.py       # MacroDroid HTTP 接收器
 │   ├── narrative_engine.py     # 叙事引擎
 │   ├── window_interaction.py   # 窗口互动
 │   ├── hanako_bridge.py        # Hanako 联动（状态读取）
