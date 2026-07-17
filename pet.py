@@ -255,6 +255,11 @@ class PetWindow(QWidget):
         if not tts_cfg.get("enabled", True):
             self._tts_player.disable()
 
+        # TTS 口型回调
+        self._tts_player.on_start = self._on_tts_start
+        self._tts_player.on_end = self._on_tts_end
+        self._tts_player.on_error = lambda msg: self._on_tts_end()
+
         # ── 帧动画状态(在 _setup_ui 后初始化)──
         self._anim_seq = 'idle'
         self._anim_idx = 0
@@ -614,6 +619,33 @@ class PetWindow(QWidget):
     def _get_char_top_y(self):
         """获取角色头顶 Y 坐标 - 委托给 SpriteRenderer"""
         return self._renderer.get_char_top_y()
+
+    # ── TTS 口型 ──
+
+    def _on_tts_start(self):
+        """TTS 开始播放 → 切换到嘴型帧"""
+        frames = self._renderer._frames
+        # 根据当前情感选择嘴型
+        emotion = getattr(self, '_last_tts_emotion', 'neutral')
+        if emotion in ('happy', 'angry', 'surprised'):
+            speak_seq = 'speak_open'
+        else:
+            speak_seq = 'speak_half'
+        # 降级：没有对应帧就试另一个，都没有就不切
+        for seq in (speak_seq, 'speak_open', 'speak_half', 'speak_closed'):
+            if seq in frames:
+                self._renderer.play_anim(seq)
+                self._anim_seq = seq
+                logger.debug("TTS mouth: %s", seq)
+                return
+        # 无嘴型帧，静默降级
+        logger.debug("TTS mouth: no speak frames, skipping")
+
+    def _on_tts_end(self):
+        """TTS 结束播放 → 恢复默认动画"""
+        # 回到 idle（或当前应有的动画）
+        self._set_anim_seq('idle')
+        logger.debug("TTS mouth: restored idle")
 
     def _reposition_bubble(self):
         """气泡置于角色头顶上方,根据实际角色内容定位"""
@@ -1206,6 +1238,7 @@ class PetWindow(QWidget):
             tts_cfg = self.config.get("tts", {})
             if tts_cfg.get("enabled", True):
                 logger.info("Playing TTS: %s", audio_path)
+                self._last_tts_emotion = emotion or "neutral"
                 self._tts_player.play(audio_path)
 
         # 动画
@@ -1381,7 +1414,7 @@ class PetWindow(QWidget):
             logger.error("_foreground_tick error: %s", e)
 
     def _on_foreground_change(self, app_name: str, app_category: str, title: str):
-        """前台窗口变化 → 重置 idle 计时器 + 窗口互动"""
+        """前台窗口变化 → 重置 idle 计时器 + 窗口互动 + 事件触发截图"""
         going = self._idle_stage
         self._last_interaction = time.time()
         self._idle_stage = None
@@ -1402,6 +1435,13 @@ class PetWindow(QWidget):
                         self._last_move_near = now
                     except Exception as e:
                         logger.debug("Window interaction failed: %s", e)
+
+        # 事件触发截图：前台切换时触发一次屏幕感知
+        try:
+            if hasattr(self, '_perception') and self._perception._screen:
+                self._perception._screen.on_foreground_change(app_name, app_category, title)
+        except Exception as e:
+            logger.debug("Foreground screenshot trigger failed: %s", e)
 
     def _on_proactive_trigger(self, prompt_text: str):
         """Proactive 调度器触发 -> 发送给模型生成回复 + TTS"""
@@ -1615,6 +1655,7 @@ class PetWindow(QWidget):
                 if tts_cfg.get("enabled", True) and audio_path:
                     if os.path.exists(audio_path):
                         logger.info("Playing TTS: %s", audio_path)
+                        self._last_tts_emotion = emotion or "neutral"
                         self._tts_player.play(audio_path)
                     else:
                         logger.warning("TTS audio not found: %s", audio_path)

@@ -25,6 +25,10 @@ class TTSTtsPlayer:
         self._audio_output = None
         self._enabled = True
         self._volume: float = 0.8
+        # 事件回调（桌宠主程序连接这些来驱动口型/状态）
+        self.on_start: callable = lambda: None       # 开始播放
+        self.on_end: callable = lambda: None         # 播放结束
+        self.on_error: callable = lambda msg: None   # 播放错误
 
     @property
     def enabled(self) -> bool:
@@ -74,9 +78,11 @@ class TTSTtsPlayer:
             self._player.mediaStatusChanged.connect(self._on_status)
 
             self._player.play()
+            self.on_start()
             logger.info("Playing TTS: %s", audio_path)
         except Exception as e:
             logger.warning("Failed to play audio: %s", e)
+            self.on_error(str(e))
 
     def stop(self):
         """停止当前播放并释放资源"""
@@ -104,9 +110,11 @@ class TTSTtsPlayer:
         if status == QMediaPlayer.EndOfMedia:
             logger.debug("TTS playback finished")
             self.stop()
+            self.on_end()
         elif status == QMediaPlayer.InvalidMedia:
             logger.warning("TTS: invalid media")
             self.stop()
+            self.on_error("invalid media")
 
     def is_playing(self) -> bool:
         """是否正在播放"""

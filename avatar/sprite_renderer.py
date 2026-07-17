@@ -288,8 +288,13 @@ class SpriteRenderer(AvatarRenderer):
             return False
 
     def _load_from_frames_dir(self, frames_dir: str) -> bool:
-        """从 characters/<id>/frames/ 加载帧序列"""
-        for seq_name in ("idle", "walk", "extra"):
+        """从 characters/<id>/frames/ 加载帧序列
+
+        自动扫描所有子目录，不再硬编码序列名。
+        用户只需在 frames/ 下创建 <序列名>/ 目录并放入 PNG，
+        系统自动发现并加载。
+        """
+        for seq_name in sorted(os.listdir(frames_dir)):
             seq_dir = os.path.join(frames_dir, seq_name)
             if not os.path.isdir(seq_dir):
                 continue
@@ -316,11 +321,16 @@ class SpriteRenderer(AvatarRenderer):
                 self._frame_tops[seq_name] = tops
                 logger.info("Loaded %s: %d frames", seq_name, len(frames))
 
+        # 确保 idle 存在作为默认序列
+        if "idle" not in self._frames and self._frames:
+            first = next(iter(self._frames))
+            logger.info("No idle sequence, using '%s' as default", first)
+
         if not self._frames:
             self._fallback_load(self._character_id)
             return False
 
-        self._anim_seq = 'idle'
+        self._anim_seq = 'idle' if 'idle' in self._frames else next(iter(self._frames))
         self._anim_idx = 0
         self._anim_range = (None, None)
         self._show_frame()

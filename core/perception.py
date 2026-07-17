@@ -181,18 +181,22 @@ class SchedulePerception:
 
 SCREENSHOT_SCALE = 4
 JPEG_QUALITY = 50
-VISION_PROMPT = """详细描述用户当前在屏幕上做什么（2-3句话）。
+VISION_PROMPT = """分析用户当前屏幕内容，以 JSON 格式返回。
 
-要求：
-- 描述用户正在使用的应用、网站或内容
-- 如果是视频/音乐，描述内容主题
-- 如果是代码/文档，描述工作内容
-- 如果是聊天/社交，描述在做什么
+返回格式：
+{
+  "activity": "具体活动描述（英文，如 writing code / watching video / reading docs）",
+  "category": "分类（work/learn/entertainment/communication/other）",
+  "summary": "一句话中文摘要（20字以内）",
+  "confidence": 0.0到1.0的置信度
+}
 
-注意隐私保护：
-- 不要读取或提及任何密码、验证码、密钥、token
-- 不要读取或提及银行账户、信用卡号、身份证号等敏感信息
-- 如果屏幕包含敏感信息，请描述为'用户正在处理私密信息'"""
+规则：
+- category 必须是 work / learn / entertainment / communication / other 之一
+- confidence 反映你对判断的确信程度（看到明确内容=0.8+，模糊不清=0.3-0.5）
+- 不要提及任何密码、验证码、密钥、token、银行账户等敏感信息
+- 如果屏幕包含敏感信息，返回 {"activity": "private", "category": "other", "summary": "处理私密信息", "confidence": 0.9}
+- 只返回 JSON，不要其他文字"""
 
 # 屏幕内容→情绪映射
 SCREEN_EMOTION_MAP = {
@@ -220,6 +224,150 @@ SCREEN_EMOTION_MAP = {
 }
 
 
+class PetPermissions:
+    """桌宠权限开关 — 控制各感知模块的启用/禁用
+
+    所有开关默认开启，用户可通过设置面板关闭。
+    关闭后对应模块降级或跳过。
+    """
+
+    def __init__(self):
+        self.screenshot_enabled: bool = True       # 截图总开关
+        self.diary_enabled: bool = True            # 日报总开关
+        self.session_read_enabled: bool = True     # Session 读取总开关
+        self.cross_session_enabled: bool = True    # 跨 Session 总开关
+        self.tool_call_enabled: bool = True        # 插件工具调用总开关
+        self.active_hours: tuple[int, int] = (6, 23)  # 活跃时段（默认 6:00-23:00）
+
+    def is_in_active_hours(self) -> bool:
+        """是否在活跃时段内"""
+        from datetime import datetime
+        hour = datetime.now().hour
+        return self.active_hours[0] <= hour < self.active_hours[1]
+
+    def to_dict(self) -> dict:
+        return {
+            "screenshot_enabled": self.screenshot_enabled,
+            "diary_enabled": self.diary_enabled,
+            "session_read_enabled": self.session_read_enabled,
+            "cross_session_enabled": self.cross_session_enabled,
+            "tool_call_enabled": self.tool_call_enabled,
+            "active_hours": list(self.active_hours),
+        }
+
+    def load_from_dict(self, data: dict):
+        """从配置加载"""
+        for key in ('screenshot_enabled', 'diary_enabled', 'session_read_enabled',
+                     'cross_session_enabled', 'tool_call_enabled'):
+            if key in data:
+                setattr(self, key, bool(data[key]))
+        if 'active_hours' in data:
+            ah = data['active_hours']
+            if isinstance(ah, (list, tuple)) and len(ah) == 2:
+                self.active_hours = (int(ah[0]), int(ah[1]))
+
+    def get_status_text(self) -> str:
+        """当前感知状态文本（展示给用户）"""
+        parts = []
+        parts.append("截图: " + ("✅" if self.screenshot_enabled else "❌"))
+        parts.append("日报: " + ("✅" if self.diary_enabled else "❌"))
+        parts.append("Session: " + ("✅" if self.session_read_enabled else "❌"))
+        parts.append("跨Session: " + ("✅" if self.cross_session_enabled else "❌"))
+        parts.append("工具调用: " + ("✅" if self.tool_call_enabled else "❌"))
+        hour = "活跃时段" if self.is_in_active_hours() else "休息时段"
+        parts.append(f"{hour} ({self.active_hours[0]}:00-{self.active_hours[1]}:00)")
+        return " | ".join(parts)
+
+
+# ── 隐私黑名单 ──────────────────────────────────────────
+
+# 进程名黑名单（永不截图）
+SCREENSHOT_PROCESS_BLACKLIST: set[str] = {
+    # 密码管理器
+    "1Password.exe", "KeePass.exe", "KeePassXC.exe", "Bitwarden.exe",
+    "LastPass.exe", "Dashlane.exe",
+    # 系统锁屏
+    "LogonUI.exe",
+}
+
+# 窗口标题关键词黑名单（模糊匹配，命中则跳过）
+SCREENSHOT_TITLE_BLACKLIST: list[str] = [
+    "密码", "password", "密钥", "private key",
+    "无痕", "incognito", "InPrivate",
+    "登录", "login", "验证", "verification",
+    "支付", "payment", "银行", "bank",
+]
+
+
+def _is_screen_blacklisted(app: str, title: str) -> bool:
+    """检查前台窗口是否在截图黑名单中"""
+    if app in SCREENSHOT_PROCESS_BLACKLIST:
+        return True
+    title_lower = title.lower()
+    for keyword in SCREENSHOT_TITLE_BLACKLIST:
+        if keyword.lower() in title_lower:
+            return True
+    return False
+
+
+class ScreenEvent:
+    """一次屏幕感知的结构化数据"""
+    __slots__ = ('app', 'title', 'timestamp', 'mode', 'description')
+
+    def __init__(self, app: str = "", title: str = "", timestamp: float = 0.0,
+                 mode: str = "timer", description: str = ""):
+        self.app = app              # 进程名（如 Obsidian.exe）
+        self.title = title          # 窗口标题
+        self.timestamp = timestamp  # time.time()
+        self.mode = mode            # "timer" / "event" / "manual"
+        self.description = description  # 视觉模型描述
+
+    def to_dict(self) -> dict:
+        return {
+            "app": self.app, "title": self.title,
+            "timestamp": self.timestamp, "mode": self.mode,
+            "description": self.description,
+        }
+
+
+class ActivityEvent:
+    """结构化活动事件（从视觉分析 JSON 提取）"""
+    __slots__ = ('app', 'activity', 'category', 'summary', 'confidence',
+                 'source', 'start_time', 'end_time')
+
+    def __init__(self, app: str = "", activity: str = "", category: str = "other",
+                 summary: str = "", confidence: float = 0.5, source: str = "vision",
+                 start_time: float = 0.0, end_time: float = 0.0):
+        self.app = app                # 应用名
+        self.activity = activity      # 具体活动（如 "writing code", "watching video"）
+        self.category = category      # 分类：work/learn/entertainment/communication/other
+        self.summary = summary        # 一句话摘要
+        self.confidence = confidence  # 置信度 0~1
+        self.source = source          # "vision"（模型推断）/ "foreground"（窗口标题直接判断）
+        self.start_time = start_time  # 开始时间
+        self.end_time = end_time      # 结束时间（0 = 进行中）
+
+    @property
+    def duration_minutes(self) -> float:
+        if self.start_time and self.end_time:
+            return (self.end_time - self.start_time) / 60.0
+        return 0.0
+
+    def is_same_activity(self, other: 'ActivityEvent') -> bool:
+        """判断两个事件是否是同一活动（用于合并）"""
+        return (self.app == other.app and self.activity == other.activity
+                and self.category == other.category)
+
+    def to_dict(self) -> dict:
+        return {
+            "app": self.app, "activity": self.activity,
+            "category": self.category, "summary": self.summary,
+            "confidence": self.confidence, "source": self.source,
+            "start_time": self.start_time, "end_time": self.end_time,
+            "duration_minutes": round(self.duration_minutes, 1),
+        }
+
+
 class ScreenPerception:
     """屏幕感知 - 后台定时截屏 + 视觉模型分析
 
@@ -240,6 +388,9 @@ class ScreenPerception:
         self._running = False
         self._thread = None
         self._last_description: str = ""
+        self._last_event: ScreenEvent | None = None  # 结构化元数据
+        self._last_activity: ActivityEvent | None = None  # 结构化活动事件
+        self._activity_history: list[ActivityEvent] = []  # 最近 50 个活动事件
         self._last_frame_hash: str = ""
         self._consecutive_failures: int = 0
         self._lock = threading.Lock()
@@ -257,6 +408,38 @@ class ScreenPerception:
             if self._last_description:
                 return f"[屏幕画面：{self._last_description}]"
         return ""
+
+    @property
+    def last_event(self) -> ScreenEvent | None:
+        """最近一次屏幕感知的结构化数据"""
+        with self._lock:
+            return self._last_event
+
+    def capture_now(self, mode: str = "manual") -> ScreenEvent | None:
+        """主动截图（不等待定时器）
+
+        Args:
+            mode: "manual"（用户主动） 或 "event"（前台切换触发）
+
+        Returns:
+            ScreenEvent 或 None（黑名单/失败时）
+        """
+        if not self._enabled:
+            return None
+        return self._capture_and_analyze(mode=mode)
+
+    def on_foreground_change(self, app: str, category: str, title: str):
+        """前台窗口切换时调用（由 ForegroundWatcher 触发）
+
+        黑名单内 → 跳过
+        变化不大 → 跳过（hash 检测）
+        其他 → 触发一次截图
+        """
+        if _is_screen_blacklisted(app, title):
+            logger.debug("Screenshot skipped (blacklisted): %s - %s", app, title[:30])
+            return
+        # 前台切换本身就是变化信号，直接触发截图
+        self._capture_and_analyze(mode="event", app=app, title=title)
 
     def start(self):
         if not self._enabled:
@@ -283,7 +466,14 @@ class ScreenPerception:
         time.sleep(10)  # 首次延迟
         while self._running:
             try:
-                self._capture_and_analyze()
+                # 定时截图时获取当前前台窗口信息（用于黑名单检查）
+                try:
+                    from motion.foreground_watcher import _get_foreground_process_name, _get_foreground_window_title
+                    app = _get_foreground_process_name()
+                    title = _get_foreground_window_title()
+                except Exception:
+                    app, title = "", ""
+                self._capture_and_analyze(mode="timer", app=app, title=title)
             except Exception as e:
                 logger.warning("ScreenPerception error: %s", e)
             for _ in range(self._interval):
@@ -291,9 +481,15 @@ class ScreenPerception:
                     return
                 time.sleep(1)
 
-    def _capture_and_analyze(self):
+    def _capture_and_analyze(self, mode: str = "timer", app: str = "", title: str = "") -> ScreenEvent | None:
         import hashlib as _hashlib
         from .hanako_context import HanakoContext
+
+        # 黑名单检查（定时模式需要检查，事件模式已在 on_foreground_change 检查过）
+        if mode == "timer":
+            if app and title and _is_screen_blacklisted(app, title):
+                logger.debug("Screenshot skipped (blacklisted): %s", app)
+                return None
 
         img = ImageGrab.grab()
         new_size = (img.width // SCREENSHOT_SCALE, img.height // SCREENSHOT_SCALE)
@@ -368,18 +564,37 @@ class ScreenPerception:
                 timeout=30,
             )
             if resp.status_code == 200:
-                content = resp.json()["choices"][0]["message"].get("content", "").strip()
-                if content:
+                raw = resp.json()["choices"][0]["message"].get("content", "").strip()
+                if raw:
+                    # 尝试解析 JSON（新版提示词返回结构化数据）
+                    activity = self._parse_activity_json(raw, app or "")
+                    # 保留自然语言描述用于兼容
+                    description = activity.summary if activity else raw
+
+                    event = ScreenEvent(
+                        app=app or "",
+                        title=title or "",
+                        timestamp=time.time(),
+                        mode=mode,
+                        description=description,
+                    )
                     with self._lock:
-                        self._last_description = content
+                        self._last_description = description
+                        self._last_event = event
+                        if activity:
+                            self._last_activity = activity
+                            self._activity_history.append(activity)
+                            if len(self._activity_history) > 50:
+                                self._activity_history.pop(0)
                     self._consecutive_failures = 0
                     self._interval = self._base_interval  # 恢复正常间隔
-                    logger.info("Screen analysis: %s", content[:50])
-                    self.on_update(content)
+                    logger.info("Screen analysis [%s]: %s", mode, description[:50])
+                    self.on_update(description)
                     # 触发屏幕情绪
-                    self._detect_screen_emotion(content)
+                    self._detect_screen_emotion(description)
                     # 触发屏幕内容主动对话
-                    self._check_screen_proactive(content)
+                    self._check_screen_proactive(description)
+                    return event
                 else:
                     logger.warning("Vision API returned empty content")
                     self._consecutive_failures += 1
@@ -400,6 +615,51 @@ class ScreenPerception:
             self._interval = self._base_interval + backoff
             logger.warning("ScreenPerception backoff: interval=%ds (failures=%d, backoff=%ds)",
                          self._interval, self._consecutive_failures, backoff)
+        return None
+
+    def _parse_activity_json(self, raw: str, app: str) -> ActivityEvent | None:
+        """解析视觉模型返回的 JSON，生成 ActivityEvent"""
+        try:
+            # 尝试提取 JSON（模型可能在 JSON 前后加文字）
+            import re
+            json_match = re.search(r'\{[^{}]+\}', raw)
+            if not json_match:
+                return None
+            data = json.loads(json_match.group())
+
+            valid_categories = {'work', 'learn', 'entertainment', 'communication', 'other'}
+            category = data.get('category', 'other')
+            if category not in valid_categories:
+                category = 'other'
+
+            return ActivityEvent(
+                app=app,
+                activity=data.get('activity', ''),
+                category=category,
+                summary=data.get('summary', ''),
+                confidence=max(0.0, min(1.0, float(data.get('confidence', 0.5)))),
+                source='vision',
+                start_time=time.time(),
+            )
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            logger.debug("Failed to parse activity JSON: %s", e)
+            return None
+
+    def get_recent_activities(self, minutes: int = 60) -> list[dict]:
+        """获取最近 N 分钟的活动事件（用于日报生成）"""
+        cutoff = time.time() - minutes * 60
+        with self._lock:
+            return [e.to_dict() for e in self._activity_history if e.start_time >= cutoff]
+
+    def get_activity_summary(self, minutes: int = 60) -> str:
+        """获取活动摘要（注入 LLM prompt 用）"""
+        activities = self.get_recent_activities(minutes)
+        if not activities:
+            return ""
+        parts = []
+        for a in activities[-5:]:  # 最近 5 个
+            parts.append(f"{a['category']}: {a['summary']}")
+        return "[近期活动：" + "；".join(parts) + "]"
 
     def _detect_screen_emotion(self, description: str):
         """根据屏幕内容触发情绪"""
@@ -549,6 +809,7 @@ class PerceptionController:
         self._screen = ScreenPerception()
         self._proactive: ProactiveScheduler | None = None
         self._last_schedule_refresh = 0.0
+        self._permissions = PetPermissions()  # 权限开关
 
         # ── M2: 增强环境扫描器 ──
         self._env_scanner = None
@@ -610,9 +871,17 @@ class PerceptionController:
         """手机活动 HTTP 接收器"""
         return self._phone_receiver
 
+    @property
+    def permissions(self) -> PetPermissions:
+        """权限开关"""
+        return self._permissions
+
     # ── 屏幕 ──
 
     def start_screen(self, interval: int = 120):
+        if not self._permissions.screenshot_enabled:
+            logger.info("Screen disabled by permissions")
+            return
         self._screen._interval = interval
         self._screen.start()
 
@@ -621,6 +890,158 @@ class PerceptionController:
 
     def get_screen_context(self) -> str:
         return self._screen.get_context()
+
+    # ── Session ──
+
+    def get_current_session(self) -> dict:
+        """获取当前 Session 摘要（不加载完整历史）"""
+        if not self._permissions.session_read_enabled:
+            return {}
+        try:
+            from .hanako_context import HanakoContext
+            ctx = HanakoContext(self._character_id)
+            return ctx.read_current_session()
+        except Exception as e:
+            logger.debug("Failed to read session: %s", e)
+            return {}
+
+    def get_session_context(self) -> str:
+        """获取 Session 摘要文本（注入 LLM prompt 用）"""
+        try:
+            from .hanako_context import HanakoContext
+            ctx = HanakoContext(self._character_id)
+            return ctx.get_session_summary()
+        except Exception:
+            return ""
+
+    def list_other_sessions(self, max_count: int = 10) -> list[dict]:
+        """列出其他 Session（只读摘要）"""
+        if not self._permissions.cross_session_enabled:
+            return []
+        try:
+            from .hanako_context import HanakoContext
+            ctx = HanakoContext(self._character_id)
+            return ctx.list_sessions(max_count)
+        except Exception:
+            return []
+
+    def get_cross_session_context(self) -> str:
+        """获取跨 Session 摘要文本（注入 LLM prompt 用）"""
+        try:
+            from .hanako_context import HanakoContext
+            ctx = HanakoContext(self._character_id)
+            return ctx.get_cross_session_summary()
+        except Exception:
+            return ""
+
+    # ── 日报生成 ──
+
+    def generate_daily_diary(self, output_dir: str = "", preview_only: bool = False) -> str | None:
+        """从活动事件生成日报 Markdown
+
+        Args:
+            output_dir: Obsidian 日记目录，默认 W:/Games/Obsidian/Work/无极限/03-日记/日常
+            preview_only: True 则只返回 Markdown 内容，不写文件
+
+        Returns:
+            preview_only=True: Markdown 内容
+            preview_only=False: 写入的文件路径
+        """
+        if not self._permissions.diary_enabled and not preview_only:
+            logger.info("Diary disabled by permissions")
+            return None
+        from datetime import datetime
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M")
+
+        # 获取今日活动（从 00:00 开始）
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        with self._screen._lock:
+            today_activities = [
+                e for e in self._screen._activity_history
+                if e.start_time >= midnight
+            ]
+
+        if not today_activities:
+            return None if not preview_only else "（今日无活动记录）"
+
+        # 按分类分组
+        categories = {
+            'work': ('💼 工作', []),
+            'learn': ('📚 学习', []),
+            'entertainment': ('🎮 娱乐', []),
+            'communication': ('💬 交流', []),
+            'other': ('📌 其他', []),
+        }
+        for event in today_activities:
+            cat = event.category if event.category in categories else 'other'
+            categories[cat][1].append(event)
+
+        # 生成 Markdown
+        lines = [
+            f"---",
+            f"title: 桌宠日报 {date_str}",
+            f"date: {date_str}",
+            f"tags: [日报, 桌宠]",
+            f"---",
+            f"",
+            f"# 桌宠日报 {date_str}",
+            f"",
+            f"生成时间：{time_str}",
+            f"活动事件数：{len(today_activities)}",
+            f"",
+        ]
+
+        for cat_key, (cat_label, events) in categories.items():
+            if not events:
+                continue
+            lines.append(f"## {cat_label}")
+            lines.append("")
+            for e in events:
+                start = datetime.fromtimestamp(e.start_time).strftime("%H:%M")
+                confidence_mark = "" if e.confidence >= 0.7 else " ⚠️ 低置信度"
+                duration = f" ({e.duration_minutes:.0f}分钟)" if e.duration_minutes > 0 else ""
+                lines.append(f"- **{start}** {e.summary}{duration}{confidence_mark}")
+                if e.app:
+                    lines.append(f"  - 应用：{e.app}")
+            lines.append("")
+
+        # 时间缺口检测
+        if len(today_activities) > 1:
+            gaps = []
+            for i in range(1, len(today_activities)):
+                prev_end = today_activities[i-1].end_time or today_activities[i-1].start_time
+                curr_start = today_activities[i].start_time
+                gap_min = (curr_start - prev_end) / 60.0
+                if gap_min > 30:  # 超过 30 分钟的缺口
+                    gap_start = datetime.fromtimestamp(prev_end).strftime("%H:%M")
+                    gap_end = datetime.fromtimestamp(curr_start).strftime("%H:%M")
+                    gaps.append(f"{gap_start} ~ {gap_end}（{gap_min:.0f}分钟）")
+            if gaps:
+                lines.append("## ⏳ 时间缺口")
+                lines.append("")
+                for g in gaps:
+                    lines.append(f"- {g}")
+                lines.append("")
+
+        lines.append(f"---")
+        lines.append(f"*由桌宠自动生成*")
+        content = "\n".join(lines)
+
+        if preview_only:
+            return content
+
+        # 写入文件
+        if not output_dir:
+            output_dir = "W:/Games/Obsidian/Work/无极限/03-日记/日常"
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        filename = f"{date_str}-桌宠日报.md"
+        filepath = output_path / filename
+        filepath.write_text(content, encoding="utf-8")
+        logger.info("Daily diary written: %s", filepath)
+        return str(filepath)
 
     # ── 情绪 ──
 
@@ -744,3 +1165,27 @@ class PerceptionController:
                 logger.debug("Phone activity build_context failed: %s", e)
 
         return "\n".join(parts) if parts else ""
+
+    def get_perception_status(self) -> dict:
+        """获取当前感知状态全貌（用于设置面板展示）"""
+        return {
+            "permissions": self._permissions.to_dict(),
+            "screen": {
+                "enabled": self._permissions.screenshot_enabled,
+                "running": self._screen._running if self._screen else False,
+                "last_description": self._screen.last_description[:50] if self._screen else "",
+                "last_activity": self._screen._last_activity.to_dict() if self._screen and self._screen._last_activity else None,
+            },
+            "session": {
+                "read_enabled": self._permissions.session_read_enabled,
+                "cross_session_enabled": self._permissions.cross_session_enabled,
+            },
+            "emotion": {
+                "current": self._emotion.current,
+                "intensity": round(self._emotion.intensity, 2),
+            },
+            "diary": {
+                "enabled": self._permissions.diary_enabled,
+                "activity_count": len(self._screen._activity_history) if self._screen else 0,
+            },
+        }

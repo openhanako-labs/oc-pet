@@ -250,6 +250,175 @@ class HanakoContext:
 
         return "\n\n".join(parts)
 
+    # ── 当前 Session ──
+
+    def read_current_session(self, max_messages: int = 5) -> dict:
+        """读取当前 Session 的摘要信息（不加载完整历史）
+
+        Returns:
+            {
+                "session_id": str,       # Session UUID
+                "agent": str,            # Agent ID
+                "started": str,          # 开始时间
+                "last_user_msg": str,    # 最近一条用户消息（前 100 字）
+                "last_reply": str,       # 最近一条助手回复（前 100 字）
+                "message_count": int,    # 消息总数
+                "platform": str,         # 来源平台
+            }
+            无数据时返回空 dict
+        """
+        sessions_dir = self._agent_dir / "sessions"
+        if not sessions_dir.exists():
+            return {}
+
+        # 找最新的 session 文件（按修改时间）
+        session_files = sorted(
+            sessions_dir.glob("*.jsonl"),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True
+        )
+        if not session_files:
+            return {}
+
+        latest = session_files[0]
+        session_id = latest.stem  # 文件名即 session ID
+
+        # 只读最后 N 行（不加载整个文件）
+        try:
+            lines = latest.read_text("utf-8").strip().split("\n")
+        except Exception:
+            return {}
+
+        last_user = ""
+        last_reply = ""
+        msg_count = 0
+        platform = ""
+
+        for line in reversed(lines[-20:]):  # 只扫描最后 20 行
+            try:
+                entry = json.loads(line)
+                role = entry.get("role", "")
+                if role == "user" and not last_user:
+                    content = entry.get("content", "")
+                    if isinstance(content, list):
+                        content = " ".join(
+                            item.get("text", "") for item in content
+                            if isinstance(item, dict) and item.get("type") == "text"
+                        )
+                    last_user = content[:100]
+                elif role == "assistant" and not last_reply:
+                    content = entry.get("content", "")
+                    if isinstance(content, str):
+                        last_reply = content[:100]
+                if not platform:
+                    platform = entry.get("platform", "")
+                msg_count += 1
+                if last_user and last_reply:
+                    break
+            except json.JSONDecodeError:
+                continue
+
+        # 获取开始时间
+        started = ""
+        try:
+            first = json.loads(lines[0])
+            started = first.get("timestamp", "") or first.get("createdAt", "")
+        except Exception:
+            pass
+
+        return {
+            "session_id": session_id,
+            "agent": self.agent_id,
+            "started": started,
+            "last_user_msg": last_user,
+            "last_reply": last_reply,
+            "message_count": len(lines),
+            "platform": platform,
+        }
+
+    def get_session_summary(self) -> str:
+        """获取 Session 摘要文本（注入 LLM prompt 用）"""
+        session = self.read_current_session()
+        if not session:
+            return ""
+        parts = [f"当前会话：{session['session_id'][:12]}..."]
+        if session['last_user_msg']:
+            parts.append(f"最近消息：{session['last_user_msg'][:50]}")
+        return "[" + " | ".join(parts) + "]"
+
+    def list_sessions(self, max_count: int = 10) -> list[dict]:
+        """列出最近的 Session（只读摘要，不加载历史）
+
+        Returns:
+            [{session_id, agent, started, last_msg, message_count, platform}, ...]
+        """
+        sessions_dir = self._agent_dir / "sessions"
+        if not sessions_dir.exists():
+            return []
+
+        session_files = sorted(
+            sessions_dir.glob("*.jsonl"),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True
+        )
+
+        results = []
+        for f in session_files[:max_count]:
+            try:
+                lines = f.read_text("utf-8").strip().split("\n")
+                last_msg = ""
+                platform = ""
+                started = ""
+                for line in reversed(lines[-5:]):
+                    try:
+                        entry = json.loads(line)
+                        if not last_msg and entry.get("role") == "user":
+                            content = entry.get("content", "")
+                            if isinstance(content, list):
+                                content = " ".join(
+                                    item.get("text", "") for item in content
+                                    if isinstance(item, dict)
+                                )
+                            last_msg = content[:80]
+                        if not platform:
+                            platform = entry.get("platform", "")
+                    except json.JSONDecodeError:
+                        continue
+                try:
+                    first = json.loads(lines[0])
+                    started = first.get("timestamp", "") or first.get("createdAt", "")
+                except Exception:
+                    pass
+
+                results.append({
+                    "session_id": f.stem,
+                    "agent": self.agent_id,
+                    "started": started,
+                    "last_msg": last_msg,
+                    "message_count": len(lines),
+                    "platform": platform,
+                    "file": str(f),
+                    "modified": f.stat().st_mtime,
+                })
+            except Exception:
+                continue
+
+        return results
+
+    def get_cross_session_summary(self, max_sessions: int = 5) -> str:
+        """获取跨 Session 摘要（注入 LLM prompt 用）"""
+        sessions = self.list_sessions(max_sessions)
+        if not sessions:
+            return ""
+        parts = []
+        for s in sessions:
+            sid = s['session_id'][:12]
+            platform = s.get('platform', '')
+            last = s.get('last_msg', '')[:30]
+            count = s.get('message_count', 0)
+            parts.append(f"{sid} ({platform}, {count}条): {last}")
+        return "[其他会话：" + "；".join(parts) + "]"
+
     # ── 工具方法 ──
 
     @staticmethod
