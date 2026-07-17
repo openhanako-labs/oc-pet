@@ -68,6 +68,14 @@ class ConversationEngine:
         self._thread = None
         self._tts_ready = False
 
+        # 能力路由器（快速路径）
+        from .capability_registry import CapabilityRouter
+        self._capability_router = CapabilityRouter(
+            perception=self._perception,
+            tool_registry=self._tool_registry,
+            tool_executor=self._tool_executor,
+        )
+
         # ── M3: 记忆快照管理器 ──
         self._memory_snapshot_mgr = None
         try:
@@ -221,6 +229,14 @@ class ConversationEngine:
             logger.info("内置使用说明 [emotion:%s]: %s", emotion, help_text)
             # 直接回调，不调用 LLM
             self.on_reply(help_text, emotion, anim, "")
+            return
+
+        # 快速路径：能力路由器（关键词匹配 → 直接执行，跳过 LLM）
+        route_result = self._capability_router.route(text)
+        if route_result:
+            anim = route_result.anim or "idle"
+            logger.info("Capability routed: %s -> %s", route_result.capability, route_result.text[:50])
+            self.on_reply(route_result.text, route_result.emotion, anim, route_result.audio_path)
             return
 
         # 1. LLM 回复（可能返回 tool_calls）
