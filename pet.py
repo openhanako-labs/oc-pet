@@ -1526,10 +1526,15 @@ class PetWindow(QWidget):
                     except Exception as e:
                         logger.debug("Window interaction failed: %s", e)
 
-        # 事件触发截图：前台切换时触发一次屏幕感知
+        # 事件触发截图：前台切换时触发一次屏幕感知（后台线程执行，不阻塞主线程）
         try:
             if hasattr(self, '_perception') and self._perception._screen:
-                self._perception._screen.on_foreground_change(app_name, app_category, title)
+                import threading as _threading
+                _threading.Thread(
+                    target=self._perception._screen.on_foreground_change,
+                    args=(app_name, app_category, title),
+                    daemon=True
+                ).start()
         except Exception as e:
             logger.debug("Foreground screenshot trigger failed: %s", e)
 
