@@ -127,7 +127,7 @@ class PetManager:
         """扫描 ~/.hanako/agents/ 发现所有可用 agent
 
         Returns:
-            [{"id": "ophelia", "name": "奥菲莉娅", "has_sprites": True, "enabled": True}, ...]
+            [{"id": "yuexinmiao", "name": "月薪喵", "has_sprites": True, "enabled": True}, ...]
         """
         if not AGENTS_DIR.exists():
             return []

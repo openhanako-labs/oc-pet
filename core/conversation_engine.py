@@ -4,7 +4,7 @@
   用户消息 -> LLM -> TTS -> 回调（气泡 + 音频）
 
 用法:
-    engine = ConversationEngine(character_id="ophelia")
+    engine = ConversationEngine(character_id="yuexinmiao")
     engine.start()  # 启动后台线程 + 预加载 TTS
     engine.send("你好")  # 发送消息，异步处理
     # 结果通过 on_reply 回调返回
@@ -49,7 +49,7 @@ class ConversationEngine:
     生命周期：随 pet 启动而启动，随 pet 关闭而关闭。
     """
 
-    def __init__(self, character_id: str = "ophelia", perception: PerceptionController = None, tts_provider=None, builtin: bool = False):
+    def __init__(self, character_id: str = "yuexinmiao", perception: PerceptionController = None, tts_provider=None, builtin: bool = False):
         self._character_id = character_id
         self._builtin = builtin
         self._adapter = None

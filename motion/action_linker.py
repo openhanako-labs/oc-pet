@@ -1,7 +1,7 @@
 """动作指令联动 — 关键词检测 → 右键菜单动态高亮 + 特殊事件写入。
 
 用法:
-    linker = ActionLinker(character_id="ophelia")
+    linker = ActionLinker(character_id="yuexinmiao")
 
     # 在收到 LLM 回复时检测关键词
     linker.check(reply_text)

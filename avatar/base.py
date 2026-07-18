@@ -37,7 +37,7 @@ class AvatarRenderer(ABC):
         """加载角色资源。
 
         Args:
-            character_id: 角色 ID（如 "ophelia"、"yuexiye"）
+            character_id: 角色 ID（如 "yuexinmiao"、"phoebe"）
 
         Returns:
             True 如果加载成功

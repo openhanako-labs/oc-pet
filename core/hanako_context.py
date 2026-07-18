@@ -4,7 +4,7 @@
 而是直接读取 ~/.hanako/agents/<角色>/ 下的同一套文件。
 
 用法：
-    ctx = HanakoContext("ophelia")
+    ctx = HanakoContext("yuexinmiao")
     identity = ctx.read_identity()       # identity.md → 角色身份
     ishiki = ctx.read_ishiki()           # ishiki.md → 意识/规则
     system_prompt = ctx.build_prompt()   # 组合成完整 system prompt
@@ -41,7 +41,7 @@ class HanakoContext:
     - 内置角色: <project>/characters/<agent_id>/ (builtin)
     """
 
-    def __init__(self, agent_id: str = "ophelia", builtin: bool = False):
+    def __init__(self, agent_id: str = "yuexinmiao", builtin: bool = False):
         self.agent_id = agent_id
         self._builtin = builtin
         if builtin:

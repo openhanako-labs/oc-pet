@@ -28,7 +28,7 @@ class HanakoPetAdapter:
     不再保留独立的角色 prompt 和 API 配置。
     """
 
-    def __init__(self, agent_id: str = "ophelia", builtin: bool = False):
+    def __init__(self, agent_id: str = "yuexinmiao", builtin: bool = False):
         self.agent_id = agent_id
         self._builtin = builtin
         self._context = HanakoContext(agent_id, builtin=builtin)

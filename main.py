@@ -72,8 +72,8 @@ def main():
             # 2. 扫描 Hanako agents
             discovered = manager.discover_agents()
             for agent in discovered:
-                if agent["id"] == "ophelia":
-                    manager.add_agent("ophelia")
+                if agent["id"] == "yuexinmiao":
+                    manager.add_agent("yuexinmiao")
                     break
             if not manager.agents:
                 for agent in discovered:

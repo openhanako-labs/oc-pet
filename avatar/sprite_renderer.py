@@ -59,7 +59,7 @@ class SpriteRenderer(AvatarRenderer):
 
     用法：
         renderer = SpriteRenderer(parent_widget)
-        renderer.load("ophelia")
+        renderer.load("yuexinmiao")
         renderer.play_anim("idle")
         renderer.look_at(mouse_x, mouse_y)  # 视线跟随
     """

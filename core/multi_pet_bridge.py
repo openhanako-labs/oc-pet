@@ -10,11 +10,11 @@
     bridge.start()
 
     # 注册桌宠
-    bridge.register_pet("ophelia", pet_window)
+    bridge.register_pet("yuexinmiao", pet_window)
 
     # 手动发布事件
     from dataclasses import replace
-    event = PetEvent(source_agent="ophelia", event_type="cross_pet_chat",
+    event = PetEvent(source_agent="yuexinmiao", event_type="cross_pet_chat",
                      payload={"text": "嘿，你在忙什么？"})
     bridge.publish(event)
 

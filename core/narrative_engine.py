@@ -7,7 +7,7 @@
   4. 情境缓存 + 冷却控制 + 本地模板兜底
 
 用法:
-    engine = NarrativeEngine(character_id="ophelia", perception=perception_ctrl, adapter=adapter)
+    engine = NarrativeEngine(character_id="yuexinmiao", perception=perception_ctrl, adapter=adapter)
     event = engine.request_event()       # 同步，阻塞等待 LLM 或模板
     if event:
         engine.apply(event, on_reply)    # 触发 UI 展示
@@ -270,7 +270,7 @@ class NarrativeEngine:
 
     def __init__(
         self,
-        character_id: str = "ophelia",
+        character_id: str = "yuexinmiao",
         perception: "PerceptionController" = None,
         adapter: "HanakoPetAdapter" = None,
         cooldown_minutes: float = 5.0,  # 测试用，正式版改回 15.0

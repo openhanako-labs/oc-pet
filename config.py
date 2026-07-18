@@ -5,7 +5,7 @@ import os
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
 DEFAULT_CONFIG = {
-    "character": "ophelia",
+    "character": "yuexinmiao",
     "scale": 1.0,
     "opacity": 1.0,
     "behavior": "normal",
@@ -78,9 +78,9 @@ CHARACTER_INFO = {
         "name": "月薪喵",
         "path": "characters/yuexinmiao",
     },
-    "ophelia": {
-        "name": "奥菲莉娅",
-        "path": "characters/ophelia",
+    "phoebe": {
+        "name": "菲比",
+        "path": "characters/phoebe",
     },
 }
 

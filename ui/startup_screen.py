@@ -54,7 +54,7 @@ class StartupScreen(QWidget):
 
     用法:
         screen = StartupScreen(parent_pet_window)
-        screen.show_for_character("ophelia")
+        screen.show_for_character("yuexinmiao")
         # 自动渐入→停留→渐出
     """
 

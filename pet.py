@@ -68,7 +68,7 @@ class PetWindow(QWidget):
     screen_emotion_signal = Signal(str, float)  # emotion, intensity
     screen_proactive_signal = Signal(str)  # prompt
 
-    def __init__(self, agent_id: str = "ophelia", sprite_dir: str = None,
+    def __init__(self, agent_id: str = "yuexinmiao", sprite_dir: str = None,
                  position: dict = None, scale: float = 1.0,
                  on_position_change: callable = None,
                  pet_manager=None):

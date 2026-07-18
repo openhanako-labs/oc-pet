@@ -786,7 +786,7 @@ class PerceptionController:
     """统一感知控制器 - 整合时间/情绪/日程/屏幕/主动对话 + M2 增强环境扫描
 
     用法:
-        ctrl = PerceptionController(character_id="ophelia")
+        ctrl = PerceptionController(character_id="yuexinmiao")
         ctrl.start_screen(interval=120)
         ctrl.set_proactive(foreground_watcher=watcher, on_proactive=callback)
         ctrl.load_proactive_config(config)
@@ -801,7 +801,7 @@ class PerceptionController:
         ctrl.trigger_emotion("happy")
     """
 
-    def __init__(self, character_id: str = "ophelia"):
+    def __init__(self, character_id: str = "yuexinmiao"):
         self._character_id = character_id
         self._time = TimePerception()
         self._emotion = EmotionStateMachine()
