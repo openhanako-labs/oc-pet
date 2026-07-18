@@ -51,6 +51,20 @@ def _load_env(force: bool = False):
 _load_env()
 
 
+def _read_catalog_provider(provider_id: str) -> dict:
+    """从 Hanako provider-catalog.json 读取指定 provider 配置"""
+    catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+    if not catalog_path.exists():
+        return {}
+    try:
+        import json
+        data = json.loads(catalog_path.read_text("utf-8"))
+        providers = data.get("providers", {})
+        return providers.get(provider_id, {})
+    except Exception:
+        return {}
+
+
 def get_llm_config() -> dict:
     """获取 LLM 配置 - .env 优先，回退到 Hanako
 
@@ -68,13 +82,30 @@ def get_llm_config() -> dict:
 
 
 def get_tts_api_config() -> dict:
-    """获取 TTS API 配置"""
-    return {
-        "base_url": os.environ.get("TTS_BASE_URL", "").strip(),
-        "api_key": os.environ.get("TTS_API_KEY", "").strip(),
-        "model": os.environ.get("TTS_MODEL", "tts-1").strip(),
-        "voice": os.environ.get("TTS_VOICE", "alloy").strip(),
-    }
+    """获取 TTS API 配置 — .env 优先，回退到 Hanako catalog"""
+    base_url = os.environ.get("TTS_BASE_URL", "").strip()
+    api_key = os.environ.get("TTS_API_KEY", "").strip()
+    model = os.environ.get("TTS_MODEL", "").strip()
+    voice = os.environ.get("TTS_VOICE", "").strip()
+
+    if base_url and api_key:
+        return {
+            "base_url": base_url,
+            "api_key": api_key,
+            "model": model or "mimo-v2.5-tts",
+            "voice": voice or "冰糖",
+        }
+
+    # 回退：从 Hanako provider-catalog 读 mimo-token-plan
+    catalog_cfg = _read_catalog_provider("mimo-token-plan")
+    if catalog_cfg:
+        return {
+            "base_url": catalog_cfg.get("base_url", ""),
+            "api_key": catalog_cfg.get("api_key", ""),
+            "model": "mimo-v2.5-tts",
+            "voice": voice or "冰糖",
+        }
+    return {"base_url": "", "api_key": "", "model": "", "voice": ""}
 
 
 def get_asr_api_config() -> dict:
@@ -88,9 +119,9 @@ def get_asr_api_config() -> dict:
 
 def get_vision_config() -> dict:
     """获取视觉模型配置（屏幕感知专用）
-    
-    优先使用视觉专用配置，回退到 LLM 配置。
-    
+
+    优先使用视觉专用配置，回退到 Hanako catalog 的 agnes provider。
+
     Returns:
         {"base_url": ..., "api_key": ..., "model": ...}
         如果没有配置则返回空 dict
@@ -98,9 +129,24 @@ def get_vision_config() -> dict:
     base_url = os.environ.get("VISION_BASE_URL", "").strip()
     api_key = os.environ.get("VISION_API_KEY", "").strip()
     model = os.environ.get("VISION_MODEL", "").strip()
-    
+
     if base_url and api_key:
         return {"base_url": base_url, "api_key": api_key, "model": model}
+
+    # 回退：从 Hanako catalog 读 agnes
+    catalog_cfg = _read_catalog_provider("agnes")
+    if catalog_cfg and catalog_cfg.get("api_key"):
+        models = catalog_cfg.get("models", [])
+        vision_model = "agnes-2.0-flash"
+        for m in models:
+            if isinstance(m, dict) and m.get("video"):
+                vision_model = m.get("id", vision_model)
+                break
+        return {
+            "base_url": catalog_cfg["base_url"],
+            "api_key": catalog_cfg["api_key"],
+            "model": model or vision_model,
+        }
     return {}
 
 
