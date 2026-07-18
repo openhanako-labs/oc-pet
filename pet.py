@@ -37,6 +37,7 @@ from motion.foreground_watcher import ForegroundWatcher
 from ui.tts_player import TTSTtsPlayer
 from ui.startup_screen import StartupScreen
 from core.perception import PerceptionController, ProactiveScheduler
+from core.pet_audio_bridge import PetAudioBridge, PetAudioCallbacks, AudioType
 from motion.physics import PhysicsEngine, MotionStateMachine, PhysicsCallbacks
 from avatar.sprite_renderer import SpriteRenderer
 
@@ -259,6 +260,14 @@ class PetWindow(QWidget):
         self._tts_player.on_start = self._on_tts_start
         self._tts_player.on_end = self._on_tts_end
         self._tts_player.on_error = lambda msg: self._on_tts_end()
+
+        # ── AUDIO-07: 桌宠音频事件桥接器 ──
+        self._audio_bridge = PetAudioBridge(self)
+        try:
+            self._audio_bridge.connect()
+            logger.info("AUDIO-07: PetAudioBridge connected")
+        except Exception as e:
+            logger.warning("AUDIO-07: Failed to connect bridge: %s", e)
 
         # ── 帧动画状态(在 _setup_ui 后初始化)──
         self._anim_seq = 'idle'
@@ -622,30 +631,63 @@ class PetWindow(QWidget):
 
     # ── TTS 口型 ──
 
-    def _on_tts_start(self):
-        """TTS 开始播放 → 切换到嘴型帧"""
+    # ── PetAudioCallbacks 实现（AUDIO-07）──
+
+    def on_tts_start(self, emotion: str = "neutral") -> None:
+        """AUDIO-07 回调：TTS 开始 → PET-02 口型"""
         frames = self._renderer._frames
-        # 根据当前情感选择嘴型
-        emotion = getattr(self, '_last_tts_emotion', 'neutral')
         if emotion in ('happy', 'angry', 'surprised'):
             speak_seq = 'speak_open'
         else:
             speak_seq = 'speak_half'
-        # 降级：没有对应帧就试另一个，都没有就不切
         for seq in (speak_seq, 'speak_open', 'speak_half', 'speak_closed'):
             if seq in frames:
                 self._renderer.play_anim(seq)
                 self._anim_seq = seq
-                logger.debug("TTS mouth: %s", seq)
+                logger.debug("AUDIO-07 TTS mouth: %s (emotion=%s)", seq, emotion)
                 return
-        # 无嘴型帧，静默降级
-        logger.debug("TTS mouth: no speak frames, skipping")
+        logger.debug("AUDIO-07 TTS mouth: no speak frames, skip")
+
+    def on_tts_end(self) -> None:
+        """AUDIO-07 回调：TTS 结束 → 恢复 idle"""
+        self._set_anim_seq('idle')
+        logger.debug("AUDIO-07 TTS mouth: restored idle")
+
+    def on_music_start(self, track_name: str = "") -> None:
+        """AUDIO-07 回调：音乐开始 → 强制闭嘴"""
+        self._set_anim_seq('idle')  # 确保不处于说话状态
+        logger.info("AUDIO-07 music start: %s (mouth closed)", track_name)
+
+    def on_music_end(self) -> None:
+        """AUDIO-07 回调：音乐结束 → 恢复正常"""
+        logger.info("AUDIO-07 music end")
+
+    def on_notification_play(self) -> None:
+        """AUDIO-07 回调：提示音 → 瞬时反应"""
+        # 可选：触发 extra 帧 blink/jump
+        logger.debug("AUDIO-07 notification played")
+
+    def on_volume_change(self, volume: float) -> None:
+        """AUDIO-07 回调：音量变化"""
+        pass
+
+    def on_pause(self, audio_type) -> None:
+        """AUDIO-07 回调：播放暂停"""
+        logger.debug("AUDIO-07 pause: %s", audio_type.value if hasattr(audio_type, 'value') else audio_type)
+
+    def on_resume(self, audio_type) -> None:
+        """AUDIO-07 回调：播放恢复"""
+        logger.debug("AUDIO-07 resume: %s", audio_type.value if hasattr(audio_type, 'value') else audio_type)
+
+    # ── 旧接口兼容（直接由 TTSTtsPlayer 调用）──
+
+    def _on_tts_start(self):
+        """兼容 TTSTtsPlayer.on_start → 转发给桥接器"""
+        self.on_tts_start(getattr(self, '_last_tts_emotion', 'neutral'))
 
     def _on_tts_end(self):
-        """TTS 结束播放 → 恢复默认动画"""
-        # 回到 idle（或当前应有的动画）
-        self._set_anim_seq('idle')
-        logger.debug("TTS mouth: restored idle")
+        """兼容 TTSTtsPlayer.on_end → 转发给桥接器"""
+        self.on_tts_end()
 
     def _reposition_bubble(self):
         """气泡置于角色头顶上方,根据实际角色内容定位"""
@@ -1189,15 +1231,42 @@ class PetWindow(QWidget):
         self._pending_emotion = "neutral"
         self._pending_chat = True
 
+        # 立即切换到思考动画（视觉反馈）
+        try:
+            self._set_anim_seq("working", emotion="thinking")
+        except Exception:
+            pass
+
+        # 超时保护：30 秒无回复自动恢复
+        if not hasattr(self, '_think_timeout'):
+            from PySide6.QtCore import QTimer as _QTimer
+            self._think_timeout = _QTimer()
+            self._think_timeout.setSingleShot(True)
+            self._think_timeout.timeout.connect(self._on_think_timeout)
+        self._think_timeout.start(30000)
+
     def _auto_hide_bubble(self):
         """发送中气泡超时隐藏"""
         self._is_thinking = False
         self._bubble_message = ""
+        # 取消超时计时器
+        if hasattr(self, '_think_timeout'):
+            self._think_timeout.stop()
         if hasattr(self, 'bubble'):
             try:
                 self.bubble.hide_bubble()
             except Exception:
                 pass
+
+    def _on_think_timeout(self):
+        """LLM 超时：自动恢复 idle 状态"""
+        if self._is_thinking:
+            logger.warning("LLM response timeout (30s), resetting to idle")
+            self._is_thinking = False
+            self._pending_chat = False
+            self.bubble.hide_bubble()
+            self._set_anim_seq('idle')
+            self._show_bubble("…信号不太好", emotion="sad")
 
     def _clear_hanako_bubble(self):
         """清除气泡（超时回调）"""
@@ -1216,6 +1285,10 @@ class PetWindow(QWidget):
 
     def _do_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str):
         """在主线程中处理引擎回复"""
+        # 取消超时计时器
+        if hasattr(self, '_think_timeout'):
+            self._think_timeout.stop()
+
         # 截停旧 TTS
         self._tts_player.stop()
 
@@ -1723,6 +1796,13 @@ class PetWindow(QWidget):
         if hasattr(self, '_tts_player'):
             try:
                 self._tts_player.stop()
+            except Exception:
+                pass
+
+        # ── AUDIO-07: 断开桥接器 ──
+        if hasattr(self, '_audio_bridge'):
+            try:
+                self._audio_bridge.disconnect()
             except Exception:
                 pass
 
