@@ -598,10 +598,12 @@ class PetWindow(QWidget):
         self._bob_frame += 1
         self._bob_offset = int(math.sin(self._bob_frame * 0.06) * 2.5)
         if not self._is_dragging:
-            # 视线偏移 + 呼吸浮动叠加
             ox = self._renderer._base_label_pos.x() + int(self._renderer._gaze_offset_x)
             oy = self._renderer._base_label_pos.y() + int(self._renderer._gaze_offset_y) + self._bob_offset
-            self.char_label.move(ox, oy)
+            # 只在位置变化时 move，避免不必要的重绘
+            cur = self.char_label.pos()
+            if cur.x() != ox or cur.y() != oy:
+                self.char_label.move(ox, oy)
 
     def _gaze_tick(self):
         """视线跟随平滑更新"""
