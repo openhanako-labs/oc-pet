@@ -107,9 +107,10 @@ class PetWindow(QWidget):
         self._label_base_pos = QPoint(0, 0)
         self._target_x = 0
         self._vx = 0.0
-        self._physics_timer = QTimer(self)
-        self._physics_timer.timeout.connect(lambda: self._physics.tick(self._get_behavior_params()))
-        self._physics_timer.start(PHYSICS_INTERVAL)  # 始终运行，idle 时 tick 直接 return
+        # 合并 physics + bob + gaze 为单个 30ms 定时器（减少事件循环压力）
+        self._unified_timer = QTimer(self)
+        self._unified_timer.timeout.connect(self._unified_tick)
+        self._unified_timer.start(PHYSICS_INTERVAL)  # 30ms, ~33Hz
         self._motion_state = "idle"   # idle / wander / rest
         self._rest_counter = 0
         self._motion_timer = QTimer(self)
@@ -187,10 +188,7 @@ class PetWindow(QWidget):
         self._mouse_tracker_timer = QTimer(self)
         self._mouse_tracker_timer.timeout.connect(self._mouse_tracker.tick)
         self._mouse_tracker_timer.start(200)
-        # 视线跟随定时器（更新平滑偏移）
-        self._gaze_timer = QTimer(self)
-        self._gaze_timer.timeout.connect(self._gaze_tick)
-        self._gaze_timer.start(50)  # 20fps 平滑
+        # 视线跟随由 unified_timer 驱动，不再单独开定时器
 
         # ── TTS provider ──
         tts_provider = self._create_tts_provider()
@@ -594,10 +592,7 @@ class PetWindow(QWidget):
     def _setup_animation(self):
         # 帧动画时钟(idle 默认 4fps,walk 6fps)
         self._anim_timer.start(200)
-        # 呼吸浮动
-        self._bob_timer = QTimer(self)
-        self._bob_timer.timeout.connect(self._bob_tick)
-        self._bob_timer.start(30)
+        # 呼吸浮动由 unified_timer 驱动，不再单独开定时器
 
     def _bob_tick(self):
         self._bob_frame += 1
@@ -607,6 +602,20 @@ class PetWindow(QWidget):
             ox = self._renderer._base_label_pos.x() + int(self._renderer._gaze_offset_x)
             oy = self._renderer._base_label_pos.y() + int(self._renderer._gaze_offset_y) + self._bob_offset
             self.char_label.move(ox, oy)
+
+    def _gaze_tick(self):
+        """视线跟随平滑更新"""
+        self._renderer.update_gaze()
+
+    def _unified_tick(self):
+        """统一高频定时器回调（30ms）— 合并 physics + bob + gaze"""
+        # 1. 物理模拟
+        self._physics.tick(self._get_behavior_params())
+        # 2. 呼吸浮动
+        self._bob_tick()
+        # 3. 视线跟随（每 2 帧更新一次，~15fps 足够）
+        if self._bob_frame % 2 == 0:
+            self._gaze_tick()
 
     def _set_anim_seq(self, seq_name, emotion=None):
         """切换动画序列 - 委托给 SpriteRenderer"""
@@ -1191,7 +1200,7 @@ class PetWindow(QWidget):
         self._is_walking = False
         self._bounce_active = False
         self._physics.stop()
-        # _physics_timer 保持运行（idle 时 tick 直接 return）
+        # _unified_timer 保持运行（idle 时 tick 直接 return）
         self._motion.reset()
         self._set_anim_seq('idle')
 
@@ -1627,7 +1636,7 @@ class PetWindow(QWidget):
         target = max(10, min(target, sg.width() - self.width() - 10))
         self._motion_state = "chase"
         self._physics.start_walk(target, facing_right=(direction > 0))
-        # _physics_timer 已在初始化时启动
+        # _unified_timer 已在初始化时启动
 
     def _on_mouse_startled(self, speed: float):
         """鼠标快速掠过 - 只切动画"""
@@ -1782,10 +1791,10 @@ class PetWindow(QWidget):
     def closeEvent(self, event):
         """关闭窗口时停止所有定时器 + 清理资源"""
         timers = [
-            '_physics_timer', '_motion_timer', '_bob_timer',
+            '_unified_timer', '_motion_timer',
             '_anim_timer', '_drag_poll_timer', '_hanako_poll_timer',
             '_break_timer', '_foreground_timer', '_bubble_timer',
-            '_mouse_tracker_timer', '_gaze_timer',
+            '_mouse_tracker_timer',
         ]
         for tname in timers:
             t = getattr(self, tname, None)
