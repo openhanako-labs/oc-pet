@@ -976,6 +976,8 @@ class PetWindow(QWidget):
     def eventFilter(self, obj, event):
         if obj is self.char_label:
             t = event.type()
+            import time as _time
+            _t0 = _time.perf_counter()
 
             if t == QEvent.MouseButtonPress:
                 if event.button() == Qt.LeftButton:
@@ -986,6 +988,9 @@ class PetWindow(QWidget):
                     self._drag_start_window = self.pos()
                     self._is_dragging = False
                     self._was_click = True
+                _elapsed = (_time.perf_counter() - _t0) * 1000
+                if _elapsed > 16:
+                    logger.warning("eventFilter[press] slow: %.1fms", _elapsed)
                 return True
 
             elif t == QEvent.MouseMove:
@@ -1052,6 +1057,9 @@ class PetWindow(QWidget):
                         self._toggle_chat()
                         self._motion_state = "idle"
                     self._was_click = False
+                _elapsed = (_time.perf_counter() - _t0) * 1000
+                if _elapsed > 16:  # 超过一帧的时间才告警
+                    logger.warning("eventFilter[release] slow: %.1fms", _elapsed)
                 return True
 
             elif t == QEvent.MouseButtonDblClick:
