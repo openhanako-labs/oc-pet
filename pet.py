@@ -107,10 +107,10 @@ class PetWindow(QWidget):
         self._label_base_pos = QPoint(0, 0)
         self._target_x = 0
         self._vx = 0.0
-        # 合并 physics + bob + gaze 为单个 30ms 定时器（减少事件循环压力）
+        # 合并 physics + bob + gaze 为单个定时器（减少事件循环压力）
         self._unified_timer = QTimer(self)
         self._unified_timer.timeout.connect(self._unified_tick)
-        self._unified_timer.start(PHYSICS_INTERVAL)  # 30ms, ~33Hz
+        self._unified_timer.start(50)  # 50ms = 20fps，平衡流畅与性能
         self._motion_state = "idle"   # idle / wander / rest
         self._rest_counter = 0
         self._motion_timer = QTimer(self)
