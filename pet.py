@@ -1681,8 +1681,10 @@ class PetWindow(QWidget):
     def _do_screen_proactive(self, prompt: str):
         """在主线程处理屏幕内容主动对话"""
         try:
-            # 显示气泡
-            self._show_bubble(prompt, emotion="thinking")
+            # 不显示原始提示词（那是内部 prompt，不是给用户看的）
+            # 只显示思考状态
+            self._show_bubble("⏳ 思考中...", emotion="thinking")
+            self._is_thinking = True
             # 发送给对话引擎生成回复（会触发 TTS）
             if hasattr(self, '_engine') and self._engine:
                 self._engine.send(prompt)
