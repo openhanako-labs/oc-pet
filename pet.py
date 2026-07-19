@@ -330,6 +330,21 @@ class PetWindow(QWidget):
         self._pending_emotion = "neutral"  # 等待配对的 emotion
         self._pending_chat = False  # 是否正在等待 Agent 回复
 
+    def set_hanako_ws(self, ws_client, session_manager):
+        """注入共享 Hanako WS 客户端（由 PetManager 调用）"""
+        try:
+            # 注入到对话引擎
+            if hasattr(self, '_engine') and self._engine:
+                if hasattr(self._engine, 'set_session_manager'):
+                    self._engine.set_session_manager(session_manager)
+            # 注入到 HanakoMonitor（共享 WS 订阅）
+            if hasattr(self, '_hanako_monitor') and self._hanako_monitor:
+                if hasattr(self._hanako_monitor, 'set_ws_client'):
+                    self._hanako_monitor.set_ws_client(ws_client)
+            logger.info("Hanako WS injected into PetWindow")
+        except Exception as e:
+            logger.warning("set_hanako_ws failed: %s", e)
+
 
     # ── 屏幕查询 ──
 

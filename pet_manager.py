@@ -40,6 +40,10 @@ class PetManager:
         # ── M4: MultiPetBridge ──
         self._bridge = None
         self._bridge_enabled = True  # 可通过配置开关
+        # ── Hanako WS 客户端（共享） ──
+        self._ws_client = None
+        self._session_manager = None
+        self._init_hanako_ws()
 
     @property
     def agents(self) -> list[dict]:
@@ -256,6 +260,48 @@ class PetManager:
                     self.close_window(agent_id)
                 return
 
+    def _init_hanako_ws(self):
+        """初始化共享 Hanako WS 客户端"""
+        try:
+            from env_config import get_hanako_config
+            from core.hanako_ws_client import HanakoWSClient
+            from core.hanako_session_manager import HanakoSessionManager
+
+            cfg = get_hanako_config()
+            if cfg["transport_mode"] == "direct":
+                logger.info("Hanako transport mode=direct, skip WS client")
+                return
+
+            self._ws_client = HanakoWSClient(cfg["base_url"], cfg["api_token"])
+            self._session_manager = HanakoSessionManager(
+                self._ws_client, cfg["base_url"], cfg["api_token"],
+                reply_timeout=cfg["reply_timeout"]
+            )
+            self._ws_client.start()
+            logger.info("Hanako WS client started | mode=%s", cfg["transport_mode"])
+        except Exception as e:
+            logger.warning("Hanako WS init failed: %s (will fallback to direct LLM)", e)
+            self._ws_client = None
+            self._session_manager = None
+
+    def _shutdown_hanako_ws(self):
+        """关闭 Hanako WS 客户端"""
+        if self._ws_client:
+            try:
+                self._ws_client.stop(timeout=3)
+            except Exception:
+                pass
+            self._ws_client = None
+            self._session_manager = None
+
+    @property
+    def ws_client(self):
+        return self._ws_client
+
+    @property
+    def session_manager(self):
+        return self._session_manager
+
     # ── 窗口管理 ──
 
     def launch_all(self):
@@ -293,6 +339,15 @@ class PetManager:
             self._windows[agent_id] = window
             logger.info("Launched pet window for %s (sprites: %s)",
                         agent_id, sprite_dir or "default")
+
+            # ── 注入 Hanako WS 客户端 ──
+            if self._ws_client and self._session_manager:
+                try:
+                    if hasattr(window, 'set_hanako_ws'):
+                        window.set_hanako_ws(self._ws_client, self._session_manager)
+                        logger.info("Injected Hanako WS into %s", agent_id)
+                except Exception as e:
+                    logger.warning("Failed to inject Hanako WS into %s: %s", agent_id, e)
 
             # ── M4: 注册桌宠到桥接器 ──
             if self._bridge and self._bridge_enabled:
