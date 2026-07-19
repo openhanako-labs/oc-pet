@@ -295,3 +295,38 @@ QToolTip {
     border-radius: 4px;
     padding: 4px 8px;
 }
+
+/* ============== ActivityFeed（活动流浮动窗口） ============== */
+QFrame#feedHeader {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #e5e2db;
+}
+
+QLabel#feedTitle {
+    color: #2c2c2c;
+    background: transparent;
+    font-weight: 600;
+}
+
+QLabel#feedCount {
+    color: #7a7a7a;
+    background: transparent;
+}
+
+QPushButton#feedClose {
+    background: transparent;
+    color: #7a7a7a;
+    border: none;
+    padding: 0;
+    font-size: 18px;
+    font-weight: bold;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+}
+
+QPushButton#feedClose:hover {
+    color: #ff3b30;
+}

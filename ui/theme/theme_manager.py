@@ -47,6 +47,7 @@ class ThemeManager(QObject):
     def __init__(self, app: QApplication):
         super().__init__()
         self._app = app
+        self._mode = "auto"  # "auto" | "light" | "dark"
         self._current = self._detect_initial()
 
         # 每分钟检查一次（避免错过 6:00 / 18:00 边界）
@@ -54,7 +55,7 @@ class ThemeManager(QObject):
         self._timer.timeout.connect(self._check_switch)
         self._timer.start(60_000)  # 60s
 
-        logger.info("ThemeManager 初始化，当前主题：%s", self._current)
+        logger.info("ThemeManager 初始化，当前主题：%s，模式：%s", self._current, self._mode)
 
     def _detect_initial(self) -> str:
         return "dark" if _is_dark_now() else "light"
@@ -67,6 +68,8 @@ class ThemeManager(QObject):
         return path.read_text(encoding="utf-8")
 
     def _check_switch(self):
+        if self._mode != "auto":
+            return  # 手动模式，禁用自动检查
         new = self._detect_initial()
         if new != self._current:
             logger.info("主题切换：%s → %s", self._current, new)
@@ -83,21 +86,46 @@ class ThemeManager(QObject):
         self._apply()
 
     def force_switch(self, theme: str):
-        """手动切换主题（测试 / 用户手动覆盖用）
+        """手动切换主题（兼容老 API，会自动禁用自动模式）
 
-        注意：这不会改变时间判断逻辑，60s 后如果时间到了边界会自动切回去
+        注意：调用后会禁用自动切换，不会自动切回时间判断的主题
         """
         if theme not in ("light", "dark"):
             return
-        if theme != self._current:
-            logger.info("手动切换：%s → %s", self._current, theme)
-            self._current = theme
+        self.set_mode(theme)
+
+    def set_mode(self, mode: str):
+        """设置主题模式
+
+        - "auto": 跟随时间自动切换（默认）
+        - "light": 强制浅色（禁用自动检查）
+        - "dark": 强制深色（禁用自动检查）
+
+        子菜单、设置面板都可以调用这个接口。
+        """
+        if mode not in ("auto", "light", "dark"):
+            logger.warning("未知主题模式：%s", mode)
+            return
+        old_mode = self._mode
+        old_theme = self._current
+        self._mode = mode
+        if mode == "auto":
+            self._current = self._detect_initial()
+        else:
+            self._current = mode
+        if old_theme != self._current:
             self._apply()
-            self.theme_changed.emit(theme)
+            self.theme_changed.emit(self._current)
+        logger.info("主题模式：%s → %s（主题：%s）", old_mode, mode, self._current)
 
     @property
     def current(self) -> str:
         return self._current
+
+    @property
+    def mode(self) -> str:
+        """当前模式（auto / light / dark）"""
+        return self._mode
 
 
 # 全局单例

@@ -755,6 +755,17 @@ class PetWindow(QWidget):
         self._passthrough_action.setCheckable(True)
         self._passthrough_action.setChecked(self._mousePassthrough)
         self._menu.addAction("📜 活动流", self._open_activity_feed)
+
+        # 主题子菜单
+        self._theme_submenu = self._menu.addMenu("🎨 主题")
+        self._theme_actions = {}
+        for label, mode in [("自动（跟随时间）", "auto"), ("浅色", "light"), ("深色", "dark")]:
+            a = self._theme_submenu.addAction(label)
+            a.setCheckable(True)
+            a.triggered.connect(lambda checked, m=mode: self._set_theme_mode(m))
+            self._theme_actions[mode] = a
+        self._refresh_theme_menu()
+
         self._menu.addAction("⚙️ 设置", self._open_settings)
         self._menu.addAction("🔌 插件", self._open_plugin_panel)
 
@@ -872,6 +883,29 @@ class PetWindow(QWidget):
         except Exception as e:
             logger.warning("ASR provider 创建失败 (%s): %s", provider, e)
             return None
+
+    def _refresh_theme_menu(self):
+        """根据 ThemeManager 当前 mode 同步右键菜单选中状态"""
+        from ui.theme import get_default
+        mgr = get_default()
+        if mgr is None:
+            return
+        current_mode = mgr.mode
+        for mode, action in self._theme_actions.items():
+            action.setChecked(mode == current_mode)
+
+    def _set_theme_mode(self, mode: str):
+        """切换主题模式（auto / light / dark）"""
+        from ui.theme import get_default
+        mgr = get_default()
+        if mgr is None:
+            return
+        mgr.set_mode(mode)
+        self._refresh_theme_menu()
+        mode_label = {"auto": "自动（跟随时间）", "light": "浅色", "dark": "深色"}.get(mode, mode)
+        logger.info("主题模式切换：%s", mode_label)
+        # 轻量提示（在气泡显示）
+        self._show_bubble(f"🎨 主题：{mode_label}", "neutral")
 
     def _open_activity_feed(self):
         """打开活动流窗口（浮动窗口，跟随宠宠位置）
