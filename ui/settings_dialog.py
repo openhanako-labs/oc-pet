@@ -29,69 +29,6 @@ from PySide6.QtGui import QFont
 from config import load_config
 
 
-STYLE = """
-QDialog { background: #f7f6f3; color: #2c2c2c; }
-QTabWidget::pane { border: 1px solid #e5e2db; background: #ffffff; }
-QTabBar::tab {
-    background: #f7f6f3; color: #7a7a7a; border: 1px solid #e5e2db;
-    padding: 8px 16px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px;
-}
-QTabBar::tab:selected { background: #ffffff; color: #2c2c2c; border-bottom: 2px solid #4a90d9; }
-QTabBar::tab:hover { background: #ffffff; color: #2c2c2c; }
-QGroupBox {
-    border: 1px solid #e5e2db; border-radius: 8px;
-    margin-top: 16px; padding-top: 20px;
-    color: #7a7a7a; font-weight: bold;
-    background: #ffffff;
-}
-QGroupBox::title { left: 12px; padding: 0 6px; }
-QLabel { color: #2c2c2c; }
-QCheckBox { color: #2c2c2c; }
-QComboBox {
-    background: #ffffff; color: #2c2c2c;
-    border: 1px solid #e5e2db; border-radius: 4px; padding: 4px 8px;
-    min-height: 22px;
-}
-QComboBox::drop-down {
-    subcontrol-origin: padding;
-    subcontrol-position: center right;
-    width: 20px;
-    border: none;
-}
-QComboBox::down-arrow {
-    image: none;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid #7a7a7a;
-    margin-right: 6px;
-}
-QComboBox QAbstractItemView {
-    background: #ffffff; color: #2c2c2c; selection-background-color: #e8f0fc;
-    border: 1px solid #e5e2db;
-}
-QSlider::groove:horizontal { height: 4px; background: #e5e2db; border-radius: 2px; }
-QSlider::handle:horizontal {
-    background: #4a90d9; width: 14px; height: 14px;
-    margin: -5px 0; border-radius: 7px;
-}
-QPushButton {
-    background: #4a90d9; color: #ffffff; border: none;
-    border-radius: 4px; padding: 8px 24px; font-size: 13px;
-}
-QPushButton:hover { background: #5fa0e9; }
-QPushButton#save { background: #34c759; }
-QPushButton#save:hover { background: #44d769; }
-QPushButton#danger { background: #ff3b30; }
-QPushButton#danger:hover { background: #ff4b40; }
-QListWidget {
-    background: #ffffff; color: #2c2c2c;
-    border: 1px solid #e5e2db; border-radius: 4px;
-}
-QListWidget::item { padding: 4px 8px; }
-QListWidget::item:selected { background: #e8f0fc; }
-"""
-
-
 class SettingsDialog(QDialog):
     """配置面板"""
 
@@ -101,7 +38,9 @@ class SettingsDialog(QDialog):
         self._pet_manager = pet_manager
         self.setWindowTitle("设置")
         self.setMinimumSize(460, 600)
-        self.setStyleSheet(STYLE)
+        # 注意：不再调用 self.setStyleSheet(STYLE)
+        # 主题由全局 ThemeManager 驱动（ui/theme/light.qss 和 dark.qss）
+        # 主题切换后会自动应用到所有 QWidget（包括本对话框）
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
