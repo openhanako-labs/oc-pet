@@ -43,7 +43,11 @@ class PetManager:
         # ── Hanako WS 客户端（共享） ──
         self._ws_client = None
         self._session_manager = None
+        # ── P0 养成系统：注册表（各 agent 共享）──
+        self._item_registry = None
+        self._work_registry = None
         self._init_hanako_ws()
+        self._init_nurturing()
 
     @property
     def agents(self) -> list[dict]:
@@ -284,6 +288,39 @@ class PetManager:
             self._ws_client = None
             self._session_manager = None
 
+    def _init_nurturing(self):
+        """初始化养成系统（注册表共享，实例 per-agent）
+
+        ItemRegistry / WorkRegistry 是无状态数据表，安全共享。
+        PetSaveManager / PetStateManager / WorkTimer 必须在 launch_window
+        里为每个 agent 独立创建（否则数据互相覆盖）。
+
+        这里只记录失败不拖启动——下游 launch_window 会重试 + fallback。
+        """
+        try:
+            from core.items.item import ItemRegistry
+            from core.work.work import WorkRegistry
+
+            self._item_registry = ItemRegistry()
+            self._work_registry = WorkRegistry()
+            logger.info(
+                "Nurturing registries ready | items=%d works=%d",
+                len(self._item_registry),
+                len(self._work_registry),
+            )
+        except Exception as e:
+            logger.warning("Nurturing registry init failed: %s (will skip)", e)
+            self._item_registry = None
+            self._work_registry = None
+
+    @property
+    def item_registry(self):
+        return self._item_registry
+
+    @property
+    def work_registry(self):
+        return self._work_registry
+
     def _shutdown_hanako_ws(self):
         """关闭 Hanako WS 客户端"""
         if self._ws_client:
@@ -348,6 +385,38 @@ class PetManager:
                         logger.info("Injected Hanako WS into %s", agent_id)
                 except Exception as e:
                     logger.warning("Failed to inject Hanako WS into %s: %s", agent_id, e)
+
+            # ── 注入 P0 养成系统（每 agent 独立 save/state/work_timer）──
+            if self._item_registry and self._work_registry \
+                    and hasattr(window, 'set_nurturing'):
+                try:
+                    from core.save.pet_save import PetSaveManager
+                    from core.pet_state import PetStateManager
+                    from core.work.work import WorkTimer
+
+                    save_mgr = PetSaveManager.from_agent_id(agent_id)
+                    save_mgr.load()
+
+                    def _on_mode_change(old, new, _aid=agent_id):
+                        logger.info("[%s] mode: %s -> %s", _aid, old, new)
+
+                    def _on_work_finish(info, _aid=agent_id):
+                        logger.info(
+                            "[%s] work done: %s reason=%s +%.0f money +%.0f exp",
+                            _aid, info.work.name, info.reason, info.money, info.exp,
+                        )
+
+                    state_mgr = PetStateManager(save_mgr, on_mode_change=_on_mode_change)
+                    work_timer = WorkTimer(save_mgr, state_mgr, on_finish=_on_work_finish)
+
+                    window.set_nurturing(
+                        save_mgr, state_mgr, work_timer,
+                        self._item_registry, self._work_registry,
+                    )
+                    logger.info("Injected nurturing into %s (save=%s)",
+                                agent_id, save_mgr.save_path)
+                except Exception as e:
+                    logger.warning("Failed to inject nurturing into %s: %s", agent_id, e)
 
             # ── M4: 注册桌宠到桥接器 ──
             if self._bridge and self._bridge_enabled:

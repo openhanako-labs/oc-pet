@@ -342,6 +342,42 @@ class PetWindow(QWidget):
         except Exception as e:
             logger.warning("set_hanako_ws failed: %s", e)
 
+    def set_nurturing(
+        self,
+        save_mgr,
+        state_mgr,
+        work_timer,
+        item_registry,
+        work_registry,
+    ):
+        """注入养成系统（由 PetManager 调用，可选）
+
+        把 PetSaveManager / PetStateManager / WorkTimer 三个实例
+        注入到 PetWindow，由 _unified_tick 驱动每秒 tick。
+        全程 hasattr 守卫，未注入时主循环不崩。
+
+        Args:
+            save_mgr: 养成数据存档管理器
+            state_mgr: 养成状态管理器（衰减 + 挂起池回流 + 模式）
+            work_timer: 工作计时器
+            item_registry: 物品注册表（菜单填充用）
+            work_registry: 工作注册表（菜单填充用）
+        """
+        try:
+            self._save_mgr = save_mgr
+            self._state_mgr = state_mgr
+            self._work_timer = work_timer
+            self._item_registry = item_registry
+            self._work_registry = work_registry
+
+            # 在右键菜单里动态插入"喂食" / "工作" / "状态"入口
+            if hasattr(self, '_menu') and self._menu is not None:
+                self._build_nurturing_menu()
+
+            logger.info("Nurturing system injected into PetWindow")
+        except Exception as e:
+            logger.warning("set_nurturing failed: %s", e)
+
 
     # ── 屏幕查询 ──
 
@@ -652,6 +688,21 @@ class PetWindow(QWidget):
                 idle_chatter.tick()
         # 5. 情绪过渡（无进行中过渡时 tick 内部直接 return，开销可忽略）
         self._transition.tick()
+        # 6. 养成 tick（每秒一次）+ 自动保存（自带 60s 节流）
+        #    所有访问都靠 hasattr 守卫，没注入养成模块时跳过
+        if self._bob_frame % 20 == 0:
+            state_mgr = getattr(self, '_state_mgr', None)
+            if state_mgr:
+                try:
+                    state_mgr.tick(1.0)
+                except Exception:
+                    logger.exception("pet state tick failed")
+            save_mgr = getattr(self, '_save_mgr', None)
+            if save_mgr:
+                try:
+                    save_mgr.auto_save()
+                except Exception:
+                    logger.exception("pet auto_save failed")
 
     def _set_anim_seq(self, seq_name, emotion=None, style="snap"):
         """切换动画序列，支持过渡。
@@ -834,6 +885,185 @@ class PetWindow(QWidget):
 
         self._menu.addSeparator()
         self._menu.addAction("❌ 退出", self.close)
+
+    # ── 养成接入（set_nurturing 后才填充） ──
+
+    def _build_nurturing_menu(self):
+        """在右键菜单里注入"喂食 / 工作 / 状态"子菜单
+
+        设计点：
+        - 仅在 _save_mgr / _item_registry / _work_registry 都已注入时执行
+        - 子菜单插到"❌ 退出"前一项
+        - 失败不摊牌——hasattr / try 已在调用处守护
+        """
+        if not hasattr(self, '_item_registry') or self._item_registry is None:
+            return
+        if not hasattr(self, '_work_registry') or self._work_registry is None:
+            return
+        if not hasattr(self, '_save_mgr') or self._save_mgr is None:
+            return
+
+        try:
+            # 复用现有 styleSheet，保持视觉一致
+            menu_style = self._menu.styleSheet()
+
+            # 找到退出 action 作为锚点
+            quit_action = None
+            for act in self._menu.actions():
+                txt = act.text() or ""
+                if txt.startswith("❌"):
+                    quit_action = act
+                    break
+
+            # 状态摘要
+            status_act = QAction("📊 状态", self._menu)
+            status_act.triggered.connect(self._show_status_summary)
+            if quit_action:
+                self._menu.insertAction(quit_action, status_act)
+            else:
+                self._menu.addAction(status_act)
+
+            # 喂食子菜单
+            self._feed_menu = QMenu(self._menu)
+            self._feed_menu.setTitle("🍎 喂食")
+            if menu_style:
+                self._feed_menu.setStyleSheet(menu_style)
+            for item in self._item_registry.all():
+                act = self._feed_menu.addAction(
+                    f"{item.icon} {item.name} ({item.price:.0f}G)"
+                )
+                act.triggered.connect(lambda checked=False, it=item: self._feed_item(it))
+            if quit_action:
+                self._menu.insertMenu(quit_action, self._feed_menu)
+            else:
+                self._menu.addMenu(self._feed_menu)
+
+            # 工作子菜单
+            self._work_menu = QMenu(self._menu)
+            self._work_menu.setTitle("💼 工作")
+            if menu_style:
+                self._work_menu.setStyleSheet(menu_style)
+            available = self._work_registry.available(self._save_mgr.save.level)
+            if available:
+                for work in available:
+                    act = self._work_menu.addAction(
+                        f"{work.icon} {work.name}"
+                    )
+                    act.triggered.connect(lambda checked=False, w=work: self._start_work(w))
+            else:
+                empty = self._work_menu.addAction("（暂无可用工作）")
+                empty.setEnabled(False)
+            if quit_action:
+                self._menu.insertMenu(quit_action, self._work_menu)
+            else:
+                self._menu.addMenu(self._work_menu)
+        except Exception:
+            logger.exception("_build_nurturing_menu failed")
+
+    def _feed_item(self, item):
+        """使用一个物品——写挂起池 + 切动画 + 飘字
+
+        物品效果走挂起池（core.items.item.use_item），回流由 state_mgr.tick 完成。
+        """
+        if not hasattr(self, '_save_mgr') or not self._save_mgr:
+            return
+        try:
+            from core.items.item import use_item
+            result = use_item(self._save_mgr.save, item)
+        except Exception:
+            logger.exception("_feed_item use_item failed")
+            self._show_bubble("吃不动...", emotion="sad")
+            return
+        try:
+            self._show_bubble(f"{item.icon} {item.name}", emotion="happy")
+            self._set_anim_seq(
+                result["graph"], emotion="happy",
+                style=get_transition_style("happy"),
+            )
+        except Exception:
+            logger.exception("_feed_item UI update failed")
+
+    def _start_work(self, work):
+        """开始一项工作——切到工作动画
+
+        WorkTimer 在自己后台线程里跑，UI 只管通知。
+        结算回调由 _work_timer._on_finish 在构造函数已绑定时接管；
+        这里再覆盖一遍保险（双绑定按最新为准）。
+        """
+        if not hasattr(self, '_work_timer') or not self._work_timer:
+            return
+        try:
+            success = self._work_timer.start_work(work)
+        except Exception:
+            logger.exception("_start_work failed")
+            success = False
+            self._show_bubble("出错了...", emotion="sad")
+            return
+
+        # 覆盖 callback 为本窗口的响应（多 agent 共享 work_timer 时，
+        # 每个窗口都会重绑——这里用闭包锚定 self）
+        try:
+            self._work_timer._on_finish = self._on_work_finish
+        except Exception:
+            pass
+
+        if success:
+            try:
+                self._show_bubble(f"{work.icon} 开始{work.name}...", emotion="thinking")
+                self._set_anim_seq(
+                    work.working_graph, emotion="thinking",
+                    style=get_transition_style("thinking"),
+                )
+            except Exception:
+                logger.exception("_start_work UI update failed")
+        else:
+            self._show_bubble("现在没法工作...", emotion="sad")
+
+    def _on_work_finish(self, info):
+        """WorkTimer 完成回调（后台线程）→ 切到主线程"""
+        try:
+            QTimer.singleShot(0, lambda: self._do_work_finish(info))
+        except Exception:
+            logger.exception("_on_work_finish schedule failed")
+
+    def _do_work_finish(self, info):
+        """工作完成主线程 UI 更新"""
+        try:
+            if getattr(info, "reason", "") == "complete":
+                self._show_bubble(
+                    f"完成啦！+{info.money:.0f}💰 +{info.exp:.0f}⭐",
+                    emotion="happy",
+                )
+                self._set_anim_seq(
+                    info.work.complete_graph, emotion="happy",
+                    style=get_transition_style("happy"),
+                )
+            elif getattr(info, "reason", "") == "state_fail":
+                self._show_bubble("太累了，干不动了...", emotion="sad")
+                try:
+                    self._set_anim_seq("failed", emotion="sad")
+                except Exception:
+                    pass
+            else:
+                # manual_stop 等其他原因——不飘字
+                pass
+        except Exception:
+            logger.exception("_do_work_finish failed")
+
+    def _show_status_summary(self):
+        """在气泡里显示养成属性概要"""
+        if not hasattr(self, '_save_mgr') or not self._save_mgr:
+            return
+        try:
+            s = self._save_mgr.save
+            text = (
+                f"❤{s.health:.0f} 💪{s.stamina:.0f} "
+                f"🍖{s.hunger:.0f} 💧{s.thirst:.0f} "
+                f"😊{s.mood:.0f} Lv.{s.level} 💰{s.money:.0f}"
+            )
+            self._show_bubble(text, emotion="neutral")
+        except Exception:
+            logger.exception("_show_status_summary failed")
 
     def _toggle_input(self):
         """切换输入框显示"""
@@ -2095,6 +2325,19 @@ class PetWindow(QWidget):
             except Exception:
                 pass
 
+        # ── P0 养成：停止工作 + 落盘 ──
+        work_timer = getattr(self, '_work_timer', None)
+        if work_timer and getattr(work_timer, 'is_working', False):
+            try:
+                work_timer.stop_work(reason="close")
+            except Exception:
+                logger.exception("work_timer.stop_work failed on close")
+        save_mgr = getattr(self, '_save_mgr', None)
+        if save_mgr:
+            try:
+                save_mgr.save_to_disk()
+            except Exception:
+                logger.exception("save_to_disk failed on close")
 
         if hasattr(self, '_tray'):
             try:
