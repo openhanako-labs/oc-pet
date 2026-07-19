@@ -224,6 +224,7 @@ class ActivityFeed(QDialog):
         self._events = events or []
         self._theme = "light"
         self._rows: List[_FeedRow] = []
+        self._drag_pos = None  # 拖动用
 
         self.setWindowTitle("活动流")
         # FramelessWindowHint：去掉 Qt 默认 title bar，让 #feedHeader 作为唯一标题栏
@@ -322,6 +323,28 @@ class ActivityFeed(QDialog):
         """关闭时停止定时器"""
         self._refresh_timer.stop()
         super().closeEvent(event)
+
+    # ── 拖动支持（FramelessWindowHint 的代价） ────────────────
+    def mousePressEvent(self, event):
+        """鼠标按下：记录拖动起点"""
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """鼠标移动：更新窗口位置"""
+        if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """鼠标释放：结束拖动"""
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
 
     def _populate(self):
         """填充列表"""
