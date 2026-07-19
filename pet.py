@@ -31,6 +31,7 @@ from motion.behavior import (
     BOUNCE_ELASTICITY, BOUNCE_FRICTION, BOUNCE_GRAVITY, BOUNCE_MIN_SPEED
 )
 from ui.bubble import ChatBubble
+from ui.activity_feed import ActivityFeed
 
 from motion.action_linker import ActionLinker
 from motion.foreground_watcher import ForegroundWatcher
@@ -753,6 +754,7 @@ class PetWindow(QWidget):
         self._passthrough_action = self._menu.addAction("🔍 穿透", self._toggle_passthrough)
         self._passthrough_action.setCheckable(True)
         self._passthrough_action.setChecked(self._mousePassthrough)
+        self._menu.addAction("📜 活动流", self._open_activity_feed)
         self._menu.addAction("⚙️ 设置", self._open_settings)
         self._menu.addAction("🔌 插件", self._open_plugin_panel)
 
@@ -870,6 +872,36 @@ class PetWindow(QWidget):
         except Exception as e:
             logger.warning("ASR provider 创建失败 (%s): %s", provider, e)
             return None
+
+    def _open_activity_feed(self):
+        """打开活动流窗口（浮动窗口，跟随宠宠位置）
+
+        数据源：PerceptionController.get_recent_activity_events()
+        主题感知：跟随 ThemeManager
+        """
+        events = []
+        if hasattr(self, "_perception") and self._perception:
+            try:
+                events = self._perception.get_recent_activity_events(minutes=60)
+            except Exception as e:
+                logger.warning("获取活动事件失败: %s", e)
+
+        if not hasattr(self, "_activity_feed") or self._activity_feed is None:
+            self._activity_feed = ActivityFeed(events=events, parent=None)
+            self._activity_feed.setWindowFlags(
+                self._activity_feed.windowFlags() | Qt.Tool
+            )
+        else:
+            self._activity_feed.set_events(events)
+
+        # 定位：宠宠右上角偏移 16px
+        pet_geo = self.geometry()
+        self._activity_feed.move(
+            pet_geo.right() + 16,
+            max(8, pet_geo.top() - 8)
+        )
+        self._activity_feed.show()
+        self._activity_feed.raise_()
 
     def _open_settings(self):
         """打开配置面板"""

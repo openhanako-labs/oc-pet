@@ -651,6 +651,17 @@ class ScreenPerception:
         with self._lock:
             return [e.to_dict() for e in self._activity_history if e.start_time >= cutoff]
 
+    def get_recent_activity_events(self, minutes: int = 60) -> list[ActivityEvent]:
+        """获取最近 N 分钟的 ActivityEvent 列表（attribute 形式，供 UI 组件用）
+
+        与 get_recent_activities 的区别：
+        - get_recent_activities → list[dict]（给 LLM / 日报）
+        - get_recent_activity_events → list[ActivityEvent]（给 UI 组件直接访问字段）
+        """
+        cutoff = time.time() - minutes * 60
+        with self._lock:
+            return [e for e in self._activity_history if e.start_time >= cutoff]
+
     def get_activity_summary(self, minutes: int = 60) -> str:
         """获取活动摘要（注入 LLM prompt 用）"""
         activities = self.get_recent_activities(minutes)
@@ -1115,6 +1126,10 @@ class PerceptionController:
         logger.debug("M2 env scan: app=%s cat=%s files=%s",
                      snapshot.foreground_app, snapshot.category, snapshot.detected_files)
         return snapshot
+
+    def get_recent_activity_events(self, minutes: int = 60) -> list[ActivityEvent]:
+        """透传获取最近的 ActivityEvent 列表（用于活动流 UI 组件）"""
+        return self._screen.get_recent_activity_events(minutes)
 
     # ── 构建 LLM 上下文 ──
 
