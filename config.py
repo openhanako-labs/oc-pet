@@ -103,6 +103,41 @@ EXPRESSION_MAP = {
     "speaking":   ("idle",     None, None),  # 说话 -> 空闲
 }
 
+# 表情 -> 默认过渡样式（snap=瞬切/fade=缓出/spring=弹簧）
+# 驱动 PetWindow._set_anim_seq 的 style 参数
+# 选型依据：
+#   - surprise/angry → 突变形情绪，弹簧反弹强化冲击
+#   - happy/cute/thinking → 温和切换
+#   - listening/speaking/working → 高频切勿过渡，保持同步感
+#   - neutral/sad/missing → 默认缓出
+EXPRESSION_TRANSITION_STYLE = {
+    "happy":      "fade",
+    "surprised":  "spring",
+    "angry":      "spring",
+    "sad":        "fade",
+    "thinking":   "fade",
+    "working":    "snap",
+    "cute":       "fade",
+    "missing":    "fade",
+    "neutral":    "fade",
+    "listening":  "snap",
+    "speaking":   "snap",
+}
+
+
+def get_transition_style(emotion: str, default: str = "snap") -> str:
+    """查表情过渡样式。未匹配返回 default。
+
+    Args:
+        emotion: 表情名（如 'happy'）
+        default: 未匹配时的回退样式（默认 'snap'，保持向后兼容）
+    Returns:
+        'snap' | 'fade' | 'spring'
+    """
+    if not emotion:
+        return default
+    return EXPRESSION_TRANSITION_STYLE.get(emotion, default)
+
 # atlas 模式的状态→动画映射（9 种动画）
 # 如果 pet.json 的 emotions 字段存在，优先用它；否则用这个回退
 ATLAS_STATE_MAP = {

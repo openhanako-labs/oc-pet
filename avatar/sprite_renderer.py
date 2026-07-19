@@ -14,7 +14,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
 from PySide6.QtGui import QPixmap, QPainter, QTransform, QColor, QImage
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtWidgets import QLabel, QWidget, QGraphicsOpacityEffect
 
 from avatar.base import AvatarRenderer
 
@@ -103,6 +103,10 @@ class SpriteRenderer(AvatarRenderer):
         self._gaze_target_y: float = 0.0
         self._gaze_enabled: bool = True
         self._base_label_pos: QPoint = QPoint(10, 70)  # 角色 label 的基准位置
+
+        # 透明度（情绪过渡：TransitionEngine 调用 set_alpha）
+        # 用 QGraphicsOpacityEffect：不影响 _show_frame 的渲染逻辑
+        self._opacity_effect: Optional[QGraphicsOpacityEffect] = None
 
     # ── 生命周期 ──
 
@@ -364,6 +368,34 @@ class SpriteRenderer(AvatarRenderer):
         self._anim_timer.stop()
         self._frames.clear()
         self._frame_tops.clear()
+
+    # ── 透明度（供 TransitionEngine 调用） ──
+
+    def set_alpha(self, alpha: float) -> None:
+        """设置角色透明度 alpha ∈ [0,1]。
+
+        供 core.emotion_transitions.TransitionEngine 回调。
+        使用 QGraphicsOpacityEffect，不改 _show_frame 渲染逻辑。
+        首次调用时懒构造 effect 并挂到 char_label。
+
+        Args:
+            alpha: 0=完全透明，1=完全不透明
+        """
+        if alpha < 0.0:
+            alpha = 0.0
+        elif alpha > 1.0:
+            alpha = 1.0
+
+        if self._opacity_effect is None:
+            self._opacity_effect = QGraphicsOpacityEffect(self.char_label)
+            self.char_label.setGraphicsEffect(self._opacity_effect)
+        self._opacity_effect.setOpacity(alpha)
+
+    def get_alpha(self) -> float:
+        """查询当前透明度（无 effect 时返回 1.0）。"""
+        if self._opacity_effect is None:
+            return 1.0
+        return self._opacity_effect.opacity()
 
     # ── 动画控制 ──
 

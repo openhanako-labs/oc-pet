@@ -20,8 +20,9 @@ from PySide6.QtGui import (
     QFontMetrics, QAction, QIcon, QTransform, QImage,
     QCursor
 )
-from config import CHARACTER_INFO, EXPRESSION_MAP, load_config, save_config
+from config import CHARACTER_INFO, EXPRESSION_MAP, get_transition_style, load_config, save_config
 from core.hanako_monitor import HanakoMonitor, compact_bubble_text
+from core.idle_chatter import IdleChatter
 
 from motion.behavior import BehaviorParams, BEHAVIOR_MODES
 from motion.behavior import MOUSE_REACTIONS, MouseReactionParams
@@ -39,6 +40,7 @@ from ui.tts_player import TTSTtsPlayer
 from ui.startup_screen import StartupScreen
 from core.perception import PerceptionController, ProactiveScheduler
 from core.pet_audio_bridge import PetAudioBridge, PetAudioCallbacks, AudioType
+from core.emotion_transitions import TransitionEngine
 from motion.physics import PhysicsEngine, MotionStateMachine, PhysicsCallbacks
 from avatar.sprite_renderer import SpriteRenderer
 
@@ -68,6 +70,7 @@ class PetWindow(QWidget):
     voice_status_signal = Signal(str)  # voice input status
     screen_emotion_signal = Signal(str, float)  # emotion, intensity
     screen_proactive_signal = Signal(str)  # prompt
+    idle_chatter_signal = Signal(str, str)  # text, emotion
     # M4: 工具进度（Hanako WS 模式下从 SessionManager.on_tool 转发过来）
     tool_progress_signal = Signal(str, str, str, object)  # tool_name, phase, display_text, success
 
@@ -299,6 +302,10 @@ class PetWindow(QWidget):
         self._anim_timer.timeout.connect(self._anim_tick)
         self._setup_animation()
 
+        # ── 情绪过渡引擎（依赖渲染器、不依赖动画帧动画计时器）──
+        # 由 _unified_tick() 驱动 tick()，不新开 QTimer
+        self._transition = TransitionEngine(self._renderer.set_alpha)
+
         # ── 物理引擎（委托）──
         self._physics = PhysicsEngine(self)
         self._motion = MotionStateMachine(self._physics, self)
@@ -320,6 +327,7 @@ class PetWindow(QWidget):
         # ── 空闲时间追踪 ──
         self._current_anim = "idle"
         self._last_interaction = time.time()
+        self._last_user_interaction_mono = time.monotonic()
         self._idle_stage = None
 
         # ── 恢复窗口状态 ──
@@ -329,6 +337,15 @@ class PetWindow(QWidget):
         self._pending_user_msg = ""  # 等待配对的用户消息
         self._pending_emotion = "neutral"  # 等待配对的 emotion
         self._pending_chat = False  # 是否正在等待 Agent 回复
+
+        # ── 空闲自言自语 ──
+        self.idle_chatter_signal.connect(self._do_idle_chatter)
+        self._idle_chatter = IdleChatter(
+            llm_adapter=getattr(self._engine, "_adapter", None),
+            on_chatter=lambda text, emotion: self.idle_chatter_signal.emit(text, emotion),
+            min_interval_sec=120,
+            max_interval_sec=600,
+        )
 
     def set_hanako_ws(self, ws_client, session_manager):
         """注入共享 Hanako WS 客户端（由 PetManager 调用）"""
@@ -470,6 +487,7 @@ class PetWindow(QWidget):
 
     def _toggle_visibility(self):
         """切换显示/隐藏"""
+        self._mark_user_interaction()
         if self.isVisible():
             self.hide()
         else:
@@ -477,6 +495,7 @@ class PetWindow(QWidget):
 
     def _trigger_action(self, action_id: str):
         """用户点击动作联动项"""
+        self._mark_user_interaction()
         basedir = Path(__file__).parent / "data"
         self._action_linker.trigger_action(basedir, action_id)
         self._show_bubble(f"{action_id}!", emotion="happy")
@@ -638,7 +657,7 @@ class PetWindow(QWidget):
         self._renderer.update_gaze()
 
     def _unified_tick(self):
-        """统一高频定时器回调（30ms）— 合并 physics + bob + gaze"""
+        """统一高频定时器回调（30ms）— 合并 physics + bob + gaze + transition"""
         # 1. 物理模拟
         self._physics.tick(self._get_behavior_params())
         # 2. 呼吸浮动
@@ -646,13 +665,48 @@ class PetWindow(QWidget):
         # 3. 视线跟随（每 2 帧更新一次，~15fps 足够）
         if self._bob_frame % 2 == 0:
             self._gaze_tick()
+        # 4. 空闲自言自语（每秒检查一次，实际触发间隔至少 120 秒）
+        if self._bob_frame % 20 == 0:
+            idle_chatter = getattr(self, "_idle_chatter", None)
+            if idle_chatter and self._can_idle_chatter():
+                idle_chatter.tick()
+        # 5. 情绪过渡（无进行中过渡时 tick 内部直接 return，开销可忽略）
+        self._transition.tick()
 
-    def _set_anim_seq(self, seq_name, emotion=None):
-        """切换动画序列 - 委托给 SpriteRenderer"""
+    def _set_anim_seq(self, seq_name, emotion=None, style="snap"):
+        """切换动画序列，支持过渡。
+
+        Args:
+            seq_name: 动画序列名（如 'idle' / 'waving' / 'failed'）
+            emotion: 情绪名（影响 EXPRESSION_TRANSITION_STYLE 查表）
+            style: 'snap' | 'fade' | 'spring'
+                - snap：瞬切（默认，向后兼容）
+                - fade：ease-out 缓出（默认从0 涻到 1）
+                - spring：弹簧曲线
+
+        未提供 emotion 但需要过渡时，调用方可显式查表：
+            style = get_transition_style(emotion)
+            self._set_anim_seq(seq, emotion=emotion, style=style)
+        """
+        # 先切动画（spriterenderer 内部完成帧切换 + 计时器重设）
         self._renderer.play_anim(seq_name, emotion=emotion)
+        # 同步本地状态别名
         self._anim_seq = self._renderer._anim_seq
         self._anim_idx = self._renderer._anim_idx
         self._anim_range = self._renderer._anim_range
+
+        # 过渡逻辑
+        if style == "snap" or not hasattr(self, '_transition'):
+            # snap：完全后向兼容，不额外动透明度
+            if hasattr(self, '_transition'):
+                self._transition.reset(1.0)  # 确保全亮
+            return
+
+        # fade / spring：涻入新动画
+        # 过渡语义：立即将透明度压为 0（旧帧同时被 play_anim 替换），
+        # 然后从 0 涻到 1，表现“旧表情滑出局，新表情涻入”的效果
+        self._transition.reset(0.0)
+        self._transition.go(1.0, style=style)
 
     def _anim_tick(self):
         """帧推进 - 委托给 SpriteRenderer"""
@@ -803,6 +857,7 @@ class PetWindow(QWidget):
 
     def _toggle_input(self):
         """切换输入框显示"""
+        self._mark_user_interaction()
         if self.input_widget.isVisible():
             self.input_widget.hide()
         else:
@@ -811,6 +866,7 @@ class PetWindow(QWidget):
 
     def _toggle_voice(self):
         """切换语音录音"""
+        self._mark_user_interaction()
         if not self._voice_input:
             self._show_bubble("语音输入不可用", emotion="neutral")
             return
@@ -1000,6 +1056,7 @@ class PetWindow(QWidget):
 
     def _send_plugin_command(self, text: str):
         """从插件面板发送指令到对话引擎"""
+        self._mark_user_interaction()
         if self._engine:
             self._engine.send(text, character=self._current_char)
             self._tts_player.stop()
@@ -1102,6 +1159,7 @@ class PetWindow(QWidget):
 
             if t == QEvent.MouseButtonPress:
                 if event.button() == Qt.LeftButton:
+                    self._mark_user_interaction()
                     # 退出坐下状态
                     if self._is_sitting:
                         self._exit_sitting()
@@ -1331,6 +1389,7 @@ class PetWindow(QWidget):
         if not text or self._is_thinking:
             return
 
+        self._mark_user_interaction()
         self.input_field.clear()
         self.input_widget.hide()
 
@@ -1362,7 +1421,7 @@ class PetWindow(QWidget):
 
         # 立即切换到思考动画（视觉反馈）
         try:
-            self._set_anim_seq("working", emotion="thinking")
+            self._set_anim_seq("working", emotion="thinking", style=get_transition_style("thinking"))
         except Exception:
             pass
 
@@ -1422,7 +1481,7 @@ class PetWindow(QWidget):
             logger.debug("Emotion expired: %s -> neutral", self._current_emotion)
             self._current_emotion = "neutral"
             try:
-                self._set_anim_seq("idle", emotion="neutral")
+                self._set_anim_seq("idle", emotion="neutral", style=get_transition_style("neutral"))
             except Exception:
                 pass
 
@@ -1465,7 +1524,7 @@ class PetWindow(QWidget):
 
         # 动画
         try:
-            self._set_anim_seq(anim, emotion=emotion)
+            self._set_anim_seq(anim, emotion=emotion, style=get_transition_style(emotion))
         except Exception:
             pass
 
@@ -1490,8 +1549,7 @@ class PetWindow(QWidget):
 
         # 重置 idle
         self._is_thinking = False
-        self._idle_stage = None
-        self._last_interaction = time.time()
+        self._mark_user_interaction()
 
     def _on_engine_status(self, msg: str):
         """引擎状态提示 - 从后台线程调用，通过信号转到主线程"""
@@ -1527,6 +1585,7 @@ class PetWindow(QWidget):
 
     def _create_new_session(self):
         """右键菜单：创建新 Session"""
+        self._mark_user_interaction()
         if not hasattr(self, '_engine') or self._engine is None:
             self._show_bubble("引擎还没起来", emotion="thinking")
             return
@@ -1636,6 +1695,52 @@ class PetWindow(QWidget):
 
     # ── 空闲时间追踪(idle 超时递进)──
 
+    def _mark_user_interaction(self):
+        """记录用户活动，并让未送达的自言自语失效。"""
+        self._last_interaction = time.time()
+        self._last_user_interaction_mono = time.monotonic()
+        self._idle_stage = None
+        idle_chatter = getattr(self, "_idle_chatter", None)
+        if idle_chatter:
+            idle_chatter.reset()
+
+    def _can_idle_chatter(self) -> bool:
+        """仅在桌宠和对话链都空闲时允许生成自言自语。"""
+        idle_chatter = getattr(self, "_idle_chatter", None)
+        if not idle_chatter or not idle_chatter.enabled:
+            return False
+        if time.monotonic() - self._last_user_interaction_mono < idle_chatter.min_interval_sec:
+            return False
+        if not self.isVisible() or self._is_thinking or self._pending_chat:
+            return False
+        if getattr(self, "_voice_recording", False):
+            return False
+        if hasattr(self, "input_widget") and self.input_widget.isVisible():
+            return False
+        if hasattr(self, "_tts_player") and self._tts_player.is_playing():
+            return False
+        hanako_state = getattr(self._hanako_monitor, "current_state_name", "idle")
+        if hanako_state in {"listening", "thinking", "working", "speaking"}:
+            return False
+        return True
+
+    def _do_idle_chatter(self, text: str, emotion: str):
+        """在 Qt 主线程显示自言自语，并应用情绪动画。"""
+        if not text or not self._can_idle_chatter():
+            logger.debug("Discarded stale idle chatter")
+            return
+
+        emotion = emotion or "neutral"
+        self._show_bubble(text, emotion=emotion)
+        anim = EXPRESSION_MAP.get(emotion, EXPRESSION_MAP["neutral"])[0]
+        self._set_anim_seq(anim, emotion=emotion, style=get_transition_style(emotion))
+
+        self._current_emotion = emotion
+        if emotion != "neutral":
+            self._emotion_expiry_timer.start(3000)
+        else:
+            self._emotion_expiry_timer.stop()
+        logger.info("Idle chatter: %s [emotion:%s]", text, emotion)
 
     # ── 闲置检测 + 关怀提醒 ──
 
@@ -1684,8 +1789,7 @@ class PetWindow(QWidget):
     def _on_foreground_change(self, app_name: str, app_category: str, title: str):
         """前台窗口变化 → 重置 idle 计时器 + 窗口互动 + 事件触发截图"""
         going = self._idle_stage
-        self._last_interaction = time.time()
-        self._idle_stage = None
+        self._mark_user_interaction()
         if going is not None:
             self._show_bubble("你回来啦~", emotion="happy")
         
@@ -1731,7 +1835,7 @@ class PetWindow(QWidget):
             self._is_thinking = True
         
         # 触发动画
-        self._set_anim_seq("waving", emotion="happy")
+        self._set_anim_seq("waving", emotion="happy", style=get_transition_style("happy"))
 
     # ── M1: 叙事事件回调 ──
 
@@ -1752,7 +1856,7 @@ class PetWindow(QWidget):
                 self._show_bubble(event.content, emotion=event.emotion)
                 # 动画
                 anim = event.animation or "idle"
-                self._set_anim_seq(anim, emotion=event.emotion)
+                self._set_anim_seq(anim, emotion=event.emotion, style=get_transition_style(event.emotion))
                 logger.info("Narrative displayed: [%s] %s | anim=%s", event.event_type, event.content[:30], anim)
         except Exception as e:
             logger.error("Narrative display failed: %s", e)
@@ -1793,7 +1897,7 @@ class PetWindow(QWidget):
             return
         if self._is_thinking or self._check_reaction_cooldown():
             return
-        self._set_anim_seq(params.nearby_anim, emotion="surprised")
+        self._set_anim_seq(params.nearby_anim, emotion="surprised", style=get_transition_style("surprised"))
 
     def _on_mouse_hover(self):
         """鼠标在角色附近静止 - 只切动画"""
@@ -1802,7 +1906,7 @@ class PetWindow(QWidget):
             return
         if self._is_thinking:
             return
-        self._set_anim_seq("idle", emotion="thinking")
+        self._set_anim_seq("idle", emotion="thinking", style=get_transition_style("thinking"))
 
     def _on_mouse_chase(self, target_x: int):
         """鼠标长时间不动，走过去看看"""
@@ -1828,7 +1932,7 @@ class PetWindow(QWidget):
             return
         if self._is_thinking or self._check_reaction_cooldown():
             return
-        self._set_anim_seq(params.startle_anim, emotion="surprised")
+        self._set_anim_seq(params.startle_anim, emotion="surprised", style=get_transition_style("surprised"))
 
     def _on_mouse_leave(self):
         """鼠标离开角色附近"""
@@ -1852,7 +1956,7 @@ class PetWindow(QWidget):
             }
             anim = anim_map.get(emotion, 'idle')
             if anim in self._renderer._frames:
-                self._set_anim_seq(anim, emotion=emotion)
+                self._set_anim_seq(anim, emotion=emotion, style=get_transition_style(emotion))
         except Exception:
             pass
 
@@ -1888,6 +1992,7 @@ class PetWindow(QWidget):
 
     def _show_context_menu(self, pos):
         """右键菜单"""
+        self._mark_user_interaction()
         if not hasattr(self, '_menu'):
             return
         # 更新动态部分
@@ -1957,7 +2062,7 @@ class PetWindow(QWidget):
                 if anim_name not in safe_anims:
                     anim_name = 'idle'
                 self._current_anim = anim_name
-                self._set_anim_seq(anim_name, emotion=emotion)
+                self._set_anim_seq(anim_name, emotion=emotion, style=get_transition_style(emotion))
         except Exception:
             pass
 
@@ -1982,9 +2087,11 @@ class PetWindow(QWidget):
             self._pending_emotion = "neutral"
             self._pending_chat = False
 
-        # 5. idle 超时重置
-        self._idle_stage = None
-        self._last_interaction = time.time()
+        # 5. Hanako 自身状态变化不算用户活动；否则会取消正在生成的闲聊。
+        idle_chatter = getattr(self, "_idle_chatter", None)
+        if not idle_chatter or not idle_chatter.is_running:
+            self._idle_stage = None
+            self._last_interaction = time.time()
 
 
     # ── 窗口关闭清理 ──
@@ -2004,6 +2111,12 @@ class PetWindow(QWidget):
                     t.stop()
                 except Exception:
                     pass
+
+        if hasattr(self, '_idle_chatter'):
+            try:
+                self._idle_chatter.disable()
+            except Exception:
+                pass
 
         if hasattr(self, '_foreground_watcher'):
             try:
