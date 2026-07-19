@@ -117,6 +117,52 @@ def get_asr_api_config() -> dict:
     }
 
 
+# ── Hanako WebSocket 客户端配置 ──────────────────────────────
+
+def get_hanako_config() -> dict:
+    """读取 Hanako WS 客户端配置
+
+    Returns:
+        {
+            "base_url": str,
+            "api_token": str,
+            "transport_mode": "direct" | "prefer_hanako" | "hanako_only",
+            "reply_timeout": int (秒),
+            "mirror_external_replies": bool,
+        }
+    """
+    base_url = os.environ.get("HANAKO_BASE_URL", "http://127.0.0.1:14500").strip()
+    api_token = os.environ.get("HANAKO_API_TOKEN", "").strip()
+    # 自动从 server-info.json 读取 token（如果环境变量为空）
+    if not api_token:
+        try:
+            _si = Path.home() / ".hanako" / "server-info.json"
+            if _si.exists():
+                import json as _json
+                api_token = _json.loads(_si.read_text("utf-8")).get("token", "")
+        except Exception:
+            pass
+    transport_mode = os.environ.get("HANAKO_TRANSPORT_MODE", "prefer_hanako").strip().lower()
+    if transport_mode not in ("direct", "prefer_hanako", "hanako_only"):
+        logger.warning("Unknown HANAKO_TRANSPORT_MODE=%s, fallback to prefer_hanako", transport_mode)
+        transport_mode = "prefer_hanako"
+    try:
+        reply_timeout = int(os.environ.get("HANAKO_REPLY_TIMEOUT", "180").strip())
+    except ValueError:
+        reply_timeout = 180
+    mirror_external_replies = os.environ.get(
+        "HANAKO_MIRROR_EXTERNAL_REPLIES", "true"
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+    return {
+        "base_url": base_url,
+        "api_token": api_token,
+        "transport_mode": transport_mode,
+        "reply_timeout": reply_timeout,
+        "mirror_external_replies": mirror_external_replies,
+    }
+
+
 def get_vision_config() -> dict:
     """获取视觉模型配置（屏幕感知专用）
 

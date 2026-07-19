@@ -49,12 +49,14 @@ class ConversationEngine:
     生命周期：随 pet 启动而启动，随 pet 关闭而关闭。
     """
 
-    def __init__(self, character_id: str = "yuexinmiao", perception: PerceptionController = None, tts_provider=None, builtin: bool = False):
+    def __init__(self, character_id: str = "yuexinmiao", perception: PerceptionController = None, tts_provider=None, builtin: bool = False, session_manager=None):
         self._character_id = character_id
         self._builtin = builtin
         self._adapter = None
         self._tts = tts_provider  # 外部注入，None 时用默认
         self._perception = perception or PerceptionController(character_id)  # 外部注入优先
+        self._session_manager = session_manager  # 可选注入；PetManager 也可在 start() 后注入
+        self._session_unsubscribers: list[callable] = []
         self._queue: list[dict] = []
         self._lock = threading.Lock()
         self._running = False
@@ -88,7 +90,11 @@ class ConversationEngine:
         # 回调（由 pet 设置）
         self.on_reply: callable = lambda reply, emotion, anim, audio_path: None
         self.on_status: callable = lambda msg: None  # 状态提示
+        self.on_progress: callable = lambda msg: None  # 长任务进度提示
         self.on_tts_ready: callable = lambda: None  # TTS 加载完成
+        # M4: 工具进度回调（Hanako WS 模式下，工具调用由服务端执行，这里只展示进度）
+        # 参数: tool_name, phase ("start"/"progress"/"end"), display_text, success
+        self.on_tool_progress: callable = lambda tool_name, phase, display_text, success: None
 
     @property
     def tts_ready(self) -> bool:
@@ -101,10 +107,22 @@ class ConversationEngine:
         # 初始化 LLM 适配器
         try:
             self._adapter = HanakoPetAdapter(agent_id=self._character_id, builtin=self._builtin)
-            logger.info("LLM 适配器就绪 | model=%s", self._adapter.model_config.get("model", "?"))
+            logger.info("LLM 适配器就绪 | model=%s | transport_mode=%s",
+                        self._adapter.model_config.get("model", "?"), self._adapter.transport_mode)
         except Exception as e:
             logger.error("LLM 适配器初始化失败: %s", e)
             return
+
+        # M4: 把 SessionManager 注入到 adapter（如果有）
+        if self._session_manager is not None:
+            try:
+                self._adapter.set_session_manager(self._session_manager)
+                logger.info("SessionManager 已注入 adapter")
+            except Exception as e:
+                logger.warning("SessionManager 注入失败: %s", e)
+
+        # M4: 订阅共享 SessionManager；回调由 WS 派发线程触发。
+        self._subscribe_session_manager()
 
         # 初始化 TTS（如果未注入）
         if not self._tts:
@@ -135,6 +153,7 @@ class ConversationEngine:
         self._perception.stop_screen()
         with self._lock:
             self._queue.clear()
+        self._clear_session_subscriptions()
 
     def _get_builtin_help_text(self) -> str:
         """返回桌宠内置的使用说明"""
@@ -250,9 +269,27 @@ class ConversationEngine:
 
             # 处理 tool_calls
             if isinstance(reply, dict) and reply.get("tool_calls"):
-                reply, emotion = self._handle_tool_calls(
-                    reply, text, character, perception_ctx
-                )
+                # M4: Hanako 模式下的 tool_calls 由服务端执行，不重复跑本地 executor
+                origin = reply.get("origin", "direct")
+                if origin == "hanako":
+                    logger.info("Hanako 服务端处理 tool_calls (%d 个)，跳过本地 executor",
+                                len(reply["tool_calls"]))
+                    # 通知 UI 工具被跳过（Hanako 端已经处理完）
+                    self.on_tool_progress(
+                        "hanako_tool", "end",
+                        "工具已在 Hanako 端执行", True,
+                    )
+                    # 这里不重复处理，等待下一轮 turn_end 后由 chat_via_hanako 返回最终文本
+                    # 实际上 chat_via_hanako 当前不会返回带 tool_calls 的中间状态——这是透传
+                    # 防御性处理：如果有 content，用它
+                    cleaned = (reply.get("message", {}) or {}).get("content", "") or "…"
+                    emotion = self._adapter.parse_emotion(cleaned)[1] or "neutral"
+                    cleaned = self._adapter.parse_emotion(cleaned)[0]
+                    reply, emotion = cleaned or "…", emotion or "neutral"
+                else:
+                    reply, emotion = self._handle_tool_calls(
+                        reply, text, character, perception_ctx
+                    )
 
             if not reply:
                 reply = "…"
@@ -351,6 +388,124 @@ class ConversationEngine:
             logger.error("LLM follow-up failed: %s", e)
             return "工具执行完成", "neutral"
 
+    # ── M4: SessionManager 集成 ──
+
+    def set_session_manager(self, manager) -> None:
+        """注入 SessionManager（PetManager 启动后可调）"""
+        self._clear_session_subscriptions()
+        self._session_manager = manager
+        if self._adapter is not None:
+            try:
+                self._adapter.set_session_manager(manager)
+            except Exception as e:
+                logger.warning("adapter.set_session_manager 失败: %s", e)
+        self._subscribe_session_manager()
+
+    def _subscribe_session_manager(self) -> None:
+        manager = self._session_manager
+        if manager is None or self._session_unsubscribers:
+            return
+        subscriptions = (
+            ("on_progress", self._handle_session_progress),
+            ("on_tool", self._handle_session_tool_progress),
+            ("on_reply", self._handle_session_reply),
+        )
+        for method_name, callback in subscriptions:
+            method = getattr(manager, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                unsubscribe = method(callback)
+                if callable(unsubscribe):
+                    self._session_unsubscribers.append(unsubscribe)
+            except Exception as e:
+                logger.warning("SessionManager.%s 订阅失败: %s", method_name, e)
+
+    def _clear_session_subscriptions(self) -> None:
+        for unsubscribe in self._session_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._session_unsubscribers.clear()
+
+    def set_session(self, session_ref) -> None:
+        """注入当前 Session 引用"""
+        if self._adapter is not None:
+            try:
+                self._adapter.set_session(session_ref)
+            except Exception as e:
+                logger.warning("adapter.set_session 失败: %s", e)
+
+    def create_new_session(self, agent_id: str = None, **kwargs) -> "object | None":
+        """创建新 Session（供 pet.py 菜单“新建对话”调）
+
+        Returns:
+            SessionRef 或 None（创建失败）
+        """
+        if self._session_manager is None or not hasattr(self._session_manager, "create_session"):
+            logger.warning("SessionManager 不可用，无法创建新 Session")
+            return None
+        try:
+            aid = agent_id or self._character_id
+            session = self._session_manager.create_session(agent_id=aid, **kwargs)
+            self.set_session(session)
+            logger.info("新 Session 已创建: %s", getattr(session, "session_id", "?"))
+            return session
+        except Exception as e:
+            logger.error("create_session 失败: %s", e)
+            return None
+
+    def _is_current_session(self, session: object) -> bool:
+        current = getattr(self._adapter, "_current_session", None)
+        if current is None or session is None:
+            return False
+        return (
+            getattr(current, "session_id", None) == getattr(session, "session_id", None)
+            or getattr(current, "session_path", None) == getattr(session, "session_path", None)
+        )
+
+    def _handle_session_progress(self, session: object, display_text: str) -> None:
+        """转发当前 Session 的思考/工具进度。"""
+        if self._is_current_session(session):
+            self.on_progress(display_text)
+
+    def _handle_session_reply(self, result: object) -> None:
+        """镜像来自 Hanako 主窗口或插件的外部回复。"""
+        if getattr(result, "origin", "oc_pet") != "external":
+            return
+        if not self._is_current_session(getattr(result, "session", None)):
+            return
+        text, emotion = self._adapter.parse_emotion(getattr(result, "text", "") or "")
+        self.on_reply(text or "…", emotion, map_emotion_to_anim(emotion), "")
+
+    def _handle_session_tool_progress(self, progress: "object") -> None:
+        """接收 SessionManager 的 ToolProgress 事件，转发给 UI"""
+        try:
+            if not self._is_current_session(getattr(progress, "session", None)):
+                return
+            tool_name = getattr(progress, "tool_name", "tool")
+            phase = getattr(progress, "phase", "progress")
+            display = getattr(progress, "display_text", "") or self._tool_display(tool_name)
+            success = getattr(progress, "success", None)
+            self.on_tool_progress(tool_name, phase, display, success)
+        except Exception as e:
+            logger.warning("_handle_session_tool_progress 错误: %s", e)
+
+    def _tool_display(self, tool_name: str) -> str:
+        """工具名 -> 中文友好展示文本"""
+        mapping = {
+            "web_search": "正在搜索…",
+            "web_fetch": "正在读取网页…",
+            "browser": "正在浏览…",
+            "media_generate-image": "正在生成图片…",
+            "read": "正在读取文件…",
+            "write": "正在编辑…",
+            "edit": "正在编辑…",
+            "exec_command": "正在执行命令…",
+        }
+        return mapping.get(tool_name, f"正在使用 {tool_name}…")
+
     def switch_character(self, character_id: str):
         """切换角色 - 清空队列和历史"""
         with self._lock:
@@ -358,6 +513,8 @@ class ConversationEngine:
         self._character_id = character_id
         try:
             self._adapter = HanakoPetAdapter(agent_id=character_id)
+            if self._session_manager is not None:
+                self._adapter.set_session_manager(self._session_manager)
             if hasattr(self._adapter, '_history'):
                 self._adapter._history.clear()
             logger.info("角色切换: %s", character_id)

@@ -68,6 +68,8 @@ class PetWindow(QWidget):
     voice_status_signal = Signal(str)  # voice input status
     screen_emotion_signal = Signal(str, float)  # emotion, intensity
     screen_proactive_signal = Signal(str)  # prompt
+    # M4: 工具进度（Hanako WS 模式下从 SessionManager.on_tool 转发过来）
+    tool_progress_signal = Signal(str, str, str, object)  # tool_name, phase, display_text, success
 
     def __init__(self, agent_id: str = "yuexinmiao", sprite_dir: str = None,
                  position: dict = None, scale: float = 1.0,
@@ -130,6 +132,12 @@ class PetWindow(QWidget):
         self._bubble_timer = QTimer(self)
         self._bubble_timer.timeout.connect(self._clear_hanako_bubble)
         self._bubble_timer.setSingleShot(True)
+
+        # ── 情绪过期定时器（A2: 3秒无新情绪回 idle）──
+        self._emotion_expiry_timer = QTimer(self)
+        self._emotion_expiry_timer.timeout.connect(self._on_emotion_expired)
+        self._emotion_expiry_timer.setSingleShot(True)
+        self._current_emotion = "neutral"
 
         # ── 空闲检查定时器 ──
         self._break_timer = QTimer(self)
@@ -210,6 +218,10 @@ class PetWindow(QWidget):
         self._engine.on_reply = self._on_engine_reply
         self._engine.on_status = self._on_engine_status
         self._engine.on_tts_ready = lambda: logger.info("Engine TTS ready")
+        # M4: 桥接 on_tool_progress -> Qt Signal
+        self._engine.on_tool_progress = lambda tool_name, phase, display_text, success: \
+            self.tool_progress_signal.emit(tool_name, phase, display_text, success)
+        self.tool_progress_signal.connect(self._do_tool_progress)
 
         # ── M1: 叙事引擎 ──
         self._narrative_enabled = True  # 可通过配置开关
@@ -755,6 +767,8 @@ class PetWindow(QWidget):
         self._passthrough_action.setCheckable(True)
         self._passthrough_action.setChecked(self._mousePassthrough)
         self._menu.addAction("📜 活动流", self._open_activity_feed)
+        # M4: 新建对话入口（仅在 Hanako WS 模式下有意义）
+        self._new_session_action = self._menu.addAction("🔄 新对话", self._create_new_session)
 
         # 主题子菜单
         self._theme_submenu = self._menu.addMenu("🎨 主题")
@@ -1343,7 +1357,17 @@ class PetWindow(QWidget):
             self._think_timeout = _QTimer()
             self._think_timeout.setSingleShot(True)
             self._think_timeout.timeout.connect(self._on_think_timeout)
-        self._think_timeout.start(30000)
+        # M4: Hanako 模式下默认 180 秒（长任务支持）；直连模式保持 30 秒
+        think_timeout_ms = 30000
+        try:
+            if hasattr(self._engine, '_adapter') and self._engine._adapter:
+                if getattr(self._engine._adapter, 'transport_mode', 'direct') != 'direct':
+                    think_timeout_ms = int(
+                        getattr(self._engine._adapter, '_reply_timeout', 180) * 1000
+                    )
+        except Exception:
+            pass
+        self._think_timeout.start(think_timeout_ms)
 
     def _auto_hide_bubble(self):
         """发送中气泡超时隐藏"""
@@ -1376,6 +1400,16 @@ class PetWindow(QWidget):
             except Exception:
                 pass
             self._bubble_message = ""
+
+    def _on_emotion_expired(self):
+        """A2: 情绪过期 — 3秒无新情绪后回到 idle"""
+        if self._current_emotion != "neutral":
+            logger.debug("Emotion expired: %s -> neutral", self._current_emotion)
+            self._current_emotion = "neutral"
+            try:
+                self._set_anim_seq("idle", emotion="neutral")
+            except Exception:
+                pass
 
     def _on_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str):
         """对话引擎回复回调 - 从后台线程调用，通过信号转到主线程"""
@@ -1420,6 +1454,13 @@ class PetWindow(QWidget):
         except Exception:
             pass
 
+        # A2: 情绪过期 — 3秒无新情绪自动回 idle
+        self._current_emotion = emotion or "neutral"
+        if self._current_emotion != "neutral":
+            self._emotion_expiry_timer.start(3000)
+        else:
+            self._emotion_expiry_timer.stop()
+
         # 触发情绪状态机
         if emotion and emotion != "neutral":
             try:
@@ -1450,6 +1491,43 @@ class PetWindow(QWidget):
                 self.bubble.hide_bubble()
             except Exception:
                 pass
+
+    # ── M4: 工具进度 + 新对话入口 ──
+
+    def _do_tool_progress(self, tool_name: str, phase: str, display_text: str, success):
+        """Hanako WS 工具进度回调 - 在主线程中显示气泡
+
+        phase: "start" / "progress" / "end"
+        success: None / True / False
+        """
+        try:
+            if phase == "start" or phase == "progress":
+                self._show_bubble(display_text or f"⏳ {tool_name}…", emotion="thinking")
+            elif phase == "end":
+                if success is False:
+                    self._show_bubble(f"⚠️ {display_text or tool_name} 出了问题", emotion="sad")
+                # 成功时不覆盖后续的最终回复气泡
+        except Exception as e:
+            logger.warning("_do_tool_progress error: %s", e)
+
+    def _create_new_session(self):
+        """右键菜单：创建新 Session"""
+        if not hasattr(self, '_engine') or self._engine is None:
+            self._show_bubble("引擎还没起来", emotion="thinking")
+            return
+        if not hasattr(self._engine, 'create_new_session'):
+            self._show_bubble("当前模式不支持新建对话", emotion="neutral")
+            return
+        session = self._engine.create_new_session(agent_id=self._current_char)
+        if session is not None:
+            try:
+                self.bubble.hide_bubble()
+            except Exception:
+                pass
+            self._show_bubble("🔄 新对话已创建", emotion="happy")
+            logger.info("新 Session 创建成功: %s", getattr(session, 'session_id', '?'))
+        else:
+            self._show_bubble("新对话创建失败", emotion="sad")
 
     # ── 右键菜单 ──
 
@@ -1489,6 +1567,8 @@ class PetWindow(QWidget):
 
     def on_facing_change(self, facing_right: bool):
         self._facing_right = facing_right
+        # 同步渲染器朝向，确保 atlas 方向动画不被反向翻转
+        self._renderer.set_facing(facing_right)
 
     def set_anim(self, anim: str):
         # atlas 格式：walk → running-right/left（根据朝向）
@@ -1805,6 +1885,15 @@ class PetWindow(QWidget):
                 a.setVisible(aid in highlighted)
         if hasattr(self, '_passthrough_action'):
             self._passthrough_action.setChecked(self._mousePassthrough)
+        # M4: 根据 transport_mode 决定是否启用"新对话"入口
+        if hasattr(self, '_new_session_action'):
+            hanako_mode = False
+            try:
+                if self._engine and self._engine._adapter:
+                    hanako_mode = getattr(self._engine._adapter, 'transport_mode', 'direct') != 'direct'
+            except Exception:
+                hanako_mode = False
+            self._new_session_action.setVisible(hanako_mode)
         try:
             self._menu.popup(self.mapToGlobal(pos))
         except Exception:
@@ -1856,6 +1945,13 @@ class PetWindow(QWidget):
                 self._set_anim_seq(anim_name, emotion=emotion)
         except Exception:
             pass
+
+        # A2: 情绪过期 — 重置计时器
+        self._current_emotion = emotion or "neutral"
+        if self._current_emotion != "neutral":
+            self._emotion_expiry_timer.start(3000)
+        else:
+            self._emotion_expiry_timer.stop()
 
         # 3. 动作联动
         if state in ("working", "listening") and self._action_linker.enabled:

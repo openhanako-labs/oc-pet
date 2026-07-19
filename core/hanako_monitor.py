@@ -87,7 +87,22 @@ EVENT_TO_MOOD = {
     "file_write_prepare": "working",
     "tool_start": "working",
     "tool_progress": "working",
+    "tool_end": "idle",  # M4: 工具完成 → 由 map_event_to_mood 里的 success 分支重新映射
     "turn_end": "idle",
+}
+
+# M4: HanakoMonitor 订阅的事件类型（明确订阅避免被无关事件刷屏）
+MONITOR_EVENT_TYPES = {
+    "thinking_start",
+    "thinking_delta",
+    "text_delta",
+    "mood_text",
+    "vision_progress",
+    "file_write_prepare",
+    "tool_start",
+    "tool_progress",
+    "tool_end",
+    "turn_end",
 }
 
 # tool_start 的 name → 具体消息映射
@@ -413,6 +428,49 @@ class HanakoMonitor:
             logger.info("HanakoMonitor: WS connected, disabling file poll")
         else:
             logger.info("HanakoMonitor: WS disconnected, re-enabling file poll")
+
+    def set_ws_client(self, ws_client) -> None:
+        """订阅共享 WS 客户端的事件 — M4: 复用 HanakoWSClient，不重建连接。
+
+        ws_client 应提供：
+          - subscribe(callback, event_types=set) -> Subscription
+          - subscribe_state(callback) -> Subscription  (callback 签名: (state, err))
+        """
+        if ws_client is None:
+            logger.warning("set_ws_client(None) - 保持文件轮询")
+            return
+
+        try:
+            sub = ws_client.subscribe(
+                self.push_event,
+                event_types=MONITOR_EVENT_TYPES,
+            )
+            self._ws_subscription = sub
+            self.set_ws_connected(True)
+            logger.info("HanakoMonitor: 已订阅共享 WS 客户端 (event_types=%d)",
+                        len(MONITOR_EVENT_TYPES))
+        except Exception as e:
+            logger.warning("订阅 WS 事件失败: %s — 退回文件轮询", e)
+            self.set_ws_connected(False)
+            return
+
+        # 订阅状态变化，用于断线重连 / 补拉时反馈到 UI
+        try:
+            ws_client.subscribe_state(self._on_ws_state)
+        except Exception as e:
+            logger.warning("订阅 WS 状态变化失败: %s", e)
+
+    def _on_ws_state(self, state, err=None) -> None:
+        """WS 客户端状态回调（HanakoWSClient.ConnectionState）"""
+        from_state = str(state).lower()
+        ready_states = {"ready", "connected"}
+        bad_states = {"stopped", "backoff", "closing", "disconnected"}
+        if from_state in ready_states:
+            self.set_ws_connected(True)
+        elif from_state in bad_states:
+            self.set_ws_connected(False)
+            if err:
+                logger.warning("WS 状态异常: %s, err=%s — 启用文件轮询 fallback", state, err)
 
     def push_event(self, event: dict):
         """直接推送事件（WebSocket 模式回调）。

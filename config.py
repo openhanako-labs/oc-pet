@@ -90,15 +90,17 @@ CHARACTER_INFO = {
 # 格式: 情绪名 -> (序列名, 起始帧索引, 结束帧索引)
 #          起始/结束为 None 时使用全序列
 EXPRESSION_MAP = {
-    "happy":      ("extra", 0, 1),   # 开心 -> extra[0..1]
-    "surprised":  ("extra", 2, 3),   # 惊讶 -> extra[2..3]
-    "angry":      ("extra", 2, 3),   # 生气 -> 复用惊讶帧
-    "thinking":   ("extra", 0, 0),   # 思考 -> 单帧
-    "working":    ("extra", 0, 0),   # 工作 -> 单帧
-    "neutral":    ("idle",  None, None),  # 中性 -> idle 全序列
-    "sad":        ("idle",  None, None),  # 悲伤 -> idle 全序列
-    "listening":  ("idle",  None, None),  # 倾听 -> idle 全序列
-    "speaking":   ("idle",  None, None),  # 说话 -> idle 全序列
+    "happy":      ("waving",   None, None),  # 开心 -> 挥手
+    "surprised":  ("jumping",  None, None),  # 惊讶 -> 跳跃
+    "angry":      ("jumping",  None, None),  # 生气 -> 复用跳跃（激烈动作）
+    "sad":        ("failed",   None, None),  # 悲伤 -> 失败（低落动画）
+    "thinking":   ("waiting",  None, None),  # 思考 -> 等待（张望）
+    "working":    ("review",   None, None),  # 工作 -> 审阅
+    "cute":       ("waving",   None, None),  # 卖萌 -> 复用挥手
+    "missing":    ("waiting",  None, None),  # 张望 -> 等待
+    "neutral":    ("idle",     None, None),  # 中性 -> 空闲
+    "listening":  ("idle",     None, None),  # 倾听 -> 空闲
+    "speaking":   ("idle",     None, None),  # 说话 -> 空闲
 }
 
 # atlas 模式的状态→动画映射（9 种动画）
@@ -110,12 +112,15 @@ ATLAS_STATE_MAP = {
     "excited":      "jumping",
     "error":        "failed",
     "waiting":      "waiting",
-    "thinking":     "running",
-    "working":      "running",
+    "thinking":     "review",
+    "working":      "review",
     "done":         "review",
     "happy":        "waving",
     "surprised":    "jumping",
+    "angry":        "jumping",
     "sad":          "failed",
+    "cute":         "waving",
+    "missing":      "waiting",
     "neutral":      "idle",
 }
 

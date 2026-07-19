@@ -509,7 +509,10 @@ class SpriteRenderer(AvatarRenderer):
         self.char_label.move(ox, oy)
 
         # 自动翻转朝向（鼠标在另一侧且距离够远）
-        if abs(dx) > GAZE_FLIP_THRESHOLD:
+        # 行走中不翻转，避免与物理引擎的朝向冲突
+        is_walking = getattr(self._parent, '_is_walking', False) or \
+                     getattr(getattr(self._parent, '_physics', None), 'is_walking', False)
+        if not is_walking and abs(dx) > GAZE_FLIP_THRESHOLD:
             should_face_right = dx > 0
             if should_face_right != self._facing_right:
                 self._facing_right = should_face_right

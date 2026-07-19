@@ -17,8 +17,13 @@ from pathlib import Path
 import requests
 
 from .hanako_context import HanakoContext
+from .hanako_ws_client import HanakoUnavailableBeforeSend
 
 logger = logging.getLogger(__name__)
+
+
+class HanakoUnavailableAfterSend(Exception):
+    """已经交给 Hanako 但尚未得到承诺回复 — 不要 fallback，会造成双执行。"""
 
 
 class HanakoPetAdapter:
@@ -90,6 +95,20 @@ class HanakoPetAdapter:
         if missing and not builtin:
             logger.warning("配置不完整,缺失: %s", ", ".join(missing))
 
+        # ── M4: Hanako WS 传输模式 ──
+        from env_config import get_hanako_config
+        hanako_cfg = get_hanako_config()
+        self.transport_mode: str = hanako_cfg["transport_mode"]
+        self._reply_timeout: float = float(hanako_cfg["reply_timeout"])
+        self._mirror_external_replies: bool = hanako_cfg["mirror_external_replies"]
+
+        # 共享实例由 PetManager / ConversationEngine 注入；适配器不创建第二条 WS。
+        self._session_manager = None
+        logger.info("Hanako transport configured: %s", self.transport_mode)
+
+        # 当前 Session 引用（由 PetManager / ConversationEngine 注入）
+        self._current_session = None  # SessionRef | None
+
     def _load_default_from_catalog(self):
         """builtin 角色没有 Hanako agent，从 provider catalog 读默认模型"""
         import json
@@ -131,22 +150,15 @@ class HanakoPetAdapter:
     def model_config(self) -> dict:
         return dict(self._model_cfg)
 
-    def chat(self, message: str, inject_memory: bool = True, extra_context: str = "", tools: list = None) -> tuple:
-        """发送消息,返回角色回复。
+    def chat_direct(self, message: str, inject_memory: bool = True, extra_context: str = "", tools: list = None) -> tuple:
+        """直接调用 LLM API（不走 Hanako WS） - 原 chat() 的完整实现
 
-        Args:
-            message: 用户消息
-            inject_memory: 是否注入记忆上下文
-            extra_context: 额外上下文(时间/情绪/日程等感知信息)
-            tools: OpenAI 格式的工具列表
-
-        Returns:
-            (reply, emotion) 或 (tool_calls, None) 如果 LLM 调用了工具
+        由 chat() 路由器在 Hanako 不可用或 transport_mode==direct 时调用。
         """
         if not self._base_url or not self._api_key:
             return "...(模型未配置,请在设置中配置模型)", "neutral"
 
-        messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] 1. 回复简短自然，不超过 2 句话。2. 在回复末尾添加情绪标签，格式 [emotion:xxx]，xxx 为 happy/angry/sad/surprised/thinking/neutral 之一。例如：你好呀。[emotion:happy]"}]
+        messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] 1. 回复简短自然，不超过 2 句话。2. 在回复中嵌入情绪标签，格式 [emotion:xxx]，可选值：happy/sad/angry/surprised/thinking/neutral/cute/missing。可以在句末或句中。例如：'你回来啦！[emotion:happy]' 或 '[emotion:thinking]让我想想……'"}]
 
         # 注入记忆
         if inject_memory:
@@ -197,12 +209,8 @@ class HanakoPetAdapter:
                 self._history.append({"role": "assistant", "content": text})
                 return text, emotion
 
-            # 解析情绪标签
-            emotion = "neutral"
-            em_match = re.search(r'\[emotion:(\w+)\]', text)
-            if em_match:
-                emotion = em_match.group(1)
-                text = re.sub(r'\s*\[emotion:\w+\]\s*$', '', text).strip()
+            # 解析情绪标签（匹配全文，支持多个，取最后一个）
+            text, emotion = self.parse_emotion(text)
 
             # 保存到历史
             self._history.append({"role": "user", "content": message.strip()})
@@ -218,6 +226,118 @@ class HanakoPetAdapter:
         except Exception as e:
             logger.warning("Chat failed: %s", e)
             return "(出了点岔子)", "neutral"
+
+    def chat(self, message: str, inject_memory: bool = True, extra_context: str = "", tools: list = None) -> tuple:
+        """入口路由 - 根据 transport_mode 选择 Hanako 或直连"""
+        # direct 模式：跳过 Hanako
+        if self.transport_mode == "direct":
+            return self.chat_direct(message, inject_memory, extra_context, tools)
+
+        # Hanako 模式：先尝试 Hanako，失败再考虑 fallback
+        try:
+            return self.chat_via_hanako(message, inject_memory, extra_context, tools)
+        except HanakoUnavailableBeforeSend as e:
+            logger.warning("Hanako 不可用（send 前）: %s", e)
+            if self.transport_mode == "prefer_hanako":
+                logger.info("Fallback -> chat_direct")
+                return self.chat_direct(message, inject_memory, extra_context, tools)
+            # hanako_only：不允许 fallback
+            raise
+        except HanakoUnavailableAfterSend as e:
+            # 已交给 Hanako，绝不 fallback - 避免双执行
+            logger.error("Hanako 已接收但未完成，不能 fallback: %s", e)
+            return "(信号不太好,你再说一遍?)", "neutral"
+
+    def chat_via_hanako(
+        self,
+        message: str,
+        inject_memory: bool = True,
+        extra_context: str = "",
+        tools: list = None,
+        timeout: float = None,
+    ) -> tuple:
+        """通过 Hanako WS Session 发送消息
+
+        Fallback 边界：
+        - send_and_wait() 之前失败 -> raise HanakoUnavailableBeforeSend（chat() 可 fallback）
+        - send_and_wait() 之后失败 -> raise HanakoUnavailableAfterSend（绝不能 fallback）
+        """
+        if self._session_manager is None:
+            raise HanakoUnavailableBeforeSend(
+                "HanakoSessionManager 未注入（请检查 core/hanako_session_manager.py 是否存在）"
+            )
+        sm = self._session_manager
+        if not hasattr(sm, "send_and_wait"):
+            raise HanakoUnavailableBeforeSend("HanakoSessionManager 未实例化")
+        if self._current_session is None:
+            try:
+                self._current_session = sm.ensure_session(agent_id=self.agent_id)
+            except Exception as e:
+                raise HanakoUnavailableBeforeSend("无法准备 Hanako Session") from e
+
+        # 拼装 text：extra_context 作为前缀附加（Hanako 自己管记忆，inject_memory 被忽略）
+        text = message.strip()
+        if extra_context and extra_context.strip():
+            text = f"[pet-context]\n{extra_context.strip()}\n[/pet-context]\n\n{text}"
+
+        try:
+            result = sm.send_and_wait(
+                self._current_session,
+                text,
+                timeout=timeout if timeout is not None else self._reply_timeout,
+                display_text=message.strip(),
+                ui_context={"source": "oc-pet", "agentId": self.agent_id},
+            )
+        except HanakoUnavailableBeforeSend:
+            raise
+        except Exception as e:
+            logger.error("Hanako send_and_wait 异常: %s", e)
+            raise HanakoUnavailableAfterSend(f"send_and_wait raised: {e}") from e
+
+        if getattr(result, "error", None):
+            raise HanakoUnavailableAfterSend(f"reply error: {result.error}")
+        if getattr(result, "aborted", False):
+            return "(对话被打断了)", "neutral"
+
+        reply_text = (getattr(result, "text", "") or "").strip()
+        cleaned, emotion = self.parse_emotion(reply_text)
+        if not cleaned:
+            cleaned = "…"
+            if emotion == "neutral":
+                emotion = "thinking"
+
+        # Hanako 已经执行过 result.tool_calls，绝不能交给桌宠本地再执行一次。
+        # 同步本地 history（向后兼容）
+        try:
+            self._history.append({"role": "user", "content": message.strip()})
+            self._history.append({"role": "assistant", "content": cleaned})
+            if len(self._history) > 40:
+                self._history = self._history[-40:]
+        except Exception:
+            pass
+
+        return cleaned, emotion
+
+    @staticmethod
+    def parse_emotion(text: str) -> tuple:
+        """从文本解析 [emotion:xxx]，返回 (cleaned_text, emotion)
+
+        全文匹配所有 [emotion:xxx]，取最后一个出现的 emotion。
+        """
+        if not text:
+            return "", "neutral"
+        em_matches = re.findall(r"\[emotion:(\w+)\]", text, flags=re.IGNORECASE)
+        emotion = em_matches[-1].lower() if em_matches else "neutral"
+        cleaned = re.sub(r"\s*\[emotion:\w+\]\s*", "", text, flags=re.IGNORECASE).strip()
+        return cleaned, emotion
+
+    def set_session(self, session_ref) -> None:
+        """注入当前 Session 引用（PetManager / ConversationEngine 调用）"""
+        self._current_session = session_ref
+
+    def set_session_manager(self, manager) -> None:
+        """注入 SessionManager 实例（覆盖延迟导入的类引用）"""
+        self._session_manager = manager
 
     def _parse_function_in_content(self, text: str) -> list:
         """从 content 文本中解析 <function> 标签格式的工具调用
