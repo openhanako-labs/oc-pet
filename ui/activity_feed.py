@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QFrame, QScrollArea, QWidget,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPainter, QColor, QFont, QPainterPath, QFontMetrics
+from PySide6.QtGui import QPainter, QColor, QFont, QPainterPath, QFontMetrics, QPen
 
 from ui.theme import get_default
 
@@ -223,8 +223,9 @@ class ActivityFeed(QDialog):
         self._rows: List[_FeedRow] = []
 
         self.setWindowTitle("活动流")
+        # FramelessWindowHint：去掉 Qt 默认 title bar，让 #feedHeader 作为唯一标题栏
         self.setWindowFlags(
-            Qt.Dialog | Qt.WindowStaysOnTopHint
+            Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint
         )
         self.setMinimumSize(420, 320)
         self.resize(480, 480)
