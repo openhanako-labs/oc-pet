@@ -46,6 +46,14 @@ def main():
     theme_mgr.apply_initial()
     logging.info("初始主题：%s", theme_mgr.current)
 
+    # 根据 config 加载 theme_mode（auto/light/dark）
+    from config import load_config, save_config
+    cfg = load_config()
+    theme_mode = cfg.get("theme_mode", "auto")
+    if theme_mode in ("auto", "light", "dark"):
+        theme_mgr.set_mode(theme_mode)
+        logging.info("从 config 加载主题模式：%s", theme_mode)
+
     # Global font
     font = QFont("Microsoft YaHei UI", 10)
     app.setFont(font)

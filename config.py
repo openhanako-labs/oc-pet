@@ -9,6 +9,7 @@ DEFAULT_CONFIG = {
     "scale": 1.0,
     "opacity": 1.0,
     "behavior": "normal",
+    "theme_mode": "auto",  # "auto" | "light" | "dark" — 主题模式（桌宠主题系统）
     "window": {
         "width": 200,
         "height": 300,

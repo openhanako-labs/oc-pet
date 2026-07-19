@@ -895,7 +895,7 @@ class PetWindow(QWidget):
             action.setChecked(mode == current_mode)
 
     def _set_theme_mode(self, mode: str):
-        """切换主题模式（auto / light / dark）"""
+        """切换主题模式（auto / light / dark），持久化到 config.json"""
         from ui.theme import get_default
         mgr = get_default()
         if mgr is None:
@@ -904,6 +904,16 @@ class PetWindow(QWidget):
         self._refresh_theme_menu()
         mode_label = {"auto": "自动（跟随时间）", "light": "浅色", "dark": "深色"}.get(mode, mode)
         logger.info("主题模式切换：%s", mode_label)
+
+        # 持久化到 config.json
+        try:
+            from config import load_config, save_config
+            cfg = load_config()
+            cfg["theme_mode"] = mode
+            save_config(cfg)
+        except Exception as e:
+            logger.warning("保存主题模式到 config 失败：%s", e)
+
         # 轻量提示（在气泡显示）
         self._show_bubble(f"🎨 主题：{mode_label}", "neutral")
 
