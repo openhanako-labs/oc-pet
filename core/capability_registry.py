@@ -1,5 +1,8 @@
 """能力路由器 — 关键词匹配 → 直接执行，跳过 LLM 选工具
 
+注意：仅直连模式 (transport_mode=direct) 使用。
+Hanako WS 模式下工具由服务端执行，不需要本地路由。
+
 快速路径：用户说"放首歌" → 匹配 play_music → 直接调用 audio_player.play()
 LLM 路径：匹配失败 → 回退到 LLM 选工具
 

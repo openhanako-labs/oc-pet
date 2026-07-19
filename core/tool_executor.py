@@ -3,6 +3,9 @@
 每个工具是 JS 模块，导出 name/description/parameters/execute。
 执行器生成临时脚本，import 工具模块并调用 execute()。
 
+注意：仅直连模式 (transport_mode=direct) 使用。
+Hanako WS 模式下工具由服务端执行，不经过此模块。
+
 用法:
     executor = ToolExecutor()
     result = executor.execute("play", {"source": "music.mp3"})

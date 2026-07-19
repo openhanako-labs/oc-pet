@@ -1,5 +1,8 @@
 """工具注册表 — 扫描 Hanako 插件，提取工具定义为 OpenAI tool calling 格式
 
+注意：仅直连模式 (transport_mode=direct) 使用。
+Hanako WS 模式下工具由服务端执行，不需要本地注册。
+
 用法:
     registry = ToolRegistry()
     registry.discover()
