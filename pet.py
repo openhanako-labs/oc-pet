@@ -935,6 +935,11 @@ class PetWindow(QWidget):
             self._activity_feed.setWindowFlags(
                 self._activity_feed.windowFlags() | Qt.Tool
             )
+            # 注入定时刷新源——从 perception 拉最新事件
+            self._activity_feed.set_refresh_source(
+                lambda: self._perception.get_recent_activity_events(minutes=60)
+                if self._perception else []
+            )
         else:
             self._activity_feed.set_events(events)
 

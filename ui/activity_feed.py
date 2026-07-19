@@ -12,6 +12,7 @@ P-04 模式卡四要素：操作者 + 动词 + 对象 + 时间戳。
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List
@@ -20,10 +21,12 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QWidget,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QPainter, QColor, QFont, QPainterPath, QFontMetrics, QPen
 
 from ui.theme import get_default
+
+logger = logging.getLogger(__name__)
 
 # 避免循环导入（core.perception 也可能用 ui.theme）
 # ActivityEvent 类型用 TYPE_CHECKING 即可，这里用 duck typing
@@ -230,6 +233,12 @@ class ActivityFeed(QDialog):
         self.setMinimumSize(420, 320)
         self.resize(480, 480)
 
+        # 定时刷新（5s）—— 从 perception 拉取最新事件
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.timeout.connect(self._auto_refresh)
+        self._refresh_timer.start(5000)
+        self._refresh_source = None  # 外部注入 refresh callable
+
         # 主题感知
         mgr = get_default()
         if mgr is not None:
@@ -289,6 +298,30 @@ class ActivityFeed(QDialog):
         self._events = events
         self._count_label.setText(f"· {len(self._events)} 条")
         self._populate()
+
+    def set_refresh_source(self, source):
+        """注入定时刷新源：callable() -> list[ActivityEvent]
+
+        如果不注入，5s 定时器不会刷新（避免无意义拉取）
+        pet.py 会在 _open_activity_feed 调用时注入
+        """
+        self._refresh_source = source
+
+    def _auto_refresh(self):
+        """5s 定时刷新：仅在注入了 refresh_source 时触发"""
+        if self._refresh_source is None:
+            return
+        try:
+            events = self._refresh_source()
+            if events is not None:
+                self.set_events(events)
+        except Exception as e:
+            logger.debug("活动流刷新失败：%s", e)
+
+    def closeEvent(self, event):
+        """关闭时停止定时器"""
+        self._refresh_timer.stop()
+        super().closeEvent(event)
 
     def _populate(self):
         """填充列表"""
