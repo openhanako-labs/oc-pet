@@ -325,12 +325,29 @@ class ActivityFeed(QDialog):
 
     def _populate(self):
         """填充列表"""
-        # 清空已有 rows（保留 stretch）
+        # 清空已有 rows（保留 stretch 和 placeholder）
         for row in self._rows:
             row.deleteLater()
         self._rows.clear()
+        # 移除旧 placeholder
+        if hasattr(self, "_empty_label") and self._empty_label is not None:
+            self._empty_label.deleteLater()
+            self._empty_label = None
 
         items = activity_to_feed(self._events)
+        if not items:
+            # 空状态提示
+            self._empty_label = QLabel("暂无活动事件\n\n桌面感知会在事件发生时自动推送到这里", self._list_widget)
+            self._empty_label.setAlignment(Qt.AlignCenter)
+            self._empty_label.setObjectName("feedEmpty")
+            font = QFont("Microsoft YaHei UI", 11)
+            self._empty_label.setFont(font)
+            self._empty_label.setStyleSheet(
+                "color: rgba(122,122,138,160); padding: 48px 16px; line-height: 1.8;"
+            )
+            self._list_layout.insertWidget(self._list_layout.count() - 1, self._empty_label)
+            return
+
         for item in items:
             row = _FeedRow(item, self._theme, self._list_widget)
             self._rows.append(row)
