@@ -1,0 +1,176 @@
+/* dark.qss — 夜间主题（基于 round-B 观星台 token）
+   时间范围：18:00-6:00
+   主色：金黄 #e9c46a + 月白 #e8ecf5 + 夜底 #0c0e1c
+*/
+
+/* ============== 基础 ============== */
+QWidget {
+    background: #0c0e1c;
+    color: #e8ecf5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
+                 "Helvetica Neue", Arial, sans-serif;
+    font-size: 13px;
+}
+
+QDialog {
+    background: #0c0e1c;
+    color: #e8ecf5;
+}
+
+QLabel {
+    color: #e8ecf5;
+    background: transparent;
+}
+
+QLabel[dim="true"] {
+    color: #a3acc2;
+}
+
+QLabel[mute="true"] {
+    color: #6b7591;
+}
+
+/* ============== 按钮 ============== */
+QPushButton {
+    background: #e9c46a;
+    color: #0c0e1c;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-weight: 500;
+}
+
+QPushButton:hover {
+    background: #fde68a;
+}
+
+QPushButton:pressed {
+    background: #b8862f;
+}
+
+QPushButton:disabled {
+    background: #1a1d35;
+    color: #6b7591;
+}
+
+QPushButton[secondary="true"] {
+    background: transparent;
+    color: #e8ecf5;
+    border: 1px solid #2a3148;
+}
+
+QPushButton[secondary="true"]:hover {
+    background: #131629;
+}
+
+/* ============== 输入 ============== */
+QLineEdit, QTextEdit, QPlainTextEdit {
+    background: #131629;
+    color: #e8ecf5;
+    border: 1px solid #2a3148;
+    border-radius: 4px;
+    padding: 6px 10px;
+    selection-background-color: #e9c46a;
+    selection-color: #0c0e1c;
+}
+
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
+    border-color: #e9c46a;
+}
+
+QLineEdit:disabled {
+    background: #07091a;
+    color: #6b7591;
+}
+
+/* ============== 列表 / 树 ============== */
+QTreeWidget, QListWidget, QTreeView, QListView {
+    background: #131629;
+    color: #e8ecf5;
+    border: 1px solid #2a3148;
+    border-radius: 4px;
+    outline: 0;
+}
+
+QTreeWidget::item, QListWidget::item,
+QTreeView::item, QListView::item {
+    padding: 6px 8px;
+    border: none;
+}
+
+QTreeWidget::item:hover, QListWidget::item:hover,
+QTreeView::item:hover, QListView::item:hover {
+    background: #1a1d35;
+    color: #e8ecf5;
+}
+
+QTreeWidget::item:selected, QListWidget::item:selected,
+QTreeView::item:selected, QListView::item:selected {
+    background: rgba(233,196,106,0.07);
+    color: #e9c46a;
+}
+
+QHeaderView::section {
+    background: #0c0e1c;
+    color: #a3acc2;
+    padding: 6px 8px;
+    border: none;
+    border-bottom: 1px solid #2a3148;
+}
+
+/* ============== 滚动条 ============== */
+QScrollBar:vertical {
+    background: #0c0e1c;
+    width: 8px;
+    border: none;
+}
+
+QScrollBar::handle:vertical {
+    background: #1a1d35;
+    border-radius: 4px;
+    min-height: 24px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #2a3148;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    background: none;
+    height: 0;
+}
+
+/* ============== 菜单 ============== */
+QMenu {
+    background: #131629;
+    color: #e8ecf5;
+    border: 1px solid #2a3148;
+    border-radius: 6px;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 20px;
+    border-radius: 4px;
+}
+
+QMenu::item:selected {
+    background: rgba(233,196,106,0.07);
+    color: #e9c46a;
+}
+
+QMenu::separator {
+    height: 1px;
+    background: #2a3148;
+    margin: 4px 8px;
+}
+
+/* ============== 工具提示 ============== */
+QToolTip {
+    background: #131629;
+    color: #e8ecf5;
+    border: 1px solid #2a3148;
+    border-radius: 4px;
+    padding: 4px 8px;
+}

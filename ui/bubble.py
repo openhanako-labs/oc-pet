@@ -1,30 +1,65 @@
-"""对话气泡组件 — 白底圆角阴影 + 淡入动画 + 打字机效果"""
+"""对话气泡组件 — 主题感知 + 淡入动画 + 打字机效果
 
+颜色从 ThemeManager 拉，不再硬编码。
+"""
 from PySide6.QtWidgets import QWidget
-from PySide6.QtCore import Qt, QTimer, QRect, QPropertyAnimation
+from PySide6.QtCore import Qt, QTimer, QRect, QPropertyAnimation, Signal
 from PySide6.QtGui import QPainter, QFont, QColor, QPainterPath, QFontMetrics
+
+from ui.theme import get_default
+
+
+# 主题色字典（与 ui/theme/light.qss 和 dark.qss 对齐）
+THEME_COLORS = {
+    "light": {
+        "bg": (255, 246, 235, 240),        # 米色透明（暖深底上的气泡）
+        "text": (60, 40, 25, 255),          # 暖深棕字
+        "bright_bg": (255, 220, 180, 245),  # 沙橙高亮
+        "bright_text": (80, 40, 10, 255),   # 深橙字
+        "shadow": (0, 0, 0, 40),
+    },
+    "dark": {
+        "bg": (20, 24, 50, 230),            # 夜蓝紫透明
+        "text": (232, 236, 245, 255),       # 月白
+        "bright_bg": (233, 196, 106, 235),  # 金黄高亮
+        "bright_text": (12, 14, 28, 255),   # 夜底字
+        "shadow": (0, 0, 0, 80),
+    },
+}
 
 
 class ChatBubble(QWidget):
-    """头顶对话气泡 — 白底圆角阴影 + 淡入动画 + 打字机效果 + 三角指针"""
+    """头顶对话气泡 — 主题感知 + 淡入 + 打字机 + 三角指针"""
+
+    theme_changed = Signal()  # 主题切换时通知外部（pet.py 重绘）
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._text = ""
-        self._full_text = ""          # 完整文本
-        self._typewriter_revealed = 0  # 已显示的字符数
+        self._full_text = ""
+        self._typewriter_revealed = 0
         self._is_typing = False
-        self._on_typing_done = None    # 打字完成回调
-        self._typewriter_speed = 28    # 逐字显示间隔 (ms)
+        self._on_typing_done = None
+        self._typewriter_speed = 28
         self._padding_h = 14
         self._padding_v = 10
         self._max_width = 200
-        self._bg_color = QColor(255, 255, 255, 240)
-        self._text_color = QColor(40, 40, 50)
-        self._shadow_color = QColor(0, 0, 0, 40)
+        self._theme = "light"  # 默认 light
+        self._bg_color = self._color("bg")
+        self._text_color = self._color("text")
+        self._shadow_color = self._color("shadow")
         self._font = QFont("Microsoft YaHei UI", 10)
         self.setFont(self._font)
         self.setMinimumSize(40, 30)
+
+        # 连接全局 ThemeManager（如果已初始化）
+        mgr = get_default()
+        if mgr is not None:
+            self._theme = mgr.current
+            self._bg_color = self._color("bg")
+            self._text_color = self._color("text")
+            self._shadow_color = self._color("shadow")
+            mgr.theme_changed.connect(self.set_theme)
 
         # 淡入动画
         self._fade_anim = QPropertyAnimation(self, b"windowOpacity")
@@ -42,12 +77,39 @@ class ChatBubble(QWidget):
         self._bright = False
         self.hide()
 
+    def _color(self, key: str) -> QColor:
+        """取当前主题的颜色（QColor 形式）"""
+        rgba = THEME_COLORS[self._theme][key]
+        return QColor(*rgba)
+
+    def set_theme(self, theme: str):
+        """切换主题 — 由 ThemeManager.theme_changed 信号触发"""
+        if theme not in THEME_COLORS:
+            return
+        if theme == self._theme:
+            return
+        self._theme = theme
+        # 重置当前色（bright 状态可能不同）
+        if self._bright:
+            self._bg_color = self._color("bright_bg")
+            self._text_color = self._color("bright_text")
+        else:
+            self._bg_color = self._color("bg")
+            self._text_color = self._color("text")
+        self._shadow_color = self._color("shadow")
+        self.theme_changed.emit()
+        self.update()
+
+    @property
+    def theme(self) -> str:
+        return self._theme
+
     def set_text(self, text: str, bright: bool = False, on_typing_done=None):
         """设置文字并开始打字机效果
 
         Args:
             text: 完整文本
-            bright: 高亮模式（浅黄底）
+            bright: 高亮模式（emotion == "happy" 时）
             on_typing_done: 打字完成回调
         """
         # 停掉上一次
@@ -55,17 +117,19 @@ class ChatBubble(QWidget):
         self._is_typing = False
 
         self._full_text = text
-        self._text = text  # 用于尺寸计算
+        self._text = text
         self._typewriter_revealed = 0
         self._on_typing_done = on_typing_done
         self._bright = bright
 
+        # 根据 bright 和 theme 取色
         if bright:
-            self._bg_color = QColor(255, 235, 200, 245)
-            self._text_color = QColor(80, 40, 10)
+            self._bg_color = self._color("bright_bg")
+            self._text_color = self._color("bright_text")
         else:
-            self._bg_color = QColor(255, 255, 255, 240)
-            self._text_color = QColor(40, 40, 50)
+            self._bg_color = self._color("bg")
+            self._text_color = self._color("text")
+        self._shadow_color = self._color("shadow")
 
         # 立即计算气泡尺寸（用全文）
         self._update_size()
@@ -77,14 +141,13 @@ class ChatBubble(QWidget):
         self._fade_anim.stop()
         self._fade_anim.start()
 
-        # 连续速度公式：短句慢速，长句渐快，无突变边界
+        # 连续速度公式
         length = len(text)
         if length <= 8:
             speed = 42
         elif length >= 80:
             speed = 10
         else:
-            # 8-80 字线性渐变：42ms → 10ms
             speed = 42 - (length - 8) * (42 - 10) / (80 - 8)
         self._typewriter_speed = int(speed)
 
@@ -95,14 +158,10 @@ class ChatBubble(QWidget):
         else:
             self._typewriter_revealed = 0
 
-        # 闪烁效果已移除（避免频繁闪烁）
-        # if bright:
-        #     self._start_flash()
-
         self.update()
 
     def _typewriter_tick(self):
-        """打字机进度推进一步（标点符号后加长停顿）"""
+        """打字机进度推进一步"""
         if self._typewriter_revealed < len(self._full_text):
             self._typewriter_revealed += 1
             self.update()
@@ -115,7 +174,6 @@ class ChatBubble(QWidget):
                 self._on_typing_done = None
             return
 
-        # 每一步都重新设定时器，根据上一个字符决定下个字符的延迟
         ch = self._full_text[self._typewriter_revealed - 1]
         if ch in "。！？；：":
             self._typewriter_timer.start(int(self._typewriter_speed * 2.5))
@@ -123,15 +181,12 @@ class ChatBubble(QWidget):
             self._typewriter_timer.start(self._typewriter_speed)
 
     def set_typewriter_speed(self, ms_per_char: int):
-        """设置打字速度"""
         self._typewriter_speed = max(5, ms_per_char)
 
     def is_typing(self) -> bool:
-        """是否正在打字"""
         return self._is_typing
 
     def skip_typing(self):
-        """跳过打字动画，直接显示全文"""
         self._typewriter_timer.stop()
         self._typewriter_revealed = len(self._full_text)
         self._is_typing = False
@@ -142,7 +197,6 @@ class ChatBubble(QWidget):
         self.update()
 
     def hide_bubble(self):
-        """隐藏气泡"""
         self._typewriter_timer.stop()
         self._fade_anim.stop()
         self._is_typing = False
@@ -185,7 +239,7 @@ class ChatBubble(QWidget):
         flashing = self._flash_timer.isActive()
         is_on = (self._flash_count % 2 == 0) if flashing else True
 
-        bg = self._bg_color if is_on else QColor(255, 255, 255, 160)
+        bg = self._bg_color if is_on else QColor(*THEME_COLORS[self._theme]["bg"][:3], 160)
         tc = self._text_color if is_on else QColor(150, 150, 160)
 
         body_h = h - tri_h
@@ -210,7 +264,6 @@ class ChatBubble(QWidget):
         reveal = self._typewriter_revealed if self._typewriter_revealed > 0 else len(self._full_text)
         display = self._full_text[:reveal]
         if self._is_typing and reveal < len(self._full_text):
-            # 闪烁光标
             if (self._flash_count % 6) < 3:
                 display += "▎"
 

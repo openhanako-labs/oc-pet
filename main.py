@@ -20,6 +20,9 @@ if "--sandbox" in sys.argv:
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont
 
+# ── 主题系统（必须在 QApplication 创建后、其他 UI 之前） ──
+from ui.theme import init_default
+
 # ── 日志 ──
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +40,11 @@ def main():
     # 检查沙盒标志
     app = QApplication(sys.argv)
     app.setApplicationName("OC Desktop Pet")
+
+    # 初始化主题系统（在所有 UI 创建前）
+    theme_mgr = init_default(app)
+    theme_mgr.apply_initial()
+    logging.info("初始主题：%s", theme_mgr.current)
 
     # Global font
     font = QFont("Microsoft YaHei UI", 10)
