@@ -705,8 +705,16 @@ class PetWindow(QWidget):
                     logger.exception("pet auto_save failed")
 
     def _set_anim_seq(self, seq_name, emotion=None, style="snap"):
-        """切换动画序列，支持过渡。
+        """切换动画序列。"""
+        # 临时禁用过渡动画——排查崩溃
+        self._renderer.play_anim(seq_name, emotion=emotion)
+        self._anim_seq = self._renderer._anim_seq
+        self._anim_idx = self._renderer._anim_idx
+        self._anim_range = self._renderer._anim_range
+        return
 
+        # 以下为过渡动画代码（临时禁用）
+        """
         Args:
             seq_name: 动画序列名（如 'idle' / 'waving' / 'failed'）
             emotion: 情绪名（影响 EXPRESSION_TRANSITION_STYLE 查表）

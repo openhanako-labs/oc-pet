@@ -6,6 +6,10 @@
 import sys
 import os
 import logging
+import faulthandler
+
+# 抓 C++ 层崩溃栈（segfault / access violation）
+faulthandler.enable(file=open('crash_trace.txt', 'w', encoding='utf-8'))
 
 # ── 沙盒模式快捷开关 ──
 if "--sandbox" in sys.argv:
@@ -20,24 +24,7 @@ if "--sandbox" in sys.argv:
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont
 
-# ── 抑制 Qt 线程安全警告（后台线程操作 QTimer 的提示，非致命但会刷屏撑爆内存） ──
-import ctypes
-def _qt_message_handler(mode, context, message):
-    msg = str(message)
-    if 'Timers cannot be started from another thread' in msg:
-        return  # 静默
-    if 'Timers cannot be stopped from another thread' in msg:
-        return
-    if 'Could not parse stylesheet' in msg:
-        return
-    # 其他 Qt 消息正常输出
-    print(f"[Qt] {msg}", file=sys.stderr)
 
-try:
-    from PySide6.QtCore import qInstallMessageHandler, QtMsgType
-    qInstallMessageHandler(_qt_message_handler)
-except Exception:
-    pass
 
 # ── 主题系统（必须在 QApplication 创建后、其他 UI 之前） ──
 from ui.theme import init_default
