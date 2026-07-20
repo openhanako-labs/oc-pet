@@ -5,6 +5,7 @@ import math
 import random
 import time
 import logging
+import threading
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout,
