@@ -60,6 +60,7 @@ class ConversationEngine:
         self._queue: list[dict] = []
         self._lock = threading.Lock()
         self._running = False
+        self._user_turn_active = False  # 用户对话进行中时阻止主动消息
 
         # 工具系统
         from .tool_registry import ToolRegistry
@@ -193,10 +194,15 @@ class ConversationEngine:
         """发送消息（异步，结果通过 on_reply 回调）
 
         source: 'user' | 'proactive' | 'idle'
-        - proactive/idle: 跳过 capability 路由 + 插队到队列最前面
+        - proactive/idle: 用户对话进行中时丢弃，否则插队到最前面
         - user: 正常排队 + 走 capability 路由
         """
         with self._lock:
+            # 用户对话进行中：丢弃所有主动消息
+            if source in ("proactive", "idle") and self._user_turn_active:
+                logger.debug("Proactive message dropped: user turn active")
+                return
+
             item = {
                 "text": text,
                 "character": character or self._character_id,
@@ -204,7 +210,6 @@ class ConversationEngine:
                 "source": source,
             }
             if source in ("proactive", "idle"):
-                # 主动消息插队到最前面
                 self._queue.insert(0, item)
             else:
                 self._queue.append(item)
@@ -247,8 +252,13 @@ class ConversationEngine:
         """处理一条消息：LLM -> 工具调用（可选）-> 回调文字 -> TTS"""
         text = msg["text"]
         character = msg["character"]
+        source = msg.get("source", "user")
 
         logger.info("处理消息 [%s]: %s", character, text[:50])
+
+        # 用户消息：标记 turn 活跃，阻止主动消息
+        if source == "user":
+            self._user_turn_active = True
 
         # 内置使用说明：当用户问“你能干什么”时，返回桌宠自身的功能说明
         help_keywords = ["你能干什么", "你会什么", "你有什么功能", "你能做什么", "怎么用你", "使用说明", "功能介绍"]
@@ -258,6 +268,8 @@ class ConversationEngine:
             emotion = "happy"
             logger.info("内置使用说明 [emotion:%s]: %s", emotion, help_text)
             # 直接回调，不调用 LLM
+            if source == "user":
+                self._user_turn_active = False
             self.on_reply(help_text, emotion, anim, "")
             return
 
@@ -267,6 +279,8 @@ class ConversationEngine:
         if route_result:
             anim = route_result.anim or "idle"
             logger.info("Capability routed: %s -> %s", route_result.capability, route_result.text[:50])
+            if source == "user":
+                self._user_turn_active = False
             self.on_reply(route_result.text, route_result.emotion, anim, route_result.audio_path)
             return
 
@@ -344,6 +358,8 @@ class ConversationEngine:
             logger.info("TTS skipped: %s", skip_reason or "unknown")
 
         # 4. 回调（文字 + 音频一起）
+        if source == "user":
+            self._user_turn_active = False
         self.on_reply(reply, emotion, anim, audio_path)
 
     def _handle_tool_calls(self, resp: dict, user_text: str, character: str, perception_ctx: str) -> tuple:
