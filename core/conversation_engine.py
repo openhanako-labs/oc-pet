@@ -192,15 +192,22 @@ class ConversationEngine:
     def send(self, text: str, character: str = "", source: str = "user"):
         """发送消息（异步，结果通过 on_reply 回调）
 
-        source: 'user' | 'proactive' | 'idle' — 主动/idle 消息跳过 capability 路由
+        source: 'user' | 'proactive' | 'idle'
+        - proactive/idle: 跳过 capability 路由 + 插队到队列最前面
+        - user: 正常排队 + 走 capability 路由
         """
         with self._lock:
-            self._queue.append({
+            item = {
                 "text": text,
                 "character": character or self._character_id,
                 "time": time.time(),
                 "source": source,
-            })
+            }
+            if source in ("proactive", "idle"):
+                # 主动消息插队到最前面
+                self._queue.insert(0, item)
+            else:
+                self._queue.append(item)
 
     def _run(self):
         """后台线程主循环"""
