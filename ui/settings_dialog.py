@@ -248,9 +248,17 @@ class SettingsDialog(QDialog):
         self.screen_enabled.setChecked(self._config.get("screen", {}).get("enabled", True))
         screen_layout.addRow(self.screen_enabled)
 
-        self.screen_blur = QCheckBox("截图模糊（隐私保护）")
-        self.screen_blur.setChecked(self._config.get("screen", {}).get("blur", True))
+        self.screen_blur = QCheckBox("截图高斯模糊（降低文字可读性）")
+        self.screen_blur.setChecked(self._config.get("screen", {}).get("blur", False))
         screen_layout.addRow(self.screen_blur)
+
+        self.screen_blacklist = QCheckBox("敏感窗口黑名单（密码管理器/登录页自动跳过）")
+        self.screen_blacklist.setChecked(self._config.get("screen", {}).get("blacklist", False))
+        screen_layout.addRow(self.screen_blacklist)
+
+        self.screen_compress = QCheckBox("截图缩放压缩（缩小4倍+50%质量，省流量）")
+        self.screen_compress.setChecked(self._config.get("screen", {}).get("compress", True))
+        screen_layout.addRow(self.screen_compress)
 
         self.screen_interval = QSpinBox()
         self.screen_interval.setRange(30, 600)
@@ -1084,6 +1092,8 @@ class SettingsDialog(QDialog):
         c.setdefault("screen", {})["enabled"] = self.screen_enabled.isChecked()
         c["screen"]["interval"] = self.screen_interval.value()
         c["screen"]["blur"] = self.screen_blur.isChecked()
+        c["screen"]["blacklist"] = self.screen_blacklist.isChecked()
+        c["screen"]["compress"] = self.screen_compress.isChecked()
 
         # 窗口互动
         c.setdefault("window_interaction", {})["enabled"] = self.wi_enabled.isChecked()

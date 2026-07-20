@@ -181,10 +181,13 @@ class PetWindow(QWidget):
         if not screen_cfg.get("enabled", True):
             self._perception.screen.disable()
             logger.info("Screen perception disabled by config")
-        # 截图模糊开关
-        if not screen_cfg.get("blur", True):
-            self._perception.screen._blur_enabled = False
-            logger.info("Screen blur disabled by config")
+        # 截图保护开关（默认全关，配置开启）
+        if screen_cfg.get("blur", False):
+            self._perception.screen.set_blur(True)
+        if screen_cfg.get("blacklist", False):
+            self._perception.screen.set_blacklist(True)
+        if not screen_cfg.get("compress", True):
+            self._perception.screen.set_compress(False)
 
         # ── 鼠标交互追踪器 ──
         self._mouse_tracker = MouseTracker(self._get_window_rect)
@@ -1363,6 +1366,18 @@ class PetWindow(QWidget):
         else:
             self._proactive.disable()
         self._proactive.load_config(pro_cfg)
+
+        # 屏幕感知
+        if hasattr(self, '_perception') and self._perception:
+            screen = self._perception._screen
+            screen_cfg = self.config.get("screen", {})
+            if screen_cfg.get("enabled", True):
+                screen.enable()
+            else:
+                screen.disable()
+            screen.set_blur(screen_cfg.get("blur", False))
+            screen.set_blacklist(screen_cfg.get("blacklist", False))
+            screen.set_compress(screen_cfg.get("compress", True))
 
     # ── 角色加载 ──
 

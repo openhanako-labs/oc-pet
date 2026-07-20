@@ -133,6 +133,7 @@ class ScreenPerception:
         self._enabled = True  # 屏幕感知总开关（默认开）
         self._blur_enabled = False  # 高斯模糊（默认关，需要时手动开）
         self._blacklist_enabled = False  # 敏感窗口黑名单（默认关，需要时手动开）
+        self._compress_enabled = True  # 缩放+压缩（默认开，关掉则原图发送）
         self._running = False
         self._thread = None
         self._last_description: str = ""
@@ -215,6 +216,10 @@ class ScreenPerception:
         """开关敏感窗口黑名单"""
         self._blacklist_enabled = enabled
 
+    def set_compress(self, enabled: bool):
+        """开关缩放+压缩（True=缩放4x+50%压缩，False=原图+85%压缩）"""
+        self._compress_enabled = enabled
+
     def stop(self):
         self._running = False
 
@@ -248,8 +253,9 @@ class ScreenPerception:
                 return None
 
         img = ImageGrab.grab()
-        new_size = (img.width // SCREENSHOT_SCALE, img.height // SCREENSHOT_SCALE)
-        img = img.resize(new_size)
+        if self._compress_enabled:
+            new_size = (img.width // SCREENSHOT_SCALE, img.height // SCREENSHOT_SCALE)
+            img = img.resize(new_size)
 
         # 隐私保护：对截图进行模糊处理（降低敏感信息可读性）
         if self._blur_enabled:
@@ -267,9 +273,11 @@ class ScreenPerception:
         self._last_frame_hash = frame_hash
 
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=JPEG_QUALITY)
+        quality = JPEG_QUALITY if self._compress_enabled else 85
+        img.save(buf, format="JPEG", quality=quality)
         b64 = base64.b64encode(buf.getvalue()).decode()
-        logger.info("Screenshot: %s, %dKB base64", new_size, len(b64) // 1024)
+        size_info = img.size if not self._compress_enabled else (img.width, img.height)
+        logger.info("Screenshot: %s, %dKB base64", size_info, len(b64) // 1024)
 
         ctx = HanakoContext()
 
