@@ -527,8 +527,6 @@ class HanakoSessionManager:
         if turn is None and event_type in {"session_user_message", "status"}:
             turn = self._create_external_turn(event)
         if turn is None:
-            if event_type in {"text_delta", "turn_end", "thinking_start", "thinking_delta"}:
-                logger.warning("[SM] Event '%s' has no matching turn (dropped)", event_type)
             return
         if turn.done:
             return
@@ -546,7 +544,6 @@ class HanakoSessionManager:
             self._handle_status(turn, event)
         elif event_type == "text_delta":
             delta = str(event.get("delta") or event.get("text") or "")
-            logger.info("[SM] text_delta: len=%d, turn=%s", len(delta), turn.client_message_id[:20] if turn.client_message_id else 'ext')
             turn.text_parts.append(delta)
             turn.state = TurnState.STREAMING
             self._emit("progress", turn.session, "正在回复…")
