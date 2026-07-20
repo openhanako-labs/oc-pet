@@ -293,19 +293,30 @@ class HanakoPetAdapter:
         if extra_context and extra_context.strip():
             text = f"[pet-context]\n{extra_context.strip()}\n[/pet-context]\n\n{text}"
 
-        try:
-            result = sm.send_and_wait(
-                self._current_session,
-                text,
-                timeout=timeout if timeout is not None else self._reply_timeout,
-                display_text=message.strip(),
-                ui_context={"source": "oc-pet", "agentId": self.agent_id},
-            )
-        except HanakoUnavailableBeforeSend:
-            raise
-        except Exception as e:
-            logger.error("Hanako send_and_wait 异常: %s", e)
-            raise HanakoUnavailableAfterSend(f"send_and_wait raised: {e}") from e
+        import time as _time
+        max_retries = 3
+        retry_delay = 2.0  # 秒
+        for attempt in range(max_retries):
+            try:
+                result = sm.send_and_wait(
+                    self._current_session,
+                    text,
+                    timeout=timeout if timeout is not None else self._reply_timeout,
+                    display_text=message.strip(),
+                    ui_context={"source": "oc-pet", "agentId": self.agent_id},
+                )
+                break  # 成功
+            except HanakoUnavailableBeforeSend:
+                raise
+            except Exception as e:
+                err_msg = str(e)
+                if "pending turn" in err_msg.lower() and attempt < max_retries - 1:
+                    logger.info("Session busy, retry %d/%d in %.1fs", attempt + 1, max_retries, retry_delay)
+                    _time.sleep(retry_delay)
+                    retry_delay *= 1.5  # 递增等待
+                    continue
+                logger.error("Hanako send_and_wait 异常: %s", e)
+                raise HanakoUnavailableAfterSend(f"send_and_wait raised: {e}") from e
 
         if getattr(result, "error", None):
             raise HanakoUnavailableAfterSend(f"reply error: {result.error}")
