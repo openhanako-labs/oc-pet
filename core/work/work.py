@@ -399,6 +399,11 @@ class WorkRegistry:
         with self._lock:
             return self._works.get(work_id)
 
+    def all(self) -> list[Work]:
+        """返回所有已注册工作。"""
+        with self._lock:
+            return list(self._works.values())
+
     def available(self, level: int) -> list[Work]:
         """返回当前等级可用的工作。"""
         with self._lock:
