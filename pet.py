@@ -327,7 +327,10 @@ class PetWindow(QWidget):
             on_chatter=lambda text, emotion: self.idle_chatter_signal.emit(text, emotion),
             min_interval_sec=120,
             max_interval_sec=600,
+            character_id=self._current_char,
         )
+        # 注入 agent 身份（异步，不阻塞启动）
+        self._inject_agent_identity()
 
     def set_hanako_ws(self, ws_client, session_manager):
         """注入共享 Hanako WS 客户端（由 PetManager 调用）"""
@@ -380,6 +383,25 @@ class PetWindow(QWidget):
         except Exception as e:
             logger.warning("set_nurturing failed: %s", e)
 
+
+    def _inject_agent_identity(self):
+        """异步读取 agent 身份，注入给 idle_chatter 和 screen perception"""
+        def _load():
+            try:
+                from core.hanako_context import HanakoContext
+                ctx = HanakoContext(self._current_char)
+                identity = ctx.read_identity() or ctx.read_description() or ""
+                if identity:
+                    if hasattr(self, '_idle_chatter') and self._idle_chatter:
+                        self._idle_chatter.set_agent_identity(identity)
+                    if hasattr(self, '_perception') and self._perception:
+                        screen = getattr(self._perception, '_screen', None)
+                        if screen and hasattr(screen, 'set_agent_identity'):
+                            screen.set_agent_identity(identity)
+                    logger.info("Agent identity injected (%d chars)", len(identity))
+            except Exception as e:
+                logger.debug("Agent identity injection skipped: %s", e)
+        threading.Thread(target=_load, daemon=True).start()
 
     # ── 屏幕查询 ──
 

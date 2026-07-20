@@ -31,16 +31,17 @@ class ScreenEvent:
 
 class ActivityEvent:
     """结构化活动事件（从视觉分析 JSON 提取）"""
-    __slots__ = ('app', 'activity', 'category', 'summary', 'confidence',
+    __slots__ = ('app', 'activity', 'category', 'summary', 'detail', 'confidence',
                  'source', 'start_time', 'end_time')
 
     def __init__(self, app: str = "", activity: str = "", category: str = "other",
-                 summary: str = "", confidence: float = 0.5, source: str = "vision",
+                 summary: str = "", detail: str = "", confidence: float = 0.5, source: str = "vision",
                  start_time: float = 0.0, end_time: float = 0.0):
         self.app = app                # 应用名
         self.activity = activity      # 具体活动（如 "writing code", "watching video"）
         self.category = category      # 分类：work/learn/entertainment/communication/other
         self.summary = summary        # 一句话摘要
+        self.detail = detail          # 详细描述（50-80字）
         self.confidence = confidence  # 置信度 0~1
         self.source = source          # "vision"（模型推断）/ "foreground"（窗口标题直接判断）
         self.start_time = start_time  # 开始时间

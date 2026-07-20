@@ -1,4 +1,4 @@
-"""屏幕感知 — 后台定时截屏 + 视觉模型分析
+﻿"""屏幕感知 — 后台定时截屏 + 视觉模型分析
 
 关键点：
 - 变化检测：对比上一帧 md5，相同则跳过 API 调用（节省算力）
@@ -38,13 +38,13 @@ logger = logging.getLogger(__name__)
 
 SCREENSHOT_SCALE = 4
 JPEG_QUALITY = 50
-VISION_PROMPT = """分析用户当前屏幕内容，以 JSON 格式返回。
+VISION_PROMPT = """分析用户当前屏幕内容，以 JSON 格式返回。尽量详细，描述你看到的具体内容。
 
 返回格式：
 {
-  "activity": "具体活动描述（英文，如 writing code / watching video / reading docs）",
+  "activity": "具体活动描述（英文，如 writing code in VS Code / watching Bilibili / playing Minecraft）",
   "category": "分类（work/learn/entertainment/communication/other）",
-  "summary": "一句话中文摘要（20字以内）",
+  "summary": "中文摘要（30-50字，描述具体在做什么、用什么应用、看到什么内容）",\n  "detail": "更详细的观察（50-80字，包括应用名、具体内容、界面状态等）",
   "confidence": 0.0到1.0的置信度
 }
 
@@ -98,8 +98,10 @@ SCREENSHOT_TITLE_BLACKLIST: list[str] = [
 ]
 
 
-def _is_screen_blacklisted(app: str, title: str) -> bool:
-    """检查前台窗口是否在截图黑名单中"""
+def _is_screen_blacklisted(app: str, title: str, enabled: bool = False) -> bool:
+    """检查前台窗口是否在截图黑名单中（仅在 enabled=True 时生效）"""
+    if not enabled:
+        return False
     if app in SCREENSHOT_PROCESS_BLACKLIST:
         return True
     title_lower = title.lower()
@@ -128,8 +130,9 @@ class ScreenPerception:
     def __init__(self, interval: int = 120):
         self._interval = interval
         self._base_interval = interval
-        self._enabled = True  # 可通过配置禁用
-        self._blur_enabled = True  # 截图模糊（隐私保护），可通过配置关闭
+        self._enabled = True  # 屏幕感知总开关（默认开）
+        self._blur_enabled = False  # 高斯模糊（默认关，需要时手动开）
+        self._blacklist_enabled = False  # 敏感窗口黑名单（默认关，需要时手动开）
         self._running = False
         self._thread = None
         self._last_description: str = ""
@@ -180,7 +183,7 @@ class ScreenPerception:
         变化不大 → 跳过（hash 检测）
         其他 → 触发一次截图
         """
-        if _is_screen_blacklisted(app, title):
+        if _is_screen_blacklisted(app, title, self._blacklist_enabled):
             logger.debug("Screenshot skipped (blacklisted): %s - %s", app, title[:30])
             return
         # 前台切换本身就是变化信号，直接触发截图
@@ -203,6 +206,14 @@ class ScreenPerception:
     def enable(self):
         """启用屏幕感知"""
         self._enabled = True
+
+    def set_blur(self, enabled: bool):
+        """开关高斯模糊"""
+        self._blur_enabled = enabled
+
+    def set_blacklist(self, enabled: bool):
+        """开关敏感窗口黑名单"""
+        self._blacklist_enabled = enabled
 
     def stop(self):
         self._running = False
@@ -232,7 +243,7 @@ class ScreenPerception:
 
         # 黑名单检查（定时模式需要检查，事件模式已在 on_foreground_change 检查过）
         if mode == "timer":
-            if app and title and _is_screen_blacklisted(app, title):
+            if app and title and _is_screen_blacklisted(app, title, self._blacklist_enabled):
                 logger.debug("Screenshot skipped (blacklisted): %s", app)
                 return None
 
@@ -337,8 +348,9 @@ class ScreenPerception:
                     self.on_update(description)
                     # 触发屏幕情绪
                     self._detect_screen_emotion(description)
-                    # 触发屏幕内容主动对话
-                    self._check_screen_proactive(description)
+                    # 触发屏幕内容主动对话（传入 detail 字段）
+                    detail_text = getattr(activity, 'detail', '') if activity else ''
+                    self._check_screen_proactive(description, detail=detail_text)
                     return event
                 else:
                     logger.warning("Vision API returned empty content")
@@ -381,6 +393,7 @@ class ScreenPerception:
                 activity=data.get('activity', ''),
                 category=category,
                 summary=data.get('summary', ''),
+                detail=data.get('detail', ''),
                 confidence=max(0.0, min(1.0, float(data.get('confidence', 0.5)))),
                 source='vision',
                 start_time=time.time(),
@@ -425,29 +438,52 @@ class ScreenPerception:
                 self.on_emotion(emotion, intensity)
                 return
 
-    def _check_screen_proactive(self, description: str):
-        """根据屏幕内容触发主动对话（使用 LLM 生成个性化回复）"""
-        # 冷却检查（避免频繁触发）
+    # ── 屏幕感知主动评论模板 ──
+    _PROACTIVE_TEMPLATES = [
+        # 自由评论型
+        "你是一个桌宠，你看到用户的屏幕内容如下：\n{detail}\n\n根据你看到的内容，自由发挥说一句话（10-30字）。不要用固定格式，像真正看到屏幕的人一样自然反应。可以吐槽、关心、好奇、或者评论。可以问问题。加 [emotion:xxx]。",
+        # 好奇提问型
+        "你是一个桌宠，你偷看了一眼用户的屏幕：\n{detail}\n\n你很好奇，用好奇的语气问用户一个问题（10-30字）。自然一点，不要像机器。加 [emotion:xxx]。",
+        # 鼓励型
+        "你是一个桌宠，你看到用户正在：\n{detail}\n\n用鼓励或支持的语气说一句话（10-30字）。真诚一点，不要太假。加 [emotion:xxx]。",
+        # 吐槽型
+        "你是一个桌宠，你看到用户的屏幕：\n{detail}\n\n用吐槽或调侃的语气说一句话（10-30字）。幽默一点。加 [emotion:xxx]。",
+        # 关心型
+        "你是一个桌宠，你注意到用户：\n{detail}\n\n用关心的语气说一句话（10-30字）。比如提醒休息、或者担心用户太累。加 [emotion:xxx]。",
+    ]
+
+    def _check_screen_proactive(self, description: str, detail: str = ""):
+        """根据屏幕内容触发主动评论（多模板随机，自适应性格）"""
+        # 冷却检查（5-15分钟随机间隔）
         if not hasattr(self, '_last_screen_proactive'):
             self._last_screen_proactive = 0
-        if time.time() - self._last_screen_proactive < 300:  # 5分钟冷却
+        if not hasattr(self, '_proactive_cooldown'):
+            self._proactive_cooldown = random.randint(300, 900)
+        if time.time() - self._last_screen_proactive < self._proactive_cooldown:
             return
 
-        # 随机触发（30%概率，不每次都打扰）
-        if random.random() > 0.3:
+        # 随机触发（20%概率）
+        if random.random() > 0.2:
             return
 
-        # 构造带桌宠人格的提示词
-        prompt = f"""你是一只可爱的桌宠，名叫月薪喵。你看到用户正在屏幕上做以下事情：
+        # 用 detail 如果有，否则用 description
+        screen_info = detail or description
+        if not screen_info:
+            return
 
-{description}
+        # 注入 agent 身份（如果有）
+        agent_brief = getattr(self, '_agent_identity', '')
+        identity_line = f"你的身份：{agent_brief[:150]}\n" if agent_brief else ""
 
-请用你的个性表达你的想法和感受，要求：
-- 不超过两句话
-- 语气活泼可爱
-- 可以表达关心、好奇或鼓励
-- 不要太啰嗦"""
+        # 随机选模板
+        template = random.choice(self._PROACTIVE_TEMPLATES)
+        prompt = identity_line + template.format(detail=screen_info)
 
-        logger.info("Screen proactive prompt: %s", prompt[:100])
+        logger.info("Screen proactive: %s", screen_info[:60])
         self._last_screen_proactive = time.time()
+        self._proactive_cooldown = random.randint(300, 900)  # 下次随机间隔
         self.on_screen_proactive(prompt)
+
+    def set_agent_identity(self, identity: str):
+        """注入 agent 身份（从 HanakoContext 读取）"""
+        self._agent_identity = identity or ""
