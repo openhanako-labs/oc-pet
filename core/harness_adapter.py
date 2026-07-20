@@ -228,8 +228,16 @@ class HanakoPetAdapter:
             logger.warning("Chat failed: %s", e)
             return "(出了点岔子)", "neutral"
 
-    def chat(self, message: str, inject_memory: bool = True, extra_context: str = "", tools: list = None) -> tuple:
-        """入口路由 - 根据 transport_mode 选择 Hanako 或直连"""
+    def chat(self, message: str, inject_memory: bool = True, extra_context: str = "", tools: list = None, source: str = "user") -> tuple:
+        """入口路由 - 根据 transport_mode 和 source 选择路径
+
+        - user 消息：走 Hanako session（工具、记忆、多轮）
+        - proactive/idle 消息：直接走 LLM API（轻量快速，不占 session）
+        """
+        # 主动消息始终走直接 LLM，不碰 Hanako session
+        if source in ("proactive", "idle"):
+            return self.chat_direct(message, False, extra_context, tools=None)
+
         # direct 模式：跳过 Hanako
         if self.transport_mode == "direct":
             return self.chat_direct(message, inject_memory, extra_context, tools)

@@ -291,6 +291,7 @@ class ConversationEngine:
                 message=text, inject_memory=True,
                 extra_context=perception_ctx,
                 tools=self._tools if self._tools else None,
+                source=source,
             )
 
             # 处理 tool_calls
