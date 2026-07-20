@@ -181,13 +181,20 @@ class ScreenPerception:
         """前台窗口切换时调用（由 ForegroundWatcher 触发）
 
         黑名单内 → 跳过
-        变化不大 → 跳过（hash 检测）
+        冷却期内 → 跳过（避免频繁截图）
         其他 → 触发一次截图
         """
         if _is_screen_blacklisted(app, title, self._blacklist_enabled):
             logger.debug("Screenshot skipped (blacklisted): %s - %s", app, title[:30])
             return
-        # 前台切换本身就是变化信号，直接触发截图
+        # 事件触发也加冷却（至少间隔 _interval/2 秒）
+        now = time.time()
+        if not hasattr(self, '_last_event_capture'):
+            self._last_event_capture = 0
+        event_cooldown = max(30, self._interval // 2)
+        if now - self._last_event_capture < event_cooldown:
+            return
+        self._last_event_capture = now
         self._capture_and_analyze(mode="event", app=app, title=title)
 
     def start(self):

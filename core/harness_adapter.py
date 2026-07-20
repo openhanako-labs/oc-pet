@@ -273,10 +273,17 @@ class HanakoPetAdapter:
         if self._current_session is None:
             try:
                 pinned = getattr(self, '_pinned_session_id', None)
-                self._current_session = sm.ensure_session(
-                    agent_id=self.agent_id,
-                    preferred_session_id=pinned
-                )
+                if pinned:
+                    # 有钉住的 session，复用
+                    self._current_session = sm.ensure_session(
+                        agent_id=self.agent_id,
+                        preferred_session_id=pinned
+                    )
+                else:
+                    # 首次：为每个桌宠创建专属 session，避免多桌宠互相阻塞
+                    self._current_session = sm.create_session(
+                        agent_id=self.agent_id,
+                    )
                 self._pinned_session_id = getattr(self._current_session, 'session_id', None)
             except Exception as e:
                 raise HanakoUnavailableBeforeSend("无法准备 Hanako Session") from e
