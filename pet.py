@@ -69,6 +69,7 @@ class PetWindow(QWidget):
     voice_status_signal = Signal(str)  # voice input status
     screen_emotion_signal = Signal(str, float)  # emotion, intensity
     screen_proactive_signal = Signal(str)  # prompt
+    hanako_state_signal = Signal(str, str, str, str, str)  # anim, msg, emotion, state, audio_path
     idle_chatter_signal = Signal(str, str)  # text, emotion
     # M4: 工具进度（Hanako WS 模式下从 SessionManager.on_tool 转发过来）
     tool_progress_signal = Signal(str, str, str, object)  # tool_name, phase, display_text, success
@@ -231,6 +232,7 @@ class PetWindow(QWidget):
         self.voice_status_signal.connect(self._do_voice_status)
         self.screen_emotion_signal.connect(self._do_screen_emotion)
         self.screen_proactive_signal.connect(self._do_screen_proactive)
+        self.hanako_state_signal.connect(self._do_hanako_state)
         self._engine.start()
 
         # ── 语音输入（ASR）──
@@ -2228,8 +2230,11 @@ class PetWindow(QWidget):
 
 
     def _on_hanako_state(self, anim_name: str, message: str, emotion: str = "neutral", state: str = "idle", audio_path: str = ""):
-        """Hanako 状态变化时的回调 - 增强：支持情绪映射 + 状态指示 + 动作联动 + 记忆写入 + 错误隔离"""
-        # 总是更新状态指示器
+        """Hanako 状态变化回调 — 从 WS 后台线程调用，通过信号切主线程"""
+        self.hanako_state_signal.emit(anim_name, message, emotion, state, audio_path)
+
+    def _do_hanako_state(self, anim_name: str, message: str, emotion: str, state: str, audio_path: str):
+        """在主线程处理 Hanako 状态变化"""
         try:
             self._update_status_indicator(state)
         except Exception:
