@@ -305,8 +305,8 @@ class PetManager:
             self._work_registry = WorkRegistry()
             logger.info(
                 "Nurturing registries ready | items=%d works=%d",
-                len(self._item_registry),
-                len(self._work_registry),
+                len(self._item_registry.all()),
+                len(self._work_registry.all()),
             )
         except Exception as e:
             logger.warning("Nurturing registry init failed: %s (will skip)", e)

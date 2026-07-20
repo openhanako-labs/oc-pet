@@ -155,7 +155,7 @@ class PerceptionController:
         if not self._permissions.session_read_enabled:
             return {}
         try:
-            from .hanako_context import HanakoContext
+            from core.hanako_context import HanakoContext
             ctx = HanakoContext(self._character_id)
             return ctx.read_current_session()
         except Exception as e:
@@ -165,7 +165,7 @@ class PerceptionController:
     def get_session_context(self) -> str:
         """获取 Session 摘要文本（注入 LLM prompt 用）"""
         try:
-            from .hanako_context import HanakoContext
+            from core.hanako_context import HanakoContext
             ctx = HanakoContext(self._character_id)
             return ctx.get_session_summary()
         except Exception:
@@ -176,7 +176,7 @@ class PerceptionController:
         if not self._permissions.cross_session_enabled:
             return []
         try:
-            from .hanako_context import HanakoContext
+            from core.hanako_context import HanakoContext
             ctx = HanakoContext(self._character_id)
             return ctx.list_sessions(max_count)
         except Exception:
@@ -185,7 +185,7 @@ class PerceptionController:
     def get_cross_session_context(self) -> str:
         """获取跨 Session 摘要文本（注入 LLM prompt 用）"""
         try:
-            from .hanako_context import HanakoContext
+            from core.hanako_context import HanakoContext
             ctx = HanakoContext(self._character_id)
             return ctx.get_cross_session_summary()
         except Exception:

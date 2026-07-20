@@ -228,7 +228,7 @@ class ScreenPerception:
 
     def _capture_and_analyze(self, mode: str = "timer", app: str = "", title: str = "") -> ScreenEvent | None:
         import hashlib as _hashlib
-        from .hanako_context import HanakoContext
+        from core.hanako_context import HanakoContext
 
         # 黑名单检查（定时模式需要检查，事件模式已在 on_foreground_change 检查过）
         if mode == "timer":
