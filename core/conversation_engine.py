@@ -194,15 +194,10 @@ class ConversationEngine:
         """发送消息（异步，结果通过 on_reply 回调）
 
         source: 'user' | 'proactive' | 'idle'
-        - proactive/idle: 用户对话进行中时丢弃，否则插队到最前面
+        - proactive/idle: 始终允许，插队到最前面（走直接 LLM，不碰 Hanako）
         - user: 正常排队 + 走 capability 路由
         """
         with self._lock:
-            # 用户对话进行中：丢弃所有主动消息
-            if source in ("proactive", "idle") and self._user_turn_active:
-                logger.debug("Proactive message dropped: user turn active")
-                return
-
             item = {
                 "text": text,
                 "character": character or self._character_id,

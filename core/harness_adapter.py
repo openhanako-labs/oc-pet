@@ -338,6 +338,18 @@ class HanakoPetAdapter:
             if emotion == "neutral":
                 emotion = "thinking"
 
+        # 截断：桌宠只展示摘要（完整回复在 Hanako 主窗口可见）
+        if len(cleaned) > 60:
+            # 取第一个句子（。！？\n），或前 40 字
+            for sep in ['\n', '。', '！', '？', '.', '!', '?']:
+                idx = cleaned.find(sep, 10)  # 从第 10 字开始找，避免太短
+                if 0 < idx < 60:
+                    cleaned = cleaned[:idx + 1]
+                    break
+            else:
+                cleaned = cleaned[:40] + "…"
+            logger.info("Reply truncated for bubble: %s", cleaned[:50])
+
         # Hanako 已经执行过 result.tool_calls，绝不能交给桌宠本地再执行一次。
         # 同步本地 history（向后兼容）
         try:
