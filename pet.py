@@ -1703,6 +1703,16 @@ class PetWindow(QWidget):
 
     def _do_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str):
         """在主线程中处理引擎回复"""
+        try:
+            self._do_engine_reply_inner(reply, emotion, anim, audio_path)
+        except Exception:
+            logger.exception("_do_engine_reply crashed")
+            # 确保至少恢复基本状态
+            self._is_thinking = False
+            self._pending_chat = False
+
+    def _do_engine_reply_inner(self, reply: str, emotion: str, anim: str, audio_path: str):
+        """在主线程中处理引擎回复（内部实现）"""
         # 取消超时计时器
         if hasattr(self, '_think_timeout'):
             self._think_timeout.stop()
