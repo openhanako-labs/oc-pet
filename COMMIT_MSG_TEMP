@@ -1,5 +1,0 @@
-refactor: remove narrative engine, annotate tool trio
-
-- Delete core/narrative_engine.py (replaced by idle_chatter)
-- Remove all narrative engine references from pet.py
-- Add "direct mode only" docstring to tool_executor / tool_registry / capability_registry
