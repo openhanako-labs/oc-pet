@@ -108,6 +108,7 @@ class HanakoPetAdapter:
 
         # 当前 Session 引用（由 PetManager / ConversationEngine 注入）
         self._current_session = None  # SessionRef | None
+        self._pinned_session_id = None  # 钉住的 session_id，确保复用同一个 session
 
     def _load_default_from_catalog(self):
         """builtin 角色没有 Hanako agent，从 provider catalog 读默认模型"""
@@ -271,7 +272,12 @@ class HanakoPetAdapter:
             raise HanakoUnavailableBeforeSend("HanakoSessionManager 未实例化")
         if self._current_session is None:
             try:
-                self._current_session = sm.ensure_session(agent_id=self.agent_id)
+                pinned = getattr(self, '_pinned_session_id', None)
+                self._current_session = sm.ensure_session(
+                    agent_id=self.agent_id,
+                    preferred_session_id=pinned
+                )
+                self._pinned_session_id = getattr(self._current_session, 'session_id', None)
             except Exception as e:
                 raise HanakoUnavailableBeforeSend("无法准备 Hanako Session") from e
 
@@ -334,6 +340,7 @@ class HanakoPetAdapter:
     def set_session(self, session_ref) -> None:
         """注入当前 Session 引用（PetManager / ConversationEngine 调用）"""
         self._current_session = session_ref
+        self._pinned_session_id = getattr(session_ref, 'session_id', None) if session_ref else None
 
     def set_session_manager(self, manager) -> None:
         """注入 SessionManager 实例（覆盖延迟导入的类引用）"""
