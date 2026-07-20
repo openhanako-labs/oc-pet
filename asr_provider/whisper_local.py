@@ -57,6 +57,16 @@ class WhisperLocalProvider(ASRProvider):
             WhisperLocalProvider._loading = False
 
     def transcribe(self, audio_path: str, language: str = "zh") -> Optional[str]:
+        if not WhisperLocalProvider._model:
+            # 尝试复用 voice_input 已加载的全局模型
+            try:
+                import voice_input
+                if hasattr(voice_input, '_whisper_model') and voice_input._whisper_model is not None:
+                    WhisperLocalProvider._model = voice_input._whisper_model
+                    WhisperLocalProvider._loaded = True
+                    logger.info("Reused voice_input global Whisper model")
+            except Exception:
+                pass
         if not self.is_ready:
             self.preload()
         if not WhisperLocalProvider._model:
