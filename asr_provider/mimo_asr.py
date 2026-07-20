@@ -38,6 +38,10 @@ class MimoAsrProvider(ASRProvider):
             self._model = model
         if language:
             self._language = language
+        # configure 后直接标记 ready（API 不需要预加载）
+        if self._base_url and self._api_key:
+            self._ready = True
+            logger.info("MIMO ASR configured | url=%s | model=%s", self._base_url[:40], self._model)
 
     @property
     def name(self) -> str:
