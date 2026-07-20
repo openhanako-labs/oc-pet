@@ -163,6 +163,9 @@ class VoiceInput:
 
         # ASR 识别
         self._on_status("语音识别中...")
+        logger.info("ASR provider: %s, ready=%s", 
+                    getattr(self._asr, 'name', type(self._asr).__name__) if self._asr else 'None',
+                    getattr(self._asr, 'is_ready', None) if self._asr else None)
 
         if not self._asr:
             self._on_status("ASR 模型未加载")
@@ -170,14 +173,14 @@ class VoiceInput:
             return ""
 
         try:
+            logger.info("Calling ASR transcribe: %s", tmp_path)
             text = self._asr.transcribe(tmp_path, language="zh")
-            if text:
-                logger.info("ASR result: %s", text[:50])
+            logger.info("ASR returned: '%s'", text[:50] if text else '(empty)')
             self._on_status("")
             self._cleanup(tmp_path)
             return text or ""
         except Exception as e:
-            logger.info("ASR failed: %s", e)
+            logger.error("ASR failed: %s", e, exc_info=True)
             self._on_status("识别失败")
             self._cleanup(tmp_path)
             return ""

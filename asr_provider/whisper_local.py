@@ -65,11 +65,18 @@ class WhisperLocalProvider(ASRProvider):
                     WhisperLocalProvider._model = voice_input._whisper_model
                     WhisperLocalProvider._loaded = True
                     logger.info("Reused voice_input global Whisper model")
-            except Exception:
+            except Exception as e:
+                logger.debug("Could not import voice_input: %s", e)
                 pass
+        logger.info("WhisperLocal.transcribe: model=%s, loaded=%s, loading=%s",
+                    WhisperLocalProvider._model is not None,
+                    WhisperLocalProvider._loaded,
+                    WhisperLocalProvider._loading)
         if not self.is_ready:
+            logger.info("WhisperLocal: not ready, calling preload()")
             self.preload()
         if not WhisperLocalProvider._model:
+            logger.warning("WhisperLocal: model still None after preload")
             return None
         try:
             result = WhisperLocalProvider._model.transcribe(audio_path, language=language)
