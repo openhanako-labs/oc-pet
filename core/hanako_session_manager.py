@@ -526,7 +526,11 @@ class HanakoSessionManager:
         turn = self._find_turn(event)
         if turn is None and event_type in {"session_user_message", "status"}:
             turn = self._create_external_turn(event)
-        if turn is None or turn.done:
+        if turn is None:
+            if event_type in {"text_delta", "turn_end", "thinking_start", "thinking_delta"}:
+                logger.warning("[SM] Event '%s' has no matching turn (dropped)", event_type)
+            return
+        if turn.done:
             return
 
         turn.bind_stream(event.get("streamId"))
@@ -540,6 +544,12 @@ class HanakoSessionManager:
             self._handle_user_echo(turn, event)
         elif event_type == "status":
             self._handle_status(turn, event)
+        elif event_type == "text_delta":
+            delta = str(event.get("delta") or event.get("text") or "")
+            logger.info("[SM] text_delta: len=%d, turn=%s", len(delta), turn.client_message_id[:20] if turn.client_message_id else 'ext')
+            turn.text_parts.append(delta)
+            turn.state = TurnState.STREAMING
+            self._emit("progress", turn.session, "正在回复…")
         elif event_type == "thinking_start":
             turn.state = TurnState.STREAMING
             self._emit("progress", turn.session, "正在思考…")
@@ -547,10 +557,6 @@ class HanakoSessionManager:
             turn.thinking_parts.append(str(event.get("delta") or event.get("text") or ""))
             turn.state = TurnState.STREAMING
             self._emit("progress", turn.session, "正在思考…")
-        elif event_type == "text_delta":
-            turn.text_parts.append(str(event.get("delta") or event.get("text") or ""))
-            turn.state = TurnState.STREAMING
-            self._emit("progress", turn.session, "正在回复…")
         elif event_type in {"tool_start", "tool_progress", "tool_end"}:
             self._handle_tool_event(turn, event)
         elif event_type == "content_block":
@@ -562,6 +568,7 @@ class HanakoSessionManager:
             self._emit("progress", turn.session, "正在处理异步结果…")
         elif event_type == "turn_end":
             turn.state = TurnState.ABORTED if turn.aborted else TurnState.COMPLETED
+            logger.info("[SM] turn_end: text_parts=%d, text='%s'", len(turn.text_parts), "".join(turn.text_parts)[:80])
             self._complete_turn(turn)
         elif event_type == "error":
             self._finish_with_error(turn, str(event.get("message") or event.get("error") or "Hanako turn failed"))

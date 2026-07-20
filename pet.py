@@ -1137,8 +1137,8 @@ class PetWindow(QWidget):
                     # 通过引擎发送
                     self._engine.send(text, character=self._current_char)
                     logger.info("Voice input sent: %s", text[:30])
-                    # 显示提示 + 思考状态
-                    self.voice_status_signal.emit(f"🎤 {text[:30]}")
+                    # 不显示输入文字，隐藏气泡
+                    self.voice_status_signal.emit("")
                     # 截停 TTS
                     self._tts_player.stop()
                     self._is_thinking = True
