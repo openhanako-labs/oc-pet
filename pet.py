@@ -2184,8 +2184,12 @@ class PetWindow(QWidget):
             logger.debug("Screen proactive failed: %s", e)
 
     def _show_bubble(self, text: str, emotion: str = "neutral"):
-        """显示消息气泡"""
+        """显示消息气泡（相同内容不重复刷新，防闪烁）"""
         if not text or not hasattr(self, 'bubble'):
+            return
+        # 节流：相同内容且气泡可见时不重复设置
+        if text == self._bubble_message and self.bubble.isVisible():
+            self._bubble_timer.start(6000)  # 只续期
             return
         try:
             self._is_thinking = False

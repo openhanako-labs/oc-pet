@@ -496,7 +496,9 @@ class SpriteRenderer(AvatarRenderer):
         if ls.width() > 0 and ls.height() > 0:
             pix = pix.scaled(ls.width(), ls.height(),
                              Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        if not self._facing_right:
+        # 方向动画（running-right/left）精灵图已朝对方向，不做翻转
+        _directional = ('running-right', 'running-left')
+        if not self._facing_right and self._anim_seq not in _directional:
             pix = pix.transformed(QTransform().scale(-1, 1))
         self.char_label.setPixmap(pix)
 
