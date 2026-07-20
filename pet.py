@@ -2096,7 +2096,7 @@ class PetWindow(QWidget):
         if self._engine:
             # 包装成用户输入，让模型生成回复
             proactive_prompt = f"[主动对话触发] {prompt_text}\n\n请根据你的人格设定，生成一段简短的、有个性的回应。不要复述触发消息，而是自然地表达你的想法。"
-            self._engine.send(proactive_prompt, character=self._current_char)
+            self._engine.send(proactive_prompt, character=self._current_char, source="proactive")
             
             # 显示思考中气泡
             self._show_bubble("⏳ 思考中...", emotion="thinking")
@@ -2215,7 +2215,7 @@ class PetWindow(QWidget):
             self._is_thinking = True
             # 发送给对话引擎生成回复（会触发 TTS）
             if hasattr(self, '_engine') and self._engine:
-                self._engine.send(prompt)
+                self._engine.send(prompt, source="proactive")
             elif hasattr(self, '_conversation_engine') and self._conversation_engine:
                 self._conversation_engine.send(prompt)
         except Exception as e:

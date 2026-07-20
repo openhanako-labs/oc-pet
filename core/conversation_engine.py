@@ -189,13 +189,17 @@ class ConversationEngine:
 
 有什么想问我的吗？"""
 
-    def send(self, text: str, character: str = ""):
-        """发送消息（异步，结果通过 on_reply 回调）"""
+    def send(self, text: str, character: str = "", source: str = "user"):
+        """发送消息（异步，结果通过 on_reply 回调）
+
+        source: 'user' | 'proactive' | 'idle' — 主动/idle 消息跳过 capability 路由
+        """
         with self._lock:
             self._queue.append({
                 "text": text,
                 "character": character or self._character_id,
                 "time": time.time(),
+                "source": source,
             })
 
     def _run(self):
@@ -250,8 +254,9 @@ class ConversationEngine:
             self.on_reply(help_text, emotion, anim, "")
             return
 
-        # 快速路径：能力路由器（关键词匹配 → 直接执行，跳过 LLM）
-        route_result = self._capability_router.route(text)
+        # 快速路径：能力路由器（仅用户消息，主动/idle 消息跳过）
+        is_user_msg = msg.get("source", "user") == "user"
+        route_result = self._capability_router.route(text) if is_user_msg else None
         if route_result:
             anim = route_result.anim or "idle"
             logger.info("Capability routed: %s -> %s", route_result.capability, route_result.text[:50])
