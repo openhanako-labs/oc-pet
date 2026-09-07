@@ -258,11 +258,37 @@ class ProactiveGenerator:
                 extra_context=extra,
                 source="proactive",
             )
+            text = clean_generated(reply or "")
+            if text:
+                return text
         except Exception as exc:
             logger.warning("Proactive adapter chat failed: %s", exc)
-            return ""
-        return clean_generated(reply or "")
+        
+        # 2026-09-06: S2 失败降级（LLM 超时/挂了走模板库）
+        return self._generate_fallback_template(context)
 
+    def _generate_fallback_template(self, context: dict) -> str:
+        """2026-09-06: S2 失败降级（LLM 超时/挂了走模板库）
+        
+        从 context 中获取模板文本，或返回默认模板。
+        """
+        # 优先使用 context 中的模板文本
+        template_text = context.get("template_text")
+        if template_text:
+            return template_text
+        
+        # 默认模板（根据时间段选择）
+        import time
+        hour = time.localtime().tm_hour
+        if hour < 8:
+            return ""
+        elif hour < 12:
+            return "早上好~"
+        elif hour < 18:
+            return "下午好~"
+        else:
+            return "晚上好~"
+    
     # ── Qt 桥槽 / 同步回调（均在主线程执行）──────────────────
 
     def _deliver_generated(self, text: str) -> None:
