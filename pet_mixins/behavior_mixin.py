@@ -201,7 +201,14 @@ class BehaviorMixin:
         if not self._focus_suppresses_proactive():
             try:
                 if time.time() > self._proactive_grace:
-                    self._proactive.tick()
+                    # 2026-09-06: 接入统一调度器（DialogueScheduler）
+                    if hasattr(self, '_scheduler') and self._scheduler is not None:
+                        # 检查调度器是否允许触发
+                        now = time.time()
+                        if self._scheduler.request("proactive", "low", {}):
+                            self._proactive.tick()
+                    else:
+                        self._proactive.tick()
             except Exception:
                 pass
 

@@ -266,6 +266,15 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             activity_tracker=self._activity_tracker,
         )
         self._proactive.load_config(proactive_cfg)
+        
+        # 2026-09-06: P1 统一调度器（DialogueScheduler）
+        try:
+            from core.dialogue_scheduler import DialogueScheduler
+            self._scheduler = DialogueScheduler()
+            self._scheduler.load_config(self.config)
+        except Exception as e:
+            logger.warning("Failed to init DialogueScheduler: %s", e)
+            self._scheduler = None
         self._proactive_grace = time.time() + 120  # 启动后 2 分钟内不触发主动对话
         # T02 P0-1：LLM 生成器注入（复用 Hanako 通道 source="proactive"）。
         # 适配器在 _init_engine 里由 ConversationEngine.start() 创建，因此延迟到
