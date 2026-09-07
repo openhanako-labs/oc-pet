@@ -1,0 +1,26 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "藿藿.moc3",
+		"Textures": [
+			"藿藿.8192/texture_00.webp",
+			"藿藿.8192/texture_01.webp",
+			"藿藿.8192/texture_02.webp",
+			"藿藿.8192/texture_03.webp"
+		],
+		"Physics": "藿藿.physics3.json",
+		"DisplayInfo": "藿藿.cdi3.json"
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": []
+		},
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": []
+		}
+	]
+}
