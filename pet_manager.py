@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 HANAKO_HOME = Path.home() / ".hanako"
 AGENTS_DIR = HANAKO_HOME / "agents"
-PROJECT_DIR = Path(__file__).parent
+PROJECT_DIR = Path(__file__).parent.resolve()
 CHARACTERS_DIR = PROJECT_DIR / "characters"
 
 
