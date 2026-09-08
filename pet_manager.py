@@ -284,11 +284,11 @@ class PetManager:
             if (char_dir / "live2d").exists():
                 return True
             # 2026-09-08: 支持直接检查 char_dir 下的 .model3.json（live2d zip 导入）
-            # 添加调试日志，确认问题所在
+            # 注意：f.suffix 只返回最后一个扩展名（.json），需要用 f.name.endswith 检查
             try:
                 files = [f.name for f in char_dir.iterdir() if f.is_file()]
                 logger.info("[has_sprites] %s files: %s", agent_id, files)
-                has_model3 = any(f.suffix in ('.model3.json', '.model.json') for f in char_dir.iterdir() if f.is_file())
+                has_model3 = any(f.name.endswith('.model3.json') or f.name.endswith('.model.json') for f in char_dir.iterdir() if f.is_file())
                 logger.info("[has_sprites] %s has_model3=%s", agent_id, has_model3)
                 if has_model3:
                     return True
