@@ -287,9 +287,9 @@ class PetManager:
             # 添加调试日志，确认问题所在
             try:
                 files = [f.name for f in char_dir.iterdir() if f.is_file()]
-                logger.debug("[has_sprites] %s files: %s", agent_id, files)
+                logger.info("[has_sprites] %s files: %s", agent_id, files)
                 has_model3 = any(f.suffix in ('.model3.json', '.model.json') for f in char_dir.iterdir() if f.is_file())
-                logger.debug("[has_sprites] %s has_model3=%s", agent_id, has_model3)
+                logger.info("[has_sprites] %s has_model3=%s", agent_id, has_model3)
                 if has_model3:
                     return True
             except Exception as e:
