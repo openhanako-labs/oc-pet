@@ -1188,6 +1188,14 @@ class SettingsDialog(QDialog):
             })
         self._config["character"] = agent_id
         self._config["character_package"] = agent_id
+        
+        # 2026-09-08: 切换桌宠后自动保存配置（避免用户需要手动保存）
+        try:
+            from config import save_config
+            save_config(self._config)
+            self._pkg_status_label.setText(f"已切换为: {agent_id}（下次重启生效）")
+        except Exception as e:
+            self._pkg_status_label.setText(f"切换成功但保存失败: {e}")
 
     # ── Provider Catalog ──
 
