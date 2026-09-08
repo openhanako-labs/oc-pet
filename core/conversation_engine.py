@@ -1552,67 +1552,84 @@ class ConversationEngine:
             except Exception as _e:
                 logger.warning("on_reply 回调失败: %s", _e)
 
-    def _handle_tool_calls(self, resp: dict, user_text: str, character: str, perception_ctx: str, gen: int = None) -> tuple:
-        """处理 LLM 的 tool_calls：执行工具 → 结果回传 → 再次调用 LLM
+    def _handle_tool_calls(self, resp: dict, user_text: str, character: str, perception_ctx: str, gen: int = None, max_iterations: int = 3) -> tuple:
+        """处理 LLM 的 tool_calls：执行工具 → 结果回传 → 再次调用 LLM（最多 max_iterations 轮）
 
         Args:
             gen: 消息代际。工具执行中若被打断（代际过期），停止后续工具。
+            max_iterations: 最大工具调用轮次，超过后强制终止（防死循环）。
         """
-        tool_calls = resp["tool_calls"]
-        assistant_message = resp["message"]
+        iteration = 0
+        while iteration < max_iterations:
+            iteration += 1
+            tool_calls = resp.get("tool_calls")
+            if not tool_calls:
+                # LLM 已返回纯文本，结束
+                reply = (resp.get("message", {}) or {}).get("content", "") or "…"
+                return reply, "neutral"
 
-        # 将 assistant 消息（含 tool_calls）加入历史
-        self._adapter._history.append({
-            "role": "assistant",
-            "content": assistant_message.get("content", ""),
-            "tool_calls": tool_calls,
-        })
+            assistant_message = resp.get("message", {})
 
-        # 逐个执行工具
-        for tc in tool_calls:
-            # P1：工具执行中被打断 → 停止后续工具
-            if gen is not None and self._is_stale(gen):
-                logger.debug("工具执行中被打断，停止: gen=%d", gen)
-                return "已中断", "neutral"
-            func = tc.get("function", {})
-            tool_name = func.get("name", "")
-            tool_id = tc.get("id", "")
-
-            # 解析参数
-            try:
-                args = json.loads(func.get("arguments", "{}"))
-            except json.JSONDecodeError:
-                args = {}
-
-            logger.info("Tool call: %s(%s)", tool_name, json.dumps(args, ensure_ascii=False)[:100])
-
-            # 查找并执行工具
-            tool_def = self._tool_registry.get_tool(tool_name)
-            if tool_def:
-                result = self._tool_executor.execute(tool_def, args)
-            else:
-                result = f"工具 '{tool_name}' 不存在"
-
-            logger.info("Tool result: %s", result[:100])
-
-            # 将工具结果加入历史
+            # 将 assistant 消息（含 tool_calls）加入历史
             self._adapter._history.append({
-                "role": "tool",
-                "tool_call_id": tool_id,
-                "content": result,
+                "role": "assistant",
+                "content": assistant_message.get("content", ""),
+                "tool_calls": tool_calls,
             })
 
-        # 再次调用 LLM，让模型基于工具结果生成最终回复
-        try:
-            reply, emotion = self._adapter.chat(
-                message="[工具执行完成，请根据结果用自然语言回复用户]",
-                inject_memory=False,
-                extra_context=perception_ctx,
-            )
-            return reply or "…", emotion or "neutral"
-        except Exception as e:
-            logger.error("LLM follow-up failed: %s", e)
-            return "工具执行完成", "neutral"
+            # 逐个执行工具
+            for tc in tool_calls:
+                # P1：工具执行中被打断 → 停止后续工具
+                if gen is not None and self._is_stale(gen):
+                    logger.debug("工具执行中被打断，停止: gen=%d", gen)
+                    return "已中断", "neutral"
+                func = tc.get("function", {})
+                tool_name = func.get("name", "")
+                tool_id = tc.get("id", "")
+
+                # 解析参数
+                try:
+                    args = json.loads(func.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    args = {}
+
+                logger.info("Tool call: %s(%s)", tool_name, json.dumps(args, ensure_ascii=False)[:100])
+
+                # 查找并执行工具
+                tool_def = self._tool_registry.get_tool(tool_name)
+                if tool_def:
+                    result = self._tool_executor.execute(tool_def, args)
+                else:
+                    result = f"工具 '{tool_name}' 不存在"
+
+                logger.info("Tool result: %s", result[:100])
+
+                # 将工具结果加入历史
+                self._adapter._history.append({
+                    "role": "tool",
+                    "tool_call_id": tool_id,
+                    "content": result,
+                })
+
+            if iteration >= max_iterations:
+                logger.warning("工具调用达到最大轮次(%d)，强制终止: %s", max_iterations, user_text[:30])
+                return "操作已完成。", "neutral"
+
+            # 再次调用 LLM，让模型基于工具结果生成最终回复
+            try:
+                follow_up, emotion = self._adapter.chat(
+                    message="[工具执行完成，请根据结果用自然语言回复用户]",
+                    inject_memory=False,
+                    extra_context=perception_ctx,
+                )
+                # 构造下一轮 resp，检查是否还有 tool_calls
+                if isinstance(follow_up, dict) and follow_up.get("tool_calls"):
+                    resp = follow_up
+                else:
+                    return follow_up or "…", emotion or "neutral"
+            except Exception as e:
+                logger.error("LLM follow-up failed: %s", e)
+                return "工具执行完成", "neutral"
 
     # ── M4: SessionManager 集成 ──
 
@@ -1729,12 +1746,17 @@ class ConversationEngine:
     def _handle_session_reply(self, result: object) -> None:
         """镜像来自 Hanako 主窗口或插件的外部回复。
 
+        2026-09-08: 处理所有来源的回复（oc_pet/external），避免 Hana 会话回复后无气泡。
+        
         缺陷③ 修复：打断/插队语义。当本地队列还有用户消息待处理（用户在等
         本地回复）时，外部镜像让位，避免两条回复音轨/气泡打架；本地空闲时
         镜像正常同步（用户在主窗口跟同一 agent 聊天，桌宠跟随显示）。
         """
-        if getattr(result, "origin", "oc_pet") != "external":
-            return
+        origin = getattr(result, "origin", "oc_pet")
+        logger.info("[reply] _handle_session_reply called | origin=%s", origin)
+        # 2026-09-08: 处理所有来源的回复（不再只处理 external）
+        # if origin != "external":
+        #     return
         if not self._is_current_session(getattr(result, "session", None)):
             return
         # 本地有 pending 用户消息（含正在处理的）→ 镜像让位
