@@ -253,48 +253,44 @@ class CharacterPackageManager:
                     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_zip:
                         tmp_zip_path = tmp_zip.name
                         
-                    try:
-                        # 复制原 zip 文件到临时 zip
-                        with zipfile.ZipFile(tmp_zip_path, "a") as tmp_zf:
-                            # 添加原 zip 文件的所有内容
-                            with zipfile.ZipFile(pet_path, "r") as orig_zf:
-                                for item in orig_zf.infolist():
-                                    tmp_zf.writestr(item, orig_zf.read(item.filename))
-                            
-                            # 添加 manifest.json
-                            manifest_data = {
-                                "name": zip_name,
-                                "agent_id": agent_id,
-                                "version": "1.0.0",
-                                "description": f"Live2D model imported from {pet_path.name}",
-                                "required_hanako_version": "",
-                                "author": ""
-                            }
-                            tmp_zf.writestr(MANIFEST_NAME, json.dumps(manifest_data, ensure_ascii=False, indent=2))
-                            
-                            # 添加 identity.md
-                            tmp_zf.writestr("identity.md", f"# {zip_name}\n\nLive2D character imported from {pet_path.name}\n")
-                            
-                            # 添加 awareness.md
-                            tmp_zf.writestr("awareness.md", f"# Awareness\n\nThis character was imported from a Live2D model zip.\n")
-                            
-                            # 添加 model.json
-                            tmp_zf.writestr("model.json", json.dumps({
-                                "type": "live2d",
-                                "model_path": model_files[0]
-                            }, ensure_ascii=False, indent=2))
+                    # 复制原 zip 文件到临时 zip
+                    with zipfile.ZipFile(tmp_zip_path, "a") as tmp_zf:
+                        # 添加原 zip 文件的所有内容
+                        with zipfile.ZipFile(pet_path, "r") as orig_zf:
+                            for item in orig_zf.infolist():
+                                tmp_zf.writestr(item, orig_zf.read(item.filename))
                         
-                        # 使用临时 zip 文件继续安装
-                        pet_path = Path(tmp_zip_path)
-                    finally:
-                        # 清理临时文件
-                        if os.path.exists(tmp_zip_path):
-                            os.unlink(tmp_zip_path)
+                        # 添加 manifest.json
+                        manifest_data = {
+                            "name": zip_name,
+                            "agent_id": agent_id,
+                            "version": "1.0.0",
+                            "description": f"Live2D model imported from {pet_path.name}",
+                            "required_hanako_version": "",
+                            "author": ""
+                        }
+                        tmp_zf.writestr(MANIFEST_NAME, json.dumps(manifest_data, ensure_ascii=False, indent=2))
+                        
+                        # 添加 identity.md
+                        tmp_zf.writestr("identity.md", f"# {zip_name}\n\nLive2D character imported from {pet_path.name}\n")
+                        
+                        # 添加 awareness.md
+                        tmp_zf.writestr("awareness.md", f"# Awareness\n\nThis character was imported from a Live2D model zip.\n")
+                        
+                        # 添加 model.json
+                        tmp_zf.writestr("model.json", json.dumps({
+                            "type": "live2d",
+                            "model_path": model_files[0]
+                        }, ensure_ascii=False, indent=2))
+                    
+                    # 使用临时 zip 文件继续安装
+                    pet_path = Path(tmp_zip_path)
                 
                 # 重新打开 zip 文件
                 zf.close()
             
             # 从 zip 文件安装
+            tmp_file_to_cleanup = pet_path if not has_manifest else None
             with zipfile.ZipFile(pet_path, "r") as zf:
                 # 读取 manifest
                 manifest_text = zf.read(MANIFEST_NAME).decode("utf-8")
@@ -367,6 +363,14 @@ class CharacterPackageManager:
                     install_target,
                     manifest.version,
                 )
+                
+                # 清理临时 zip 文件
+                if tmp_file_to_cleanup and tmp_file_to_cleanup.exists():
+                    try:
+                        os.unlink(tmp_file_to_cleanup)
+                    except OSError:
+                        pass
+                
                 return str(install_target)
 
         except (json.JSONDecodeError, KeyError) as e:
@@ -376,6 +380,12 @@ class CharacterPackageManager:
             if install_target is not None and install_target.exists():
                 try:
                     shutil.rmtree(install_target)
+                except OSError:
+                    pass
+            # 清理临时 zip 文件
+            if tmp_file_to_cleanup and tmp_file_to_cleanup.exists():
+                try:
+                    os.unlink(tmp_file_to_cleanup)
                 except OSError:
                     pass
             if isinstance(e, PackageError):
