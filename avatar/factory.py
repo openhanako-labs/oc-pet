@@ -72,6 +72,12 @@ def detect_format(character_id: str) -> str:
         return _FORMAT_MAP[str(fmt_field).lower()]
 
     # 2) 否则按目录结构推断
+    # 2026-09-08: 支持直接检查 char_dir 下的 .model3.json（live2d zip 导入）
+    for f in os.listdir(char_dir):
+        low = f.lower()
+        if low.endswith(".model3.json") or low.endswith(".model.json"):
+            return "live2d"
+    
     # Live2D：live2d/ 子目录下有 .model3.json (Cubism3+) 或 .model.json (Cubism2)
     live2d_dir = os.path.join(char_dir, "live2d")
     if os.path.isdir(live2d_dir):
