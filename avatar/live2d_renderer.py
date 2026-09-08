@@ -434,21 +434,34 @@ class Live2DRenderer(AvatarRenderer):
         self._character_id = character_id
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         char_dir = os.path.join(base, "characters", character_id)
-        live2d_dir = os.path.join(char_dir, "live2d")
-        if not os.path.isdir(live2d_dir):
-            logger.warning("Live2DRenderer: 未找到 live2d/ 目录: %s", char_dir)
-            return False
-        for f in sorted(os.listdir(live2d_dir)):
+        
+        # 2026-09-08: 支持直接检查 char_dir 下的 .model3.json（live2d zip 导入）
+        for f in sorted(os.listdir(char_dir)):
             low = f.lower()
             if low.endswith(".model3.json") or low.endswith(".model.json"):
-                self._model_path = os.path.join(live2d_dir, f)
+                self._model_path = os.path.join(char_dir, f)
                 # 可选：pet.json 里的 live2d 缩放/偏移覆盖
                 self._apply_live2d_meta(char_dir)
                 # T09: 加载模型 profile（characters/<id>/live2d/profile.json）
                 self._model_profile = load_profile_for_character(character_id, base)
                 logger.info("Live2DRenderer: 模型路径已记录 %s", self._model_path)
                 return True
-        logger.warning("Live2DRenderer: live2d/ 下无 .model3.json/.model.json: %s", live2d_dir)
+        
+        # 回退到 live2d/ 子目录
+        live2d_dir = os.path.join(char_dir, "live2d")
+        if os.path.isdir(live2d_dir):
+            for f in sorted(os.listdir(live2d_dir)):
+                low = f.lower()
+                if low.endswith(".model3.json") or low.endswith(".model.json"):
+                    self._model_path = os.path.join(live2d_dir, f)
+                    # 可选：pet.json 里的 live2d 缩放/偏移覆盖
+                    self._apply_live2d_meta(char_dir)
+                    # T09: 加载模型 profile（characters/<id>/live2d/profile.json）
+                    self._model_profile = load_profile_for_character(character_id, base)
+                    logger.info("Live2DRenderer: 模型路径已记录 %s", self._model_path)
+                    return True
+        
+        logger.warning("Live2DRenderer: 未找到 .model3.json/.model.json: %s", char_dir)
         return False
 
     def _apply_live2d_meta(self, char_dir: str) -> None:
