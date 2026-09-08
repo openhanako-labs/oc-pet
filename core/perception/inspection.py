@@ -136,12 +136,18 @@ class InspectionPerception:
         hits: list[tuple[str, str]] = []
         for jsonl in sorted(runs_dir.glob("*.jsonl")):
             key = str(jsonl)
-            cursor = self._run_cursors.get(key, 0)
+            cursor = self._run_cursors.get(key)
             try:
                 lines = jsonl.read_text("utf-8").splitlines()
             except Exception as e:
                 logger.debug("读取 %s 失败: %s", jsonl, e)
                 continue
+            
+            # 2026-09-08: 启动时跳过历史记录，只处理新增记录
+            if cursor is None:
+                self._run_cursors[key] = len(lines)  # 设置游标为文件末尾，跳过历史记录
+                continue
+            
             new_lines = lines[cursor:]
             if not new_lines:
                 continue
