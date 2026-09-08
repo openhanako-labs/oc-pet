@@ -158,6 +158,11 @@ class BubbleMixin:
             if any(kw in text for kw in _status_keywords):
                 _skip_tts = True
             
+            # 2026-09-08: 工具执行失败：不触发 TTS（避免连续播放多个失败语音）
+            _error_keywords = ("工具执行失败", "工具调用失败", "工具失败", "⚠️")
+            if any(kw in text for kw in _error_keywords):
+                _skip_tts = True
+            
             # 3. 操作提示：缩放、拖拽、点击等系统操作
             _op_keywords = ("🔍", "缩放", "拖拽", "点击", "右键", "双击", "快捷键")
             if any(kw in text for kw in _op_keywords):
