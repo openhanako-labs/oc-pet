@@ -283,6 +283,9 @@ class PetManager:
                 return True
             if (char_dir / "live2d").exists():
                 return True
+            # 2026-09-08: 支持直接检查 char_dir 下的 .model3.json（live2d zip 导入）
+            if any(f.suffix in ('.model3.json', '.model.json') for f in char_dir.iterdir() if f.is_file()):
+                return True
             # 检查是否有 pet.json（可能配置了外部资源）
             if (char_dir / "pet.json").exists():
                 return True
