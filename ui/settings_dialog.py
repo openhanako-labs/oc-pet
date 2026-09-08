@@ -756,6 +756,47 @@ class SettingsDialog(QDialog):
         pkg_layout.addStretch()
         self._main_tabs.addTab(pkg_tab, "📦 角色包")
 
+        # 2026-09-06: P2 主动对话配置
+        proactive_tab = QWidget()
+        proactive_layout = QVBoxLayout(proactive_tab)
+        proactive_layout.setContentsMargins(16, 16, 16, 16)
+        proactive_layout.setSpacing(16)
+
+        proactive_hint = QLabel("配置桌宠的主动对话行为。改动保存后下次启动生效。")
+        proactive_hint.setWordWrap(True)
+        proactive_hint.setStyleSheet("color: rgb(%s); font-size: 11px; margin-bottom: 2px;" % rgb(self._ui_theme, "text_muted"))
+        proactive_layout.addWidget(proactive_hint)
+
+        # 主动对话总开关
+        proactive_group = QGroupBox("主动对话")
+        proactive_form = QFormLayout(proactive_group)
+        proactive_form.setSpacing(10)
+
+        self.proactive_enabled = QCheckBox("启用主动对话")
+        self.proactive_enabled.setChecked(self._config.get("proactive", {}).get("enabled", True))
+        proactive_form.addRow(self.proactive_enabled)
+
+        # 每日上限
+        self.proactive_daily_limit = QSpinBox()
+        self.proactive_daily_limit.setRange(0, 20)
+        self.proactive_daily_limit.setValue(self._config.get("proactive", {}).get("daily_budget", {}).get("daily_limit", 6))
+        proactive_form.addRow("每日上限", self.proactive_daily_limit)
+
+        # 免打扰时段
+        self.proactive_dnd_start = QSpinBox()
+        self.proactive_dnd_start.setRange(0, 23)
+        self.proactive_dnd_start.setValue(self._config.get("proactive", {}).get("dnd", {}).get("late_night_start", 0))
+        proactive_form.addRow("免打扰开始", self.proactive_dnd_start)
+
+        self.proactive_dnd_end = QSpinBox()
+        self.proactive_dnd_end.setRange(0, 23)
+        self.proactive_dnd_end.setValue(self._config.get("proactive", {}).get("dnd", {}).get("late_night_end", 8))
+        proactive_form.addRow("免打扰结束", self.proactive_dnd_end)
+
+        proactive_layout.addWidget(proactive_group)
+        proactive_layout.addStretch()
+        self._main_tabs.addTab(proactive_tab, "💬 主动对话")
+
         # ── Tab 3: API 配置 ──
         api_tab = QWidget()
         api_layout = QVBoxLayout(api_tab)
@@ -1471,6 +1512,23 @@ class SettingsDialog(QDialog):
         c["proactive"]["cooldown_minutes"] = self.pro_cooldown.value()
         c["proactive"]["fullscreen_suppress"] = self.pro_fullscreen_suppress.isChecked()
         c["proactive"]["fullscreen_threshold"] = round(self.pro_fullscreen_threshold.value(), 2)
+        
+        # 2026-09-06: P2 主动对话配置（每日上限、免打扰时段）
+        c["proactive"]["daily_budget"] = {
+            "enabled": True,
+            "daily_limit": self.proactive_daily_limit.value(),
+            "period_limits": {
+                "morning": 2,
+                "afternoon": 2,
+                "evening": 2,
+                "night": 0
+            }
+        }
+        c["proactive"]["dnd"] = {
+            "enabled": True,
+            "late_night_start": self.proactive_dnd_start.value(),
+            "late_night_end": self.proactive_dnd_end.value()
+        }
 
         # 屏幕感知
         c.setdefault("screen", {})["enabled"] = self.screen_enabled.isChecked()
