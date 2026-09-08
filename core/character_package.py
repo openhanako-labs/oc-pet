@@ -231,10 +231,11 @@ class CharacterPackageManager:
         install_target: Optional[Path] = None
 
         try:
+            # 2026-09-08: 检查是否需要预处理（live2d zip 没有 manifest）
             with zipfile.ZipFile(pet_path, "r") as zf:
-                # 2026-09-08: 支持直接导入 live2d 模型的 zip 文件
-                # 如果没有 manifest.json，自动创建默认的角色定义文件
-                if MANIFEST_NAME not in zf.namelist():
+                has_manifest = MANIFEST_NAME in zf.namelist()
+                
+                if not has_manifest:
                     # 尝试识别 live2d 模型 zip（包含 .model3.json）
                     model_files = [f for f in zf.namelist() if f.endswith(".model3.json")]
                     if not model_files:
@@ -246,42 +247,66 @@ class CharacterPackageManager:
                     zip_name = pet_path.stem  # 不带扩展名的文件名
                     agent_id = re.sub(r'[^A-Za-z0-9_-]', '_', zip_name)[:50] or 'live2d_character'
                     
-                    # 自动创建 manifest.json
-                    manifest_data = {
-                        "name": zip_name,
-                        "agent_id": agent_id,
-                        "version": "1.0.0",
-                        "description": f"Live2D model imported from {pet_path.name}",
-                        "required_hanako_version": "",
-                        "author": ""
-                    }
-                    zf.writestr(MANIFEST_NAME, json.dumps(manifest_data, ensure_ascii=False, indent=2))
-                    
-                    # 自动创建 identity.md
-                    zf.writestr("identity.md", f"# {zip_name}\n\nLive2D character imported from {pet_path.name}\n")
-                    
-                    # 自动创建 awareness.md
-                    zf.writestr("awareness.md", f"# Awareness\n\nThis character was imported from a Live2D model zip.\n")
-                    
-                    # 自动创建 model.json
-                    zf.writestr("model.json", json.dumps({
-                        "type": "live2d",
-                        "model_path": model_files[0]
-                    }, ensure_ascii=False, indent=2))
-                    
-                    manifest = PackageManifest.from_dict(manifest_data)
-                else:
-                    # 正常 .pet 文件路径
-                    manifest_text = zf.read(MANIFEST_NAME).decode("utf-8")
-                    manifest_data = json.loads(manifest_text)
-                    manifest = PackageManifest.from_dict(manifest_data)
-                    
-                    # 校验必填字段
-                    for field in ("name", "agent_id"):
-                        if not manifest_data.get(field):
-                            raise PackageValidationError(
-                                f"manifest 缺少必填字段: {field}"
-                            )
+                    # 创建临时 zip 文件，添加必要的文件
+                    import tempfile
+                    import os
+                    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_zip:
+                        tmp_zip_path = tmp_zip.name
+                        
+                    try:
+                        # 复制原 zip 文件到临时 zip
+                        with zipfile.ZipFile(tmp_zip_path, "a") as tmp_zf:
+                            # 添加原 zip 文件的所有内容
+                            with zipfile.ZipFile(pet_path, "r") as orig_zf:
+                                for item in orig_zf.infolist():
+                                    tmp_zf.writestr(item, orig_zf.read(item.filename))
+                            
+                            # 添加 manifest.json
+                            manifest_data = {
+                                "name": zip_name,
+                                "agent_id": agent_id,
+                                "version": "1.0.0",
+                                "description": f"Live2D model imported from {pet_path.name}",
+                                "required_hanako_version": "",
+                                "author": ""
+                            }
+                            tmp_zf.writestr(MANIFEST_NAME, json.dumps(manifest_data, ensure_ascii=False, indent=2))
+                            
+                            # 添加 identity.md
+                            tmp_zf.writestr("identity.md", f"# {zip_name}\n\nLive2D character imported from {pet_path.name}\n")
+                            
+                            # 添加 awareness.md
+                            tmp_zf.writestr("awareness.md", f"# Awareness\n\nThis character was imported from a Live2D model zip.\n")
+                            
+                            # 添加 model.json
+                            tmp_zf.writestr("model.json", json.dumps({
+                                "type": "live2d",
+                                "model_path": model_files[0]
+                            }, ensure_ascii=False, indent=2))
+                        
+                        # 使用临时 zip 文件继续安装
+                        pet_path = Path(tmp_zip_path)
+                    finally:
+                        # 清理临时文件
+                        if os.path.exists(tmp_zip_path):
+                            os.unlink(tmp_zip_path)
+                
+                # 重新打开 zip 文件
+                zf.close()
+            
+            # 从 zip 文件安装
+            with zipfile.ZipFile(pet_path, "r") as zf:
+                # 读取 manifest
+                manifest_text = zf.read(MANIFEST_NAME).decode("utf-8")
+                manifest_data = json.loads(manifest_text)
+                manifest = PackageManifest.from_dict(manifest_data)
+                
+                # 校验必填字段
+                for field in ("name", "agent_id"):
+                    if not manifest_data.get(field):
+                        raise PackageValidationError(
+                            f"manifest 缺少必填字段: {field}"
+                        )
 
                 agent_id = manifest.agent_id
                 # 防 zip-slip：agent_id 白名单 [A-Za-z0-9_-]，杜绝 "../x" 越界写
