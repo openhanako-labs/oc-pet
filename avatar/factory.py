@@ -166,13 +166,19 @@ def resource_available(character_id: str) -> tuple[bool, str]:
 
     fmt = detect_format(character_id)
     if fmt == "live2d":
-        live2d_dir = os.path.join(char_dir, "live2d")
-        if not os.path.isdir(live2d_dir):
-            return False, "缺少 live2d 模型目录（live2d/）"
+        # 2026-09-08: 支持直接检查 char_dir 下的 .model3.json（live2d zip 导入）
         has_model = any(
             f.lower().endswith((".model3.json", ".model.json"))
-            for f in os.listdir(live2d_dir)
+            for f in os.listdir(char_dir)
         )
+        if not has_model:
+            # 回退到 live2d/ 子目录
+            live2d_dir = os.path.join(char_dir, "live2d")
+            if os.path.isdir(live2d_dir):
+                has_model = any(
+                    f.lower().endswith((".model3.json", ".model.json"))
+                    for f in os.listdir(live2d_dir)
+                )
         if not has_model:
             return False, "缺少 Live2D 模型文件（*.model3.json，请按 README 下载放置）"
         return True, ""
