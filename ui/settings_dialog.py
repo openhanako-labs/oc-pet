@@ -711,7 +711,7 @@ class SettingsDialog(QDialog):
         # 操作按钮行
         pkg_btns_row1 = QHBoxLayout()
 
-        self._import_pkg_btn = QPushButton("📦 导入 .pet")
+        self._import_pkg_btn = QPushButton("📦 导入 .pet/.zip")
         self._import_pkg_btn.clicked.connect(self._import_package)
         pkg_btns_row1.addWidget(self._import_pkg_btn)
 
@@ -999,7 +999,7 @@ class SettingsDialog(QDialog):
         from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getOpenFileName(
             self, "导入角色包", "",
-            "角色包 (*.pet);;所有文件 (*)"
+            "角色包 (*.pet *.zip);;所有文件 (*)"
         )
         if not path:
             return
