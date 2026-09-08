@@ -284,11 +284,21 @@ class PetManager:
             if (char_dir / "live2d").exists():
                 return True
             # 2026-09-08: 支持直接检查 char_dir 下的 .model3.json（live2d zip 导入）
-            if any(f.suffix in ('.model3.json', '.model.json') for f in char_dir.iterdir() if f.is_file()):
-                return True
+            # 添加调试日志，确认问题所在
+            try:
+                files = [f.name for f in char_dir.iterdir() if f.is_file()]
+                logger.debug("[has_sprites] %s files: %s", agent_id, files)
+                has_model3 = any(f.suffix in ('.model3.json', '.model.json') for f in char_dir.iterdir() if f.is_file())
+                logger.debug("[has_sprites] %s has_model3=%s", agent_id, has_model3)
+                if has_model3:
+                    return True
+            except Exception as e:
+                logger.warning("[has_sprites] %s iterdir failed: %s", agent_id, e)
             # 检查是否有 pet.json（可能配置了外部资源）
             if (char_dir / "pet.json").exists():
                 return True
+        else:
+            logger.warning("[has_sprites] %s char_dir not exists: %s", agent_id, char_dir)
         return False
 
     def get_sprite_dir(self, agent_id: str) -> Optional[str]:
