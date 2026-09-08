@@ -270,24 +270,20 @@ class ProactiveGenerator:
     def _generate_fallback_template(self, context: dict) -> str:
         """2026-09-06: S2 失败降级（LLM 超时/挂了走模板库）
         
-        从 context 中获取模板文本，或返回默认模板。
+        从 context 中获取模板文本，或使用模板库生成。
         """
         # 优先使用 context 中的模板文本
         template_text = context.get("template_text")
         if template_text:
             return template_text
         
-        # 默认模板（根据时间段选择）
-        import time
-        hour = time.localtime().tm_hour
-        if hour < 8:
+        # 2026-09-06: P2 #5 使用模板库生成降级文案
+        try:
+            from core.template_library import generate_template_fallback
+            return generate_template_fallback(context)
+        except Exception as e:
+            logger.warning("Template library failed: %s", e)
             return ""
-        elif hour < 12:
-            return "早上好~"
-        elif hour < 18:
-            return "下午好~"
-        else:
-            return "晚上好~"
     
     # ── Qt 桥槽 / 同步回调（均在主线程执行）──────────────────
 
