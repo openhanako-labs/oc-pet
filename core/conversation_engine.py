@@ -1556,7 +1556,10 @@ class ConversationEngine:
                         except (AttributeError, Exception):
                             # _adapter 可能不存在（测试环境），回退原始 reply
                             import re
-                            tts_text = re.sub(r"\s*\[\s*emotion\s*[:=]\s*\w+\s*\]\s*", " ", reply, flags=re.IGNORECASE).strip()
+                            tts_text = re.sub(r"\s*\[\s*emotion\s*[:=]\s*\w+\s*\]\s*", " ", reply, flags=re.IGNORECASE)
+                            tts_text = re.sub(r"\s*\[expression:[^\]]*\]\s*", " ", tts_text, flags=re.IGNORECASE)
+                            tts_text = re.sub(r"\s*\[duration:[^\]]*\]\s*", " ", tts_text, flags=re.IGNORECASE)
+                            tts_text = tts_text.strip()
                     audio_path = tts.synthesize(
                         tts_text, character_id=character, instruct=instruct, voice=voice,
                         emotion=emotion,

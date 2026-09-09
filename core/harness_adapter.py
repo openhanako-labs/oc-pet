@@ -748,6 +748,10 @@ class HanakoPetAdapter:
         em_matches = re.findall(r"\[\s*emotion\s*[:=]\s*(\w+)\s*\]", text, flags=re.IGNORECASE)
         emotion = em_matches[-1].lower() if em_matches else "neutral"
         cleaned = re.sub(r"\s*\[\s*emotion\s*[:=]\s*\w+\s*\]\s*", " ", text, flags=re.IGNORECASE)
+        # 剥离 [expression:xxx] 标签（表情参数，不显示给用户）
+        cleaned = re.sub(r"\s*\[expression:[^\]]*\]\s*", " ", cleaned, flags=re.IGNORECASE)
+        # 剥离 [duration:xxx] 标签（持续时间，不显示给用户）
+        cleaned = re.sub(r"\s*\[duration:[^\]]*\]\s*", " ", cleaned, flags=re.IGNORECASE)
         # BugFix #4：整段剥离 <mood>...</mood> 内省块（Vibe/Reflections/Will/
         # Sparks 字段是给服务端/记忆用的元数据，不是给用户的回复）——必须在
         # HTML 剥离之前做，否则 <mood> 标签被剥掉后只剩 Vibe 文本。
@@ -923,26 +927,38 @@ class HanakoPetAdapter:
     def _build_action_prompt(self) -> str:
         """构建动作列表 prompt（注入到 system prompt 输出规则）。
 
-        让 LLM 知道有哪些动作可以调用，格式：
+        让 LLM 知道有哪些动作/表情/持续时间可以调用，格式：
         [action:{"gesture":"touch","intensity":0.6}]
+        [expression:smile=80,eye_smile=50]
+        [duration:3]
         
         P1: 隐式文档按需注入 — 只放简短列表，AI 用了才 Poke 完整文档。
         省 token 且渐进式学习。
         """
         try:
             renderer = getattr(self, '_renderer', None) or getattr(self, '_pet_renderer', None)
-            if not renderer or not hasattr(renderer, 'available_actions'):
-                return ""
-            actions = renderer.available_actions
-            if not actions:
-                return ""
-            # 简短列表：只放动作名（省 token）
-            action_names = [a['name'] for a in actions]
-            return (
-                "\n3. 可在回复中嵌入动作标签触发桌宠动作，格式 [action:{...}]"
-                "\n可用动作：" + "/".join(action_names) +
-                "\n提示：当用户描述场景或情绪时，主动配合动作让互动更生动。"
+            actions_prompt = ""
+            if renderer and hasattr(renderer, 'available_actions'):
+                actions = renderer.available_actions
+                if actions:
+                    action_names = [a['name'] for a in actions]
+                    actions_prompt = (
+                        "\n3. 可在回复中嵌入动作标签触发桌宠动作，格式 [action:{...}]"
+                        "\n可用动作：" + "/".join(action_names) +
+                        "\n提示：当用户描述场景或情绪时，主动配合动作让互动更生动。"
+                    )
+            # 表情参数控制（新增）
+            expression_prompt = (
+                "\n4. 可嵌入表情参数精确控制面部表情，格式 [expression:smile=80,eye_smile=50]"
+                "\n常用参数：smile(嘴型)/eye_smile(眯眼)/blush(脸红)/mouth_form(嘴型)/eye_open(眼睛开合)"
+                "\n数值范围：0.0-1.0（部分参数可负值，如 mouth_form=-0.3 表示撇嘴）"
+                "\n提示：[expression] 比 [emotion] 更精细，适合特定场景（如脸红、俏皮嘴型）"
             )
+            duration_prompt = (
+                "\n5. 可指定持续时间（秒），格式 [duration:3]"
+                "\n提示：表情/动作将在指定秒后自动恢复 idle，不用 duration 则持续直到下次变化"
+            )
+            return actions_prompt + expression_prompt + duration_prompt
         except Exception:
             return ""
 
