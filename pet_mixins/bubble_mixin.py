@@ -94,14 +94,17 @@ class BubbleMixin:
         
         # 原始逻辑
         now = time.time()
-        if text == getattr(self, '_last_bubble_text', '') and (now - getattr(self, '_last_bubble_time', 0)) < 2.0:
+        # P1: 规范化文本（去除多余空格）用于去重
+        import re
+        normalized_text = re.sub(r'\s+', ' ', text).strip()
+        if normalized_text == getattr(self, '_last_bubble_text', '') and (now - getattr(self, '_last_bubble_time', 0)) < 2.0:
             logger.debug("Bubble dedupe: same text within 2s, skipping log")
             self._bubble_timer.start(duration_ms if duration_ms > 0 else self._bubble_duration(text))  # 只续期
             return
-        self._last_bubble_text = text
+        self._last_bubble_text = normalized_text
         self._last_bubble_time = now
         # 节流：相同内容且气泡可见时不重复设置
-        if text == self._bubble_message and self.bubble.isVisible():
+        if normalized_text == getattr(self, '_bubble_message', '') and self.bubble.isVisible():
             logger.debug("Bubble throttle: same text still visible")
             self._bubble_timer.start(duration_ms if duration_ms > 0 else self._bubble_duration(text))  # 只续期
             return
@@ -178,16 +181,25 @@ class BubbleMixin:
                 _skip_tts = True
             
             if not _skip_tts:
-                engine = getattr(self, "_engine", None)
-                if engine and hasattr(engine, "speak"):
-                    # 音频合成完成后播放（通过 tts_audio_signal 绕回主线程）
-                    def _on_audio(audio_path):
-                        try:
-                            if audio_path:
-                                self.tts_audio_signal.emit(audio_path)
-                        except Exception as e:
-                            logger.debug("TTS signal from bubble failed: %s", e)
-                    engine.speak(text, emotion=emotion, on_audio=_on_audio)
+                # P1: TTS 去重 — 同一文本在短时间内不重复调用 TTS
+                normalized_tts_text = re.sub(r'\s+', ' ', text).strip()
+                now = time.time()
+                if (normalized_tts_text == getattr(self, '_last_tts_text', '') and 
+                    (now - getattr(self, '_last_tts_time', 0)) < 3.0):
+                    logger.debug("TTS dedupe: same text within 3s, skipping")
+                else:
+                    self._last_tts_text = normalized_tts_text
+                    self._last_tts_time = now
+                    engine = getattr(self, "_engine", None)
+                    if engine and hasattr(engine, "speak"):
+                        # 音频合成完成后播放（通过 tts_audio_signal 绕回主线程）
+                        def _on_audio(audio_path):
+                            try:
+                                if audio_path:
+                                    self.tts_audio_signal.emit(audio_path)
+                            except Exception as e:
+                                logger.debug("TTS signal from bubble failed: %s", e)
+                        engine.speak(text, emotion=emotion, on_audio=_on_audio)
         except Exception as e:
             logger.debug("TTS trigger from bubble failed: %s", e)
     
