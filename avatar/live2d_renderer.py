@@ -2419,22 +2419,38 @@ class Live2DRenderer(AvatarRenderer):
     def apply_action_intent(self, intent: dict) -> None:
         """应用结构化动作意图（任意动作；向后兼容 [emotion:xxx] 标签路径）。
 
-        intent ∈ {"gesture": str, "intensity": float, "params": dict}：
-        - params 非空 → 作为 Live2D 直接参数目标（如 ParamAngleX/ParamMouthOpenY），
+        intent ∈ {"gesture": str, "intensity": float, "params": dict, "duration": float}：
+        - params 非空 → 作为 Live2D 直接参数目标（如 smile/eye_smile/ParamAngleX），
           复用 _update_procedural_emotion 的每帧平滑插值过渡到目标（不跳变）。
         - gesture 非空 → 触发对应 motion/expression（情绪名走表情+对应 motion，
           否则当作 motion 组名尝试播放）。
+        - duration > 0 → 通过 MotionMixer 提交，指定秒后自动回 idle。
         - 缺省/非法字段安全忽略（不抛异常）。
         """
         if not isinstance(intent, dict):
             return
         gesture = intent.get("gesture")
         params = intent.get("params")
+        duration = intent.get("duration", 0.0)
         try:
             intensity = float(intent.get("intensity", 1.0))
         except (TypeError, ValueError):
             intensity = 1.0
         intensity = max(0.0, min(1.0, intensity))
+
+        # 如果有 duration，通过 MotionMixer 提交（带自动过期）
+        if duration > 0 and params:
+            req = MotionRequest(
+                layer=Layer.DIALOG,
+                motion_group=gesture,
+                params=params,
+                duration=duration,
+                name="intent",
+            )
+            self.submit_motion_request(req)
+            return
+
+        # 无 duration：保持当前行为（直接设置参数，无自动过期）
         if isinstance(params, dict) and params:
             self._set_intent_params(params, intensity)
         if gesture:

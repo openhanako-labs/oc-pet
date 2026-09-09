@@ -1240,67 +1240,118 @@ class ConversationEngine:
     })
 
     def parse_action_intent(self, reply: str) -> tuple:
-        """解析 [action:{...}] 结构化动作意图。
+        """解析 [action:{...}] / [expression:xxx] / [duration:xxx] 结构化动作意图。
 
         格式示例：
         ``[action:{"gesture":"wave","intensity":0.8,"params":{"ParamAngleX":15,"ParamMouthOpenY":0.6}}]``
+        ``[expression:smile=80,eye_smile=50]``  # 直接指定表情参数
+        ``[duration:3]``  # 持续时间（秒）
 
         - 命中 → 返回 (去标记后的正文, intent_dict)，intent_dict ∈
-          ``{"gesture": str, "intensity": float, "params": dict}``。
+          ``{"gesture": str, "intensity": float, "params": dict, "duration": float}``。
         - 无指令 / 标签非法 JSON → 返回 (正文, None)。
 
         与 [emotion:xxx] 解析互不干扰（后者由 adapter.parse_emotion 处理）。
         解析失败只剥掉标签、绝不抛异常（容错同 _read_file）。
         """
-        if not reply or "[action:" not in reply:
+        if not reply:
             return reply, None
         import re as _re
         import json as _json
 
+        # ── 先检查 [expression:xxx] / [duration:xxx]（可能没有 [action:xxx]）──
+        # 这样 LLM 可以只输出 [expression:smile=80] 而不需要完整 [action:{...}]
+        expr_params = {}
+        duration = 0.0
+
+        # 解析 [expression:smile=80,eye_smile=50] 格式
+        expr_matches = _re.findall(r'\[expression:([^\]]+)\]', reply, flags=_re.IGNORECASE)
+        for expr_str in expr_matches:
+            for part in expr_str.split(','):
+                part = part.strip()
+                if '=' in part:
+                    key, value = part.split('=', 1)
+                    key = key.strip().lower()
+                    try:
+                        value = float(value.strip())
+                        expr_params[key] = value
+                    except ValueError:
+                        pass
+        # 剥离 [expression:...] 标签
+        cleaned = _re.sub(r'\s*\[expression:[^\]]*\]\s*', ' ', reply, flags=_re.IGNORECASE)
+
+        # 解析 [duration:3] 格式
+        dur_match = _re.search(r'\[duration:([\d.]+)\]', reply, flags=_re.IGNORECASE)
+        if dur_match:
+            try:
+                duration = float(dur_match.group(1))
+            except ValueError:
+                pass
+        # 剥离 [duration:...] 标签
+        cleaned = _re.sub(r'\s*\[duration:[^\]]*\]\s*', ' ', cleaned, flags=_re.IGNORECASE)
+
+        # ── 解析 [action:{...}]（如果存在）──
         # 逐个扫描 [action:{...}]：按大括号配平定位闭合 }，再要求其后紧跟 ]。
         # 不用正则贪婪（``\{.*\}`` 配 DOTALL 会在一条回复含多个标签时把所有
         # 标签吞成一个非法 JSON，导致 intent=None、动态参数被静默丢弃并退化 emotion
         # 路径）。配平扫描可正确处理嵌套 params 与多标签（取最后一个合法标签）。
         intent = None
-        cleaned = reply
-        i = 0
-        n = len(reply)
-        while True:
-            start = reply.find("[action:", i)
-            if start == -1:
-                break
-            b = reply.find("{", start)
-            if b == -1:
-                break
-            depth = 0
-            closed = -1
-            j = b
-            while j < n:
-                c = reply[j]
-                if c == "{":
-                    depth += 1
-                elif c == "}":
-                    depth -= 1
-                    if depth == 0:
-                        closed = j
-                        break
-                j += 1
-            # 未配平，或闭合 } 后不是 ] → 视为残缺标签，跳过继续向后找
-            if closed == -1 or closed + 1 >= n or reply[closed + 1] != "]":
-                i = start + 1
-                continue
-            full = reply[start:closed + 2]
-            raw = reply[b:closed + 1]
-            try:
-                obj = _json.loads(raw)
-            except Exception:
-                obj = None
-            if isinstance(obj, dict) and (obj.get("gesture") or obj.get("params")):
-                intent = obj
-            # 无论 JSON 是否合法，都剥掉该标签
-            cleaned = cleaned.replace(full, " ")
-            i = closed + 2
+        if "[action:" in cleaned:
+            i = 0
+            n = len(reply)
+            while True:
+                start = reply.find("[action:", i)
+                if start == -1:
+                    break
+                b = reply.find("{", start)
+                if b == -1:
+                    break
+                depth = 0
+                closed = -1
+                j = b
+                while j < n:
+                    c = reply[j]
+                    if c == "{":
+                        depth += 1
+                    elif c == "}":
+                        depth -= 1
+                        if depth == 0:
+                            closed = j
+                            break
+                    j += 1
+                # 未配平，或闭合 } 后不是 ] → 视为残缺标签，跳过继续向后找
+                if closed == -1 or closed + 1 >= n or reply[closed + 1] != "]":
+                    i = start + 1
+                    continue
+                full = reply[start:closed + 2]
+                raw = reply[b:closed + 1]
+                try:
+                    obj = _json.loads(raw)
+                except Exception:
+                    obj = None
+                if isinstance(obj, dict) and (obj.get("gesture") or obj.get("params")):
+                    intent = obj
+                # 无论 JSON 是否合法，都剥掉该标签
+                cleaned = cleaned.replace(full, " ")
+                i = closed + 2
         cleaned = _re.sub(r"\s{2,}", " ", cleaned).strip()
+        
+        # ── 合并 [expression:xxx] 和 [duration:xxx] 到 intent ──
+        if expr_params or duration > 0:
+            if intent is None:
+                intent = {}
+            # 合并 params（[expression:xxx] 的参数）
+            if expr_params:
+                existing_params = intent.get("params", {})
+                if isinstance(existing_params, dict):
+                    existing_params.update(expr_params)
+                    intent["params"] = existing_params
+                else:
+                    intent["params"] = expr_params
+            # 设置 duration
+            if duration > 0:
+                intent["duration"] = duration
+        
         if intent is None:
             return cleaned, None
         return cleaned, intent
