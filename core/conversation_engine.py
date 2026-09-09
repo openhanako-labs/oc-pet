@@ -901,7 +901,8 @@ class ConversationEngine:
         _heartbeat.start()
         try:
             try:
-                perception_ctx = self._perception.build_context()
+                # 2026-09-09: 传递 source 参数，区分用户对话和 proactive 场景
+                perception_ctx = self._perception.build_context(source=source)
                 
                 # P2: 触发 LLM 开始事件
                 self.emit(self.EVT_LLM_START, text=tagged_text, source=source, gen=gen)

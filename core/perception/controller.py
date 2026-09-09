@@ -519,8 +519,14 @@ class PerceptionController:
 
     # ── 构建 LLM 上下文 ──
 
-    def build_context(self) -> str:
-        """组合所有感知信息为 prompt 上下文"""
+    def build_context(self, source: str = "user") -> str:
+        """组合所有感知信息为 prompt 上下文
+        
+        Args:
+            source: 消息来源 (user/proactive/idle/screen_enrich 等)
+                   user: 用户主动对话，不注入屏幕感知信息
+                   proactive: 桌宠主动搭话，注入屏幕感知信息
+        """
         parts = []
         time_ctx = self._time.format_for_prompt()
         if time_ctx:
@@ -535,9 +541,13 @@ class PerceptionController:
         inspection_ctx = self._inspection.format_for_prompt()
         if inspection_ctx:
             parts.append(inspection_ctx)
-        screen_ctx = self._screen.get_context()
-        if screen_ctx:
-            parts.append(screen_ctx)
+        
+        # ── 2026-09-09: 区分来源，用户主动对话不注入屏幕感知信息 ──
+        # 屏幕感知信息只用于 proactive 场景，避免混入用户对话回复
+        if source in ("proactive", "idle", "screen_enrich"):
+            screen_ctx = self._screen.get_context()
+            if screen_ctx:
+                parts.append(screen_ctx)
 
         # ── M2: 注入环境扫描观察 ──
         if self._env_scanner and self._env_scanner_enabled:

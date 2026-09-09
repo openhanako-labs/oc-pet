@@ -201,7 +201,7 @@ class HanakoPetAdapter:
             "4. 必须嵌入表情参数精确控制面部表情，格式 [expression:smile=80,eye_smile=50]。常用参数：smile(嘴型)/eye_smile(眯眼)/blush(脸红)/mouth_form(嘴型)/eye_open(眼睛开合)。数值范围：0.0-1.0（部分参数可负值）。示例：'今天好开心！[emotion:happy][expression:smile=90,blush=60]' 或 '哼，不理你。[emotion:sad][expression:mouth_form=-0.3]'"
             "5. 必须指定持续时间（秒），格式 [duration:3]。表情/动作将在指定秒后自动恢复 idle。示例：'晚安~[emotion:happy][expression:smile=70][duration:5]'"
             "6. 组合使用：[emotion:xxx] + [action:{...}] + [expression:xxx] + [duration:xxx] 必须同时使用，让桌宠的反应更生动。"
-            "7. 注意：以上四个标签必须同时出现在回复中，缺一不可。"
+            "7. 注意：以上四个标签必须同时出现在回复中，缺一不可。完整示例：'早上好~[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}][expression:smile=90,blush=60][duration:5]'"
             + self._build_action_prompt()}]
 
         # 注入记忆
@@ -424,7 +424,7 @@ class HanakoPetAdapter:
             "4. 必须嵌入表情参数精确控制面部表情，格式 [expression:smile=80,eye_smile=50]。常用参数：smile(嘴型)/eye_smile(眯眼)/blush(脸红)/mouth_form(嘴型)/eye_open(眼睛开合)。数值范围：0.0-1.0（部分参数可负值）。示例：'今天好开心！[emotion:happy][expression:smile=90,blush=60]' 或 '哼，不理你。[emotion:sad][expression:mouth_form=-0.3]'"
             "5. 必须指定持续时间（秒），格式 [duration:3]。表情/动作将在指定秒后自动恢复 idle。示例：'晚安~[emotion:happy][expression:smile=70][duration:5]'"
             "6. 组合使用：[emotion:xxx] + [action:{...}] + [expression:xxx] + [duration:xxx] 必须同时使用，让桌宠的反应更生动。"
-            "7. 注意：以上四个标签必须同时出现在回复中，缺一不可。"
+            "7. 注意：以上四个标签必须同时出现在回复中，缺一不可。完整示例：'早上好~[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}][expression:smile=90,blush=60][duration:5]'"
             + self._build_action_prompt()}]
 
         if inject_memory:

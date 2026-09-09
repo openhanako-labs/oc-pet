@@ -146,72 +146,8 @@ class BubbleMixin:
         except Exception:
             logger.exception("Show bubble failed")
         
-        # 2026-09-07: 触发 TTS（让 idle chatter、屏幕感知 proactive 等回复也有语音）
-        # 但排除系统提示（短气泡、状态提示、操作提示）
-        try:
-            # 过滤条件：短气泡、状态提示、操作提示不触发 TTS
-            _skip_tts = False
-            
-            # 1. 短气泡（duration_ms > 0）：如缩放提示、工具进度
-            if duration_ms > 0:
-                _skip_tts = True
-            
-            # 2. 状态提示：思考中、语音生成中、观察中等
-            _status_keywords = ("思考中", "语音生成中", "正在观察", "正在思考", "正在回复", "观察中", "分析中")
-            if any(kw in text for kw in _status_keywords):
-                _skip_tts = True
-            
-            # 2026-09-08: 工具执行状态提示：不触发 TTS（如"正在使用 search_memory…"）
-            _tool_status_keywords = ("正在使用", "正在执行", "工具执行完成", "工具调用")
-            if any(kw in text for kw in _tool_status_keywords):
-                _skip_tts = True
-            
-            # 2026-09-09: 工具执行完成状态：不触发 TTS（如"已为你完成「current_status」"）
-            _tool_done_keywords = ("已为你完成", "工具执行", "已完成", "工具调用完成")
-            if any(kw in text for kw in _tool_done_keywords):
-                _skip_tts = True
-            
-            # 2026-09-09: 包含工具名称的回复：不触发 TTS（如"已完成「current_status」"）
-            _tool_names = ("current_status", "search_memory", "check_pending_tasks", "web_search", "web_fetch")
-            if any(tool in text for tool in _tool_names):
-                _skip_tts = True
-            
-            # 2026-09-08: 工具执行失败：不触发 TTS（避免连续播放多个失败语音）
-            _error_keywords = ("工具执行失败", "工具调用失败", "工具失败", "⚠️")
-            if any(kw in text for kw in _error_keywords):
-                _skip_tts = True
-            
-            # 3. 操作提示：缩放、拖拽、点击等系统操作
-            _op_keywords = ("🔍", "缩放", "拖拽", "点击", "右键", "双击", "快捷键")
-            if any(kw in text for kw in _op_keywords):
-                _skip_tts = True
-            
-            # 4. 文本太短（< 10 字）：通常是提示，不是对话
-            if len(text) < 10:
-                _skip_tts = True
-            
-            if not _skip_tts:
-                # P1: TTS 去重 — 同一文本在短时间内不重复调用 TTS
-                normalized_tts_text = re.sub(r'\s+', ' ', text).strip()
-                now = time.time()
-                if (normalized_tts_text == getattr(self, '_last_tts_text', '') and 
-                    (now - getattr(self, '_last_tts_time', 0)) < 3.0):
-                    logger.debug("TTS dedupe: same text within 3s, skipping")
-                else:
-                    self._last_tts_text = normalized_tts_text
-                    self._last_tts_time = now
-                    engine = getattr(self, "_engine", None)
-                    if engine and hasattr(engine, "speak"):
-                        # 音频合成完成后播放（通过 tts_audio_signal 绕回主线程）
-                        def _on_audio(audio_path):
-                            try:
-                                if audio_path:
-                                    self.tts_audio_signal.emit(audio_path)
-                            except Exception as e:
-                                logger.debug("TTS signal from bubble failed: %s", e)
-                        engine.speak(text, emotion=emotion, on_audio=_on_audio)
-        except Exception as e:
-            logger.debug("TTS trigger from bubble failed: %s", e)
+        # 2026-09-09: TTS 触发已移至 conversation_engine.py，bubble_mixin 不再触发 TTS
+        # 避免双重触发导致重复播报（conversation_engine 已在 _synth_and_reply 中处理 TTS）
     
     def _show_bubble_stream(self, initial_text: str = "", emotion: str = "neutral", priority: int = 0):
         """P1: 流式气泡开始 — 显示初始文本（空或"思考中"），准备接收后续 chunk"""
