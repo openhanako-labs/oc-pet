@@ -2455,6 +2455,10 @@ class Live2DRenderer(AvatarRenderer):
         except (TypeError, ValueError):
             intensity = 1.0
         intensity = max(0.0, min(1.0, intensity))
+        
+        # 调试日志：记录动作意图
+        logger.info("apply_action_intent: gesture=%s, intensity=%.1f, params=%s, duration=%.1f",
+                    gesture, intensity, params, duration)
 
         # 如果有 duration，通过 MotionMixer 提交（带自动过期）
         if duration > 0 and params:
@@ -2466,13 +2470,16 @@ class Live2DRenderer(AvatarRenderer):
                 name="intent",
             )
             self.submit_motion_request(req)
+            logger.info("已提交 MotionRequest: gesture=%s, duration=%.1f", gesture, duration)
             return
 
         # 无 duration：保持当前行为（直接设置参数，无自动过期）
         if isinstance(params, dict) and params:
             self._set_intent_params(params, intensity)
+            logger.info("已设置表情参数: %s (intensity=%.1f)", params, intensity)
         if gesture:
             self._trigger_gesture(gesture, intensity)
+            logger.info("已触发动作: %s (intensity=%.1f)", gesture, intensity)
 
     def _set_intent_params(self, params: dict, intensity: float) -> None:
         """把 params 字典归一化为平滑目标值（按 intensity 缩放幅度）。
