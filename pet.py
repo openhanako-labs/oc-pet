@@ -49,6 +49,7 @@ from core.pet_audio_bridge import PetAudioBridge, PetAudioCallbacks, AudioType
 from core.emotion_transitions import TransitionEngine
 from motion.physics import PhysicsEngine, MotionStateMachine, PhysicsCallbacks
 from avatar.factory import create_renderer
+from avatar.decision_trace import trace
 from ui.sfx import play as sfx_play
 
 from core.conversation_engine import ConversationEngine
@@ -226,6 +227,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._emotion_expiry_timer.setSingleShot(True)
         self._current_emotion = "neutral"
         self._emotion_source = "neutral"   # 当前情绪来源（缺陷①优先级）
+        self._emotion_entered_at = 0.0      # 当前情绪进入时刻（time.monotonic 秒），供驻留迟滞判断
         # 屏幕情绪二次冷却，避免视觉模型反复输出同类关键词导致表情高频跳动
         self._screen_emotion_cooldown = 30.0  # 秒
         self._last_screen_emotion_at = 0.0
@@ -2678,6 +2680,13 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         "neutral": 0,   # 回归默认
     }
 
+    # 情绪最短驻留时间（迟滞 / hysteresis），单位毫秒。
+    # 进入一个非中性情绪后，至少驻留这么久才允许被【同优先级或更低优先级】的
+    # 另一个非中性情绪替换，挡住 happy→thinking→curious 式高频横跳。
+    # 更高优先级来源（如用户直接对话 dialog）仍可立即打断；回到 neutral 始终允许。
+    # 设计参照 mc-agent-neko 的 MIN_DWELL_MS。
+    EMOTION_MIN_DWELL_MS = 8000
+
     def _set_surface_emotion(self, emotion: str, duration_ms: int = 3000, source: str = "dialog"):
         """统一设置当前情绪并同步到情绪脸，启动过期计时器。
 
@@ -2688,15 +2697,35 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         new_prio = self._EMOTION_PRIORITY.get(source, 2)
         cur_prio = self._EMOTION_PRIORITY.get(getattr(self, "_emotion_source", "neutral"), 0)
         cur_emo = getattr(self, "_current_emotion", "neutral")
+        # 迟滞：非中性情绪之间，dwell 窗口内且非更高优先级 → 忽略，挡住横跳
+        if cur_emo != "neutral" and emotion != "neutral" and emotion != cur_emo:
+            dwell_ms = (time.monotonic() - getattr(self, "_emotion_entered_at", 0.0)) * 1000
+            if dwell_ms < self.EMOTION_MIN_DWELL_MS and new_prio <= cur_prio:
+                logger.debug(
+                    "情绪驻留中忽略切换: %s -> %s (dwell=%.0fms < %dms, prio %d<=%d)",
+                    cur_emo, emotion, dwell_ms, self.EMOTION_MIN_DWELL_MS, new_prio, cur_prio,
+                )
+                trace.record("emotion", chosen=cur_emo, source=f"blocked:{source}",
+                             rejected={emotion: f"dwell={dwell_ms:.0f}ms<{self.EMOTION_MIN_DWELL_MS}ms & prio {new_prio}<={cur_prio}"},
+                             note="dwell-blocked")
+                return
         # 低优先不能覆盖高优先的非 neutral 情绪
         if cur_emo != "neutral" and new_prio < cur_prio:
             logger.debug(
                 "情绪被低优先级覆盖忽略: %s(%d) < 当前 %s(%d)",
                 emotion, new_prio, cur_emo, cur_prio,
             )
+            trace.record("emotion", chosen=cur_emo, source=f"blocked:{source}",
+                         rejected={emotion: f"prio {new_prio}<{cur_prio}"},
+                         note="low-prio-blocked")
             return
+        switched = cur_emo != emotion
         self._current_emotion = emotion
+        self._emotion_entered_at = time.monotonic()  # 刷新进入时刻，重启驻留窗口
         self._emotion_source = source
+        trace.record("emotion", chosen=emotion, source=source,
+                     rejected={cur_emo: "replaced"} if switched else {},
+                     note="switch" if switched else "refresh")
         # P2-6：主导情绪同步到渲染器程序化表情层（面部参数平滑过渡）
         self._sync_renderer_master_emotion(self._current_emotion)
         if self._current_emotion != "neutral":
@@ -2804,6 +2833,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         # 对话情绪是最高优先级（缺陷①），直接写入并标记来源，屏幕/定时情绪此后不得覆盖
         self._current_emotion = emotion or "neutral"
         self._emotion_source = "dialog"
+        self._emotion_entered_at = time.monotonic()  # 对话情绪作为驻留窗口起点
         # P2-6：对话情绪同步到渲染器程序化表情层（面部参数平滑过渡）
         self._sync_renderer_master_emotion(self._current_emotion)
         if self._current_emotion != "neutral":

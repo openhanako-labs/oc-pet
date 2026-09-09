@@ -41,6 +41,7 @@ from avatar.motion_mixer import (
     easeOut,
 )
 from avatar.frame_pipeline import create_default_pipeline
+from avatar.decision_trace import trace
 
 logger = logging.getLogger(__name__)
 
@@ -537,7 +538,30 @@ class Live2DRenderer(AvatarRenderer):
                             _auto_added += 1
                 if _auto_added:
                     logger.info("Live2DRenderer: 自动扫描 motions/ 目录，添加 %d 个动作 %s", _auto_added, list(self._pet_actions.keys())[-_auto_added:])
-            
+
+            # 动作槽位自动映射：正则把 motion 文件名归到语义槽位（idle/wave/happy/sad/…），
+            # 用语义名补充 _pet_actions，使 play_anim("happy") 即使 pet.json 未配也能播，
+            # 省去每模型手写 profile（miku 的 happy.motion3.json 名就能直接对上）。
+            try:
+                from core.motion_slot import map_motions
+                _slot_dir = os.path.join(char_dir, "live2d")
+                if not os.path.isdir(_slot_dir):
+                    _slot_dir = char_dir
+                _slot_res = map_motions(_slot_dir)
+                self._motion_slot_map = _slot_res.slots
+                for _slot, _files in _slot_res.slots.items():
+                    if _files and _slot not in self._pet_actions:
+                        self._pet_actions[_slot] = {
+                            "label": _slot, "motion": _files[0], "intensity": 0.7,
+                        }
+                logger.info(
+                    "Live2DRenderer: 动作槽位映射 覆盖 %d/%d, 未分配 %d -> %s",
+                    _slot_res.assigned, _slot_res.total_motions, _slot_res.unassigned,
+                    {k: len(v) for k, v in _slot_res.slots.items()},
+                )
+            except Exception as e:
+                logger.warning("Live2DRenderer: 动作槽位映射失败(非致命): %s", e)
+
             if self._pet_actions:
                 logger.info("Live2DRenderer: pet.json 动作列表已加载 %s", list(self._pet_actions.keys()))
         except Exception as e:
@@ -592,6 +616,15 @@ class Live2DRenderer(AvatarRenderer):
             model.LoadModelJson(self._model_path)
 
             self._model = model
+            # 模型体检：换模型自动检测参数覆盖，是「缺参数→表情/动作静默失效」
+            # 的第一道防线（live2d_renderer 换模型有 52 处裸 except:pass，缺这步会盲人摸象）。
+            try:
+                from avatar.model_health import generate_report, format_report_human
+                self._health_report = generate_report(model)
+                logger.info("Live2DRenderer: 模型体检\n%s", format_report_human(self._health_report))
+            except Exception as e:
+                self._health_report = None
+                logger.warning("Live2DRenderer: 模型体检失败(非致命): %s", e)
             # LAppModel.LoadModelJson 内部已自动 CreateRenderer
             if not self._debug_minimal:
                 model.SetAutoBlinkEnable(True)
@@ -2124,12 +2157,15 @@ class Live2DRenderer(AvatarRenderer):
         if exact:
             for name in self._expression_names:
                 if str(name) == exact or exact.lower() in str(name).lower():
+                    trace.record("expression", chosen=name, source=f"exact:{emotion}", note="pet.json精确")
                     return name
         kws = self._EMOTION_KEYWORDS.get(emotion, ())
         for name in self._expression_names:
             low = str(name).lower()
             if any(k in low for k in kws):
+                trace.record("expression", chosen=name, source=f"kw:{emotion}", note=f"kws={list(kws)}")
                 return name
+        trace.record("expression", chosen="(none)", source=emotion, note="no-match")
         return None
 
     def _match_motion(self, emotion: str):
@@ -2139,7 +2175,9 @@ class Live2DRenderer(AvatarRenderer):
         for g in groups:
             low = str(g).lower()
             if any(k in low for k in kws):
+                trace.record("motion", chosen=g, source=emotion, note=f"kws={list(kws)}")
                 return g
+        trace.record("motion", chosen="(none)", source=emotion, note="no-match")
         return None
 
     # ── 动画控制 ──
