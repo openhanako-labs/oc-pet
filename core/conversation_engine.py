@@ -1007,6 +1007,23 @@ class ConversationEngine:
                 reply = reply + f" [expression:{expr_params}]"
                 logger.info("自动补充 expression: %s", expr_params)
             
+            # P1: 自动补充 [action:{...}]（如果 LLM 没输出）
+            # 基于情绪推断默认动作
+            if not has_action_tag:
+                # 根据情绪推断默认动作
+                action_defaults = {
+                    "happy": {"gesture": "happy", "intensity": 0.6},
+                    "sad": {"gesture": "sad", "intensity": 0.5},
+                    "angry": {"gesture": "angry", "intensity": 0.7},
+                    "surprised": {"gesture": "surprised", "intensity": 0.8},
+                    "thinking": {"gesture": "thinking", "intensity": 0.5},
+                    "neutral": {"gesture": "idle", "intensity": 0.3},
+                }
+                action_params = action_defaults.get(emotion, {"gesture": "idle", "intensity": 0.3})
+                import json
+                reply = reply + f" [action:{json.dumps(action_params)}]"
+                logger.info("自动补充 action: %s", action_params)
+            
             if not has_duration_tag:
                 # 默认持续时间：3 秒
                 reply = reply + " [duration:3]"
