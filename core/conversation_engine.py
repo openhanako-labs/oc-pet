@@ -976,12 +976,12 @@ class ConversationEngine:
         # P0: 格式纠正 — AI 回复缺少 emotion/action 标签时，内部补默认标签
         # 不再 poke 纠正消息给 LLM（避免 LLM 把纠正消息当用户输入回复，造成来源混淆）
         if not self._is_correction_message(tagged_text):
-            logger.debug("自动补充检查: reply=%r", reply[:80])
+            logger.info("自动补充检查: reply=%r", reply[:80])
             has_emotion_tag = "[emotion:" in reply or "[emotion=" in reply
             has_action_tag = "[action:" in reply
             has_expression_tag = "[expression:" in reply
             has_duration_tag = "[duration:" in reply
-            logger.debug("标签检测: emotion=%s action=%s expression=%s duration=%s",
+            logger.info("标签检测: emotion=%s action=%s expression=%s duration=%s",
                         has_emotion_tag, has_action_tag, has_expression_tag, has_duration_tag)
             
             if not has_emotion_tag and not has_action_tag:
@@ -1004,12 +1004,12 @@ class ConversationEngine:
                 }
                 expr_params = expression_defaults.get(emotion, "smile=50")
                 reply = reply + f" [expression:{expr_params}]"
-                logger.debug("自动补充 expression: %s", expr_params)
+                logger.info("自动补充 expression: %s", expr_params)
             
             if not has_duration_tag:
                 # 默认持续时间：3 秒
                 reply = reply + " [duration:3]"
-                logger.debug("自动补充 duration: 3")
+                logger.info("自动补充 duration: 3")
 
         # P1：LLM 调用后检查——若已打断（代际过期），不再继续 TTS/回调
         if self._is_stale(gen):
