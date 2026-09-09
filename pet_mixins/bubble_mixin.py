@@ -166,6 +166,16 @@ class BubbleMixin:
             if any(kw in text for kw in _tool_status_keywords):
                 _skip_tts = True
             
+            # 2026-09-09: 工具执行完成状态：不触发 TTS（如"已为你完成「current_status」"）
+            _tool_done_keywords = ("已为你完成", "工具执行", "已完成", "工具调用完成")
+            if any(kw in text for kw in _tool_done_keywords):
+                _skip_tts = True
+            
+            # 2026-09-09: 包含工具名称的回复：不触发 TTS（如"已完成「current_status」"）
+            _tool_names = ("current_status", "search_memory", "check_pending_tasks", "web_search", "web_fetch")
+            if any(tool in text for tool in _tool_names):
+                _skip_tts = True
+            
             # 2026-09-08: 工具执行失败：不触发 TTS（避免连续播放多个失败语音）
             _error_keywords = ("工具执行失败", "工具调用失败", "工具失败", "⚠️")
             if any(kw in text for kw in _error_keywords):
