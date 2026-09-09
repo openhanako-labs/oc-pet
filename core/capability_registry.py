@@ -76,13 +76,14 @@ class Capability:
     """一个可路由的能力"""
     name: str                       # 唯一标识，如 "pause_music"
     patterns: list[str]             # 触发词，如 ["暂停", "暂停播放", "停一下"]
-    handler: str                    # 处理方式 "tool" / "internal"
+    handler: str                    # 处理方式 "tool" / "internal" / "callable"
     tool_name: str = ""             # 工具名（handler=tool 时）
     plugin_id: str = ""             # 插件 ID（handler=tool 时）
     extract_args: Callable = None   # 从文本提取参数的函数
     description: str = ""           # 描述（日志用）
     emotion: str = "happy"          # 执行后的情绪
     anim: str = "extra"             # 执行后的动画
+    callable: Callable = None       # handler="callable" 时的处理函数 (text) -> RouteResult|str
 
 
 @dataclass
@@ -174,6 +175,32 @@ CAPABILITIES: list[Capability] = [
 ]
 
 
+# ── 外部/插件可动态注册的能力（需求② mc_bridge 等 Python 插件用）──────────
+# 与 CAPABILITIES（手写静态列表）并存；route() 同时遍历两者。
+# 注册用 register_capability()，卸载用 unregister_capability()。
+EXTERNAL_CAPABILITIES: list[Capability] = []
+
+
+def register_capability(cap: "Capability") -> None:
+    """注册一个外部能力（如 mc_bridge 的 mc_task / mc_method）。"""
+    if not isinstance(cap, Capability):
+        raise TypeError("cap must be a Capability")
+    # 同名先卸载，避免重复注册
+    unregister_capability(cap.name)
+    EXTERNAL_CAPABILITIES.append(cap)
+    logger.info("Registered external capability: %s", cap.name)
+
+
+def unregister_capability(name: str) -> bool:
+    """按名称卸载外部能力。"""
+    for i, cap in enumerate(EXTERNAL_CAPABILITIES):
+        if cap.name == name:
+            EXTERNAL_CAPABILITIES.pop(i)
+            logger.info("Unregistered external capability: %s", name)
+            return True
+    return False
+
+
 class CapabilityRouter:
     """能力路由器"""
 
@@ -192,7 +219,7 @@ class CapabilityRouter:
         if not text_lower:
             return None
 
-        for cap in CAPABILITIES:
+        for cap in (CAPABILITIES + EXTERNAL_CAPABILITIES):
             for pattern in cap.patterns:
                 if _is_valid_capability_match(text_lower, pattern):
                     logger.info("Capability matched: %s (pattern='%s')", cap.name, pattern)
@@ -201,6 +228,8 @@ class CapabilityRouter:
                             return self._handle_tool(cap, text)
                         elif cap.handler == "internal":
                             return self._handle_internal(cap, text)
+                        elif cap.handler == "callable":
+                            return self._handle_callable(cap, text)
                     except Exception as e:
                         logger.warning("Capability %s failed: %s", cap.name, e)
                         return RouteResult(
@@ -210,6 +239,34 @@ class CapabilityRouter:
                             anim="idle",
                         )
         return None
+
+    def _handle_callable(self, cap: "Capability", text: str) -> RouteResult:
+        """处理 callable 类型能力（外部插件注册的处理函数）。"""
+        if cap.callable is None:
+            return RouteResult(
+                capability=cap.name,
+                text=f"能力 {cap.name} 未绑定处理函数",
+                emotion="sad",
+                anim="idle",
+            )
+        try:
+            out = cap.callable(text)
+            if isinstance(out, RouteResult):
+                return out
+            return RouteResult(
+                capability=cap.name,
+                text=str(out),
+                emotion=cap.emotion,
+                anim=cap.anim,
+            )
+        except Exception as e:
+            logger.warning("Capability %s callable failed: %s", cap.name, e)
+            return RouteResult(
+                capability=cap.name,
+                text=f"操作失败：{e}",
+                emotion="sad",
+                anim="idle",
+            )
 
     # ── 随机播放（Bug B 本地直达） ──────────────────────────
 
