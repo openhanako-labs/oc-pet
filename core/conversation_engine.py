@@ -853,6 +853,29 @@ class ConversationEngine:
 
         logger.info("处理消息 [%s]: %s", character, text[:50])
 
+        # P0: 用户消息中的标签解析 — 如果用户消息包含 [emotion:xxx]、[expression:xxx] 或 [duration:xxx]，
+        # 直接应用这些标签，不发送给 LLM（用户输入的是指令，不是对话）
+        if "[emotion:" in text or "[expression:" in text or "[duration:" in text:
+            import re
+            # 解析 emotion
+            emotion_match = re.search(r'\[emotion:([a-z_]+)\]', text, re.IGNORECASE)
+            emotion = emotion_match.group(1).lower() if emotion_match else "neutral"
+            # 解析 expression 和 duration（复用 parse_action_intent）
+            clean_text, action_intent = self.parse_action_intent(text)
+            # 清理文本（去掉所有标签）
+            clean_text = re.sub(r'\s*\[\s*emotion\s*[:=]\s*\w+\s*\]\s*', ' ', text, flags=re.IGNORECASE)
+            clean_text = re.sub(r'\s*\[expression:[^\]]*\]\s*', ' ', clean_text, flags=re.IGNORECASE)
+            clean_text = re.sub(r'\s*\[duration:[^\]]*\]\s*', ' ', clean_text, flags=re.IGNORECASE)
+            clean_text = clean_text.strip()
+            # 如果清理后没有内容，只应用标签，不显示气泡
+            if clean_text:
+                logger.info("用户消息包含标签，直接应用: emotion=%s, action_intent=%s", emotion, action_intent)
+                _call_reply_cb(self.on_reply, clean_text, emotion, "idle", "", action_intent)
+            else:
+                logger.info("用户消息仅包含标签，直接应用: emotion=%s, action_intent=%s", emotion, action_intent)
+                _call_reply_cb(self.on_reply, "", emotion, "idle", "", action_intent)
+            return
+
         # 内置使用说明：当用户问“你能干什么”时，返回桌宠自身的功能说明
         help_keywords = ["你能干什么", "你会什么", "你有什么功能", "你能做什么", "怎么用你", "使用说明", "功能介绍"]
         if any(keyword in text for keyword in help_keywords):
