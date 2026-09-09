@@ -194,7 +194,13 @@ class HanakoPetAdapter:
         if source in ("proactive", "idle"):
             user_content = f"[{source}] {user_content}"
 
-        messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] 1. 回复简短自然，不超过 2 句话。2. 在回复中嵌入情绪标签，格式 [emotion:xxx]，可选值：happy/sad/angry/surprised/thinking/neutral/cute/missing。可以在句末或句中。例如：'你回来啦！[emotion:happy]' 或 '[emotion:thinking]让我想想……'" + self._build_action_prompt()}]
+        messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] "
+            "1. 回复简短自然，不超过 2 句话。"
+            "2. 在回复中嵌入情绪标签，格式 [emotion:xxx]，可选值：happy/sad/angry/surprised/thinking/neutral/cute/missing。可以在句末或句中。例如：'你回来啦！[emotion:happy]' 或 '[emotion:thinking]让我想想……'"
+            "3. 可嵌入表情参数精确控制面部表情，格式 [expression:smile=80,eye_smile=50]。常用参数：smile(嘴型)/eye_smile(眯眼)/blush(脸红)/mouth_form(嘴型)/eye_open(眼睛开合)。数值范围：0.0-1.0（部分参数可负值）。示例：'今天好开心！[emotion:happy][expression:smile=90,blush=60]' 或 '哼，不理你。[emotion:sad][expression:mouth_form=-0.3]'"
+            "4. 可指定持续时间（秒），格式 [duration:3]。表情/动作将在指定秒后自动恢复 idle。示例：'晚安~[emotion:happy][expression:smile=70][duration:5]'"
+            "5. 组合使用：[emotion:xxx] + [expression:xxx] + [duration:xxx] 可以同时使用，让桌宠的反应更生动。"
+            + self._build_action_prompt()}]
 
         # 注入记忆
         if inject_memory:
@@ -409,7 +415,13 @@ class HanakoPetAdapter:
         if source in ("proactive", "idle"):
             user_content = f"[{source}] {user_content}"
 
-        messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] 1. 回复简短自然，不超过 2 句话。2. 在回复中嵌入情绪标签，格式 [emotion:xxx]，可选值：happy/sad/angry/surprised/thinking/neutral/cute/missing。可以在句末或句中。例如：'你回来啦！[emotion:happy]' 或 '[emotion:thinking]让我想想……'" + self._build_action_prompt()}]
+        messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] "
+            "1. 回复简短自然，不超过 2 句话。"
+            "2. 在回复中嵌入情绪标签，格式 [emotion:xxx]，可选值：happy/sad/angry/surprised/thinking/neutral/cute/missing。可以在句末或句中。例如：'你回来啦！[emotion:happy]' 或 '[emotion:thinking]让我想想……'"
+            "3. 可嵌入表情参数精确控制面部表情，格式 [expression:smile=80,eye_smile=50]。常用参数：smile(嘴型)/eye_smile(眯眼)/blush(脸红)/mouth_form(嘴型)/eye_open(眼睛开合)。数值范围：0.0-1.0（部分参数可负值）。示例：'今天好开心！[emotion:happy][expression:smile=90,blush=60]' 或 '哼，不理你。[emotion:sad][expression:mouth_form=-0.3]'"
+            "4. 可指定持续时间（秒），格式 [duration:3]。表情/动作将在指定秒后自动恢复 idle。示例：'晚安~[emotion:happy][expression:smile=70][duration:5]'"
+            "5. 组合使用：[emotion:xxx] + [expression:xxx] + [duration:xxx] 可以同时使用，让桌宠的反应更生动。"
+            + self._build_action_prompt()}]
 
         if inject_memory:
             memory_text = self._context.build_memory_context(max_chars=self._memory_budget)
