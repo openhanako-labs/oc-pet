@@ -5,7 +5,7 @@
 参考 docs/architecture-5-modules.md 中 M5 设计：
 - 文件格式: .pet (zip)
 - manifest.json 必须包含: name, agent_id, version, description
-- 身份文件: identity.md, awareness.md, model.json
+- 身份文件: model.json（外观定义必须；identity/awareness 由 Hanako agent 提供，模型包不再伪造）
 - 可选: sprites/ 精灵图, memory/ 记忆
 """
 
@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 
 # ── 常量 ──────────────────────────────────────────────
 
-REQUIRED_IDENTITY_FILES = ["identity.md", "awareness.md", "model.json"]
+# 模型包只包含外观定义(model.json 指向 .model3.json);人设(identity/awareness)
+# 一律由对应 Hanako agent 提供,导入纯 Live2D zip 时不再伪造占位人设文件。
+REQUIRED_IDENTITY_FILES = ["model.json"]
 OPTIONAL_DIRS = ["sprites", "memory"]
 MANIFEST_NAME = "manifest.json"
 PET_EXTENSION = ".pet"
@@ -271,13 +273,9 @@ class CharacterPackageManager:
                         }
                         tmp_zf.writestr(MANIFEST_NAME, json.dumps(manifest_data, ensure_ascii=False, indent=2))
                         
-                        # 添加 identity.md
-                        tmp_zf.writestr("identity.md", f"# {zip_name}\n\nLive2D character imported from {pet_path.name}\n")
-                        
-                        # 添加 awareness.md
-                        tmp_zf.writestr("awareness.md", f"# Awareness\n\nThis character was imported from a Live2D model zip.\n")
-                        
-                        # 添加 model.json
+                        # 仅生成外观定义 model.json(指向 .model3.json)。
+                        # 人设(identity/awareness)一律由对应 Hanako agent 提供,
+                        # 此处不再伪造占位人设文件——避免"外观包"与"人格包"被强行绑死。
                         tmp_zf.writestr("model.json", json.dumps({
                             "type": "live2d",
                             "model_path": model_files[0]

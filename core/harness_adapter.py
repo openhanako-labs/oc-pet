@@ -1,7 +1,7 @@
 """Harness adapter for OC Desktop Pet - Hanako 原生版。
 
 从 Hanako 本体文件读取角色设定和模型配置:
-  - identity.md / ishiki.md / description.md → 角色设定
+  - identity.md / 意识文件(AGENTS.md→ishiki.md→awareness.md) / description.md → 角色设定
   - provider-catalog.json → API 地址和密钥
   - memory/ → 记忆上下文注入
 

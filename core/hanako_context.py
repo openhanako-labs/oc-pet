@@ -6,7 +6,7 @@
 用法：
     ctx = HanakoContext("yuexinmiao")
     identity = ctx.read_identity()       # identity.md → 角色身份
-    ishiki = ctx.read_ishiki()           # ishiki.md → 意识/规则
+    ishiki = ctx.read_ishiki()           # 意识/规则(回落链: AGENTS.md→ishiki.md→awareness.md)
     system_prompt = ctx.build_prompt()   # 组合成完整 system prompt
     model_cfg = ctx.read_model_config()  # 模型配置
     memory = ctx.read_memory()           # 最近记忆
@@ -57,13 +57,52 @@ class HanakoContext:
         """读取 identity.md — 角色最核心的身份定义"""
         return _read_file(self._agent_dir / "identity.md")
 
+    def _read_consciousness(self, candidates, label: str) -> str:
+        """按候选顺序读取意识/规则文件，返回首个非空内容。
+
+        Hanako 改名后三套命名并存：AGENTS.md（Hanako 现用）/ ishiki.md
+        （旧代码期待）/ awareness.md（oc-pet 内置）。全部缺失或为空时记录
+        warning，防止意识层静默失效（此前只认 ishiki.md，切 Hanako agent
+        后整层被吞，且 validate() 还会误报“缺失: ishiki.md”）。
+        """
+        for path in candidates:
+            text = _read_file(path)
+            if text:
+                return text
+        names = ", ".join(p.name for p in candidates)
+        logger.warning(
+            "意识/规则文件缺失或为空(agent=%s, 已尝试: %s)",
+            self.agent_id, names,
+        )
+        return ""
+
     def read_ishiki(self) -> str:
-        """读取 ishiki.md — 底层意识/行为规则/对话约束"""
-        return _read_file(self._agent_dir / "ishiki.md")
+        """读取底层意识/行为规则/对话约束。
+
+        回落链（三套命名并存，兼容 Hanako 改名）:
+            AGENTS.md → ishiki.md → awareness.md
+        """
+        return self._read_consciousness(
+            [
+                self._agent_dir / "AGENTS.md",
+                self._agent_dir / "ishiki.md",
+                self._agent_dir / "awareness.md",
+            ],
+            "ishiki",
+        )
 
     def read_public_ishiki(self) -> str:
-        """读取 public-ishiki.md — 对外可见的意识"""
-        return _read_file(self._agent_dir / "public-ishiki.md")
+        """读取对外可见意识。
+
+        回落链: AGENTS.public.md → public-ishiki.md
+        """
+        return self._read_consciousness(
+            [
+                self._agent_dir / "AGENTS.public.md",
+                self._agent_dir / "public-ishiki.md",
+            ],
+            "public-ishiki",
+        )
 
     def read_description(self) -> str:
         """读取 description.md — 角色简要描述"""
@@ -450,15 +489,22 @@ class HanakoContext:
 
     def validate(self) -> list[str]:
         """验证所有配置文件的完整性，返回缺失的文件列表"""
+        # 意识/规则文件：三套命名并存(AGENTS.md/ishiki.md/awareness.md)，
+        # 任一存在即视为具备意识层，不再因字面 ishiki.md 缺失而误报告警。
+        consciousness_present = any(
+            (self._agent_dir / f).exists()
+            for f in ("AGENTS.md", "ishiki.md", "awareness.md")
+        )
         required = [
             "identity.md",
-            "ishiki.md",
             "description.md",
         ]
         missing = []
         for f in required:
             if not (self._agent_dir / f).exists():
                 missing.append(f)
+        if not consciousness_present:
+            missing.append("意识文件(AGENTS.md/ishiki.md/awareness.md)")
 
         # 检查模型配置
         model_cfg = self.read_model_config()
