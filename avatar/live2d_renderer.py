@@ -520,6 +520,24 @@ class Live2DRenderer(AvatarRenderer):
                         "motion": _ac.get("motion", _an),
                         "intensity": float(_ac.get("intensity", 0.7)),
                     }
+            
+            # P1: 自动扫描 motions/ 目录，补充 pet.json 未配置的动作
+            _motions_dir = os.path.join(char_dir, "live2d", "motions")
+            if os.path.isdir(_motions_dir):
+                _auto_added = 0
+                for _filename in os.listdir(_motions_dir):
+                    if _filename.endswith(".motion3.json") and not _filename.endswith(".bak"):
+                        _motion_name = _filename.replace(".motion3.json", "").lower()
+                        if _motion_name not in self._pet_actions:
+                            self._pet_actions[_motion_name] = {
+                                "label": _motion_name,
+                                "motion": _motion_name,
+                                "intensity": 0.7,
+                            }
+                            _auto_added += 1
+                if _auto_added:
+                    logger.info("Live2DRenderer: 自动扫描 motions/ 目录，添加 %d 个动作 %s", _auto_added, list(self._pet_actions.keys())[-_auto_added:])
+            
             if self._pet_actions:
                 logger.info("Live2DRenderer: pet.json 动作列表已加载 %s", list(self._pet_actions.keys()))
         except Exception as e:
