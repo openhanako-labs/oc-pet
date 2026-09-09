@@ -282,7 +282,21 @@ def _extract_goal(text: str) -> str:
 
 
 def init_mc_bridge() -> Optional[GameBridge]:
-    """初始化 mc_bridge 并注册能力。返回桥接实例（供测试/调试）。"""
+    """初始化 mc_bridge 并注册能力。返回桥接实例（供测试/调试），未启用时返回 None。
+
+    显式启用才注册能力，避免无 MC 配置的用户被注入一个只会报错的能力：
+      - 设置 OC_MC_ENABLE=1，或
+      - 设置了 OC_MC_TRANSPORT（http/ws）
+    即视为启用。
+    """
+    _enabled = (
+        os.environ.get("OC_MC_ENABLE", "").strip().lower() in ("1", "true", "yes", "on")
+        or bool(os.environ.get("OC_MC_TRANSPORT"))
+    )
+    if not _enabled:
+        logger.info("[mc_bridge] 未配置（设置 OC_MC_ENABLE=1 或 OC_MC_TRANSPORT 开启）；跳过能力注册")
+        return None
+
     from core.capability_registry import Capability, RouteResult, register_capability
 
     cfg = _load_config()

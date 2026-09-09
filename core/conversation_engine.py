@@ -179,6 +179,18 @@ class ConversationEngine:
             tool_executor=self._tool_executor,
         )
 
+        # 需求②：Minecraft 桥接能力（可选，依赖外部 bot；未启用或不报错不致命）
+        try:
+            from core.mc_bridge import init_mc_bridge
+            self._mc_bridge = init_mc_bridge()
+            if self._mc_bridge is not None:
+                logger.info("mc_bridge 能力已注册（transport=%s）", self._mc_bridge.transport_kind)
+            else:
+                logger.info("mc_bridge 未启用（设置 OC_MC_ENABLE=1 或 OC_MC_TRANSPORT 开启）")
+        except Exception as e:  # noqa: BLE001
+            self._mc_bridge = None
+            logger.warning("mc_bridge 初始化跳过（不可用）：%s", e)
+
         # P7: 统一工具调度层——显式插件优先，其次静态能力、关键词直达，
         # 未命中兜底 LLM/Hanako 服务端。插件支持 30s 热刷新（新增/删除即生效，无需重启）。
         from .unified_tool_router import UnifiedToolRouter
