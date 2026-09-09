@@ -180,11 +180,27 @@ class ConversationEngine:
         )
 
         # 需求②：Minecraft 桥接能力（可选，依赖外部 bot；未启用或不报错不致命）
+        self._mc_bridge = None
+        self._mc_window = None
         try:
             from core.mc_bridge import init_mc_bridge
             self._mc_bridge = init_mc_bridge()
             if self._mc_bridge is not None:
                 logger.info("mc_bridge 能力已注册（transport=%s）", self._mc_bridge.transport_kind)
+                # P3：按需建「看 bot 玩」迷你画面窗（主线程；QApplication 已在 main.py 先于 engine 创建）
+                try:
+                    from ui.mc_stream_window import MCStreamWindow
+                    self._mc_window = MCStreamWindow(theme=self._mc_theme())
+                    self._mc_window.close_requested.connect(self._mc_window.hide)
+                    # 截图帧/状态来自 WS 后台线程 → 经窗口信号跨线程安全投递到主线程
+                    self._mc_bridge.on_frame(
+                        lambda payload, src: self._mc_window.frame_received.emit(payload)
+                    )
+                    self._mc_bridge.on_result(self._mc_on_result)
+                    logger.info("mc_bridge 迷你画面窗已就绪")
+                except Exception as e:  # noqa: BLE001
+                    self._mc_window = None
+                    logger.warning("mc_bridge 画面窗创建失败（仅日志，能力仍可用）：%s", e)
             else:
                 logger.info("mc_bridge 未启用（设置 OC_MC_ENABLE=1 或 OC_MC_TRANSPORT 开启）")
         except Exception as e:  # noqa: BLE001
@@ -248,6 +264,19 @@ class ConversationEngine:
         self._dispatcher.progress_signal.connect(self._real_on_progress)
         self._dispatcher.tts_ready_signal.connect(self._real_on_tts_ready)
         self._dispatcher.tool_progress_signal.connect(self._real_on_tool_progress)
+
+    # ── 需求②：mc_bridge 结果/状态回调（WS 后台线程调用）──
+    def _mc_on_result(self, res, src: str) -> None:
+        """mc_bridge 结果回调（来自 WS 后台线程）。仅 mc_task 更新迷你画面窗状态。"""
+        if self._mc_window is None or src != "mc_task":
+            return
+        text = res.value if res.ok else res.error
+        status = getattr(res, "status", "ok")
+        self._mc_window.status_received.emit(f"[{status}] {text}")
+
+    def _mc_theme(self) -> str:
+        """迷你画面窗主题；pet 可在构造后设置 self._engine._theme（默认 light）。"""
+        return getattr(self, "_theme", "light")
 
     @property
     def tts_ready(self) -> bool:

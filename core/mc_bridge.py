@@ -139,6 +139,8 @@ class WsTransport:
         self._lock = threading.Lock()
         self._pending: dict[str, Callable[[McResult], None]] = {}
         self.on_task_finished: Optional[Callable[[str, McResult], None]] = None
+        # 截图帧回调（P3）：参数 {"bytes": <原始图像字节>, "meta": {...}}
+        self.on_screenshot: Optional[Callable[[dict], None]] = None
         self.connected = False
 
     def connect(self) -> McResult:
@@ -178,9 +180,31 @@ class WsTransport:
                 cb(res)
             if self.on_task_finished:
                 self.on_task_finished(tid, res)
-        # log / screenshot / agent_status 等：原型阶段仅记录，P4 接入 proactive_state
-        elif t in ("log", "screenshot", "agent_status"):
+        elif t == "screenshot":
+            # P3：把截图帧解成原始字节交给回调（由 UI 层渲染）
+            payload = self._decode_screenshot(data)
+            if payload is not None and self.on_screenshot:
+                self.on_screenshot(payload)
+        # log / agent_status 等：原型阶段仅记录
+        elif t in ("log", "agent_status"):
             logger.debug("[mc_bridge] %s frame received", t)
+
+    @staticmethod
+    def _decode_screenshot(data: dict) -> Optional[dict]:
+        """从截图帧解出原始图像字节。支持 base64(data/image) 或裸字节。"""
+        raw = data.get("data") or data.get("image") or data.get("bytes")
+        meta = {k: v for k, v in data.items() if k not in ("data", "image", "bytes")}
+        if raw is None:
+            return None
+        if isinstance(raw, (bytes, bytearray)):
+            return {"bytes": bytes(raw), "meta": meta}
+        if isinstance(raw, str):
+            try:
+                import base64
+                return {"bytes": base64.b64decode(raw), "meta": meta}
+            except Exception:  # noqa: BLE001
+                return {"bytes": raw.encode("utf-8", "ignore"), "meta": meta}
+        return None
 
     @staticmethod
     def _grade(data: dict) -> McResult:
@@ -219,12 +243,18 @@ class GameBridge:
         self.http = HttpTransport(self.cfg["http_url"], self.cfg["token"], self.cfg["http_timeout_ms"])
         self.ws = WsTransport(self.cfg["ws_url"], self.cfg["task_timeout"])
         self._result_handlers: list[Callable[[McResult, str], None]] = []
-        # WS 结果回调控本桥 -> 对外回调
+        self._frame_handlers: list[Callable[[dict, str], None]] = []
+        # WS 结果/截图回调控本桥 -> 对外回调
         self.ws.on_task_finished = self._on_ws_finished
+        self.ws.on_screenshot = self._on_ws_screenshot
 
     def on_result(self, handler: Callable[[McResult, str], None]) -> None:
         """注册结果回调（参数：McResult, 来源标识 "mc_task"/"mc_method"）。"""
         self._result_handlers.append(handler)
+
+    def on_frame(self, handler: Callable[[dict, str], None]) -> None:
+        """注册截图帧回调（参数：{"bytes":..,"meta":..}, 来源 "mc_task"）。P3 迷你面板用。"""
+        self._frame_handlers.append(handler)
 
     def _emit(self, res: McResult, src: str) -> None:
         for h in self._result_handlers:
@@ -233,8 +263,18 @@ class GameBridge:
             except Exception as e:  # noqa: BLE001
                 logger.warning("[mc_bridge] result handler error: %s", e)
 
+    def _emit_frame(self, payload: dict, src: str) -> None:
+        for h in self._frame_handlers:
+            try:
+                h(payload, src)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[mc_bridge] frame handler error: %s", e)
+
     def _on_ws_finished(self, tid: str, res: McResult) -> None:
         self._emit(res, "mc_task")
+
+    def _on_ws_screenshot(self, payload: dict) -> None:
+        self._emit_frame(payload, "mc_task")
 
     # ---- 外部能力入口 ----
     def dispatch_task(self, goal: str) -> McResult:
