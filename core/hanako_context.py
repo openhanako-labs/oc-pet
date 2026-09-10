@@ -280,21 +280,51 @@ class HanakoContext:
         可能不存在（_read_file 已返回空串，不抛异常，见 read_today /
         read_facts / read_longterm）。
         """
-        # (标签, 读取器, 单段硬上限)；today 限 300 字，其余吃满剩余预算。
+        # (标签, 读取器, 单段硬上限, 是否只保留事实类)
+        # 2026-09-10 接线 core/memory_filter.py：该模块记录的产品决策是
+        # 「只用事实类记忆，避免'AI 太懂我'的恐怖谷」，但一直零调用。
+        # 所有记忆注入都经本函数，故只需在这一处过滤（单一咽喉点）。
+        # 今日/事实两段不筛：前者按日期作用域，后者文件名即事实。
         sections = [
-            ("今日", self.read_today, 300),
-            ("事实", self.read_facts, None),
-            ("长期", self.read_longterm, None),
-            ("记忆", self.read_memory, None),
+            ("今日", self.read_today, 300, False),
+            ("事实", self.read_facts, None, False),
+            ("长期", self.read_longterm, None, True),
+            ("记忆", self.read_memory, None, True),
         ]
+        try:
+            from core.memory_filter import filter_facts_only
+        except Exception as e:  # 过滤不可用 → 不过滤，绝不阻断记忆注入
+            logger.warning("memory_filter 不可用，跳过事实类过滤: %s", e)
+            filter_facts_only = None
+
         parts: list[str] = []
         total = 0
-        for label, reader, cap in sections:
+        for label, reader, cap, facts_only in sections:
             if total >= max_chars:
                 break
             text = reader() or ""
             if not text:
                 continue
+            # 过滤必须在截断之前：预算只花在保留的行上
+            if facts_only and filter_facts_only is not None:
+                try:
+                    kept = filter_facts_only(text)
+                except Exception as e:
+                    # 过滤失败绝不阻断记忆注入：原样保留，只记一笔
+                    logger.warning(
+                        "build_memory_context: 【%s】事实过滤失败，原样注入: %s", label, e,
+                    )
+                    kept = text
+                dropped = len([l for l in text.split("\n") if l.strip()]) \
+                    - len([l for l in kept.split("\n") if l.strip()])
+                if dropped > 0:
+                    logger.debug(
+                        "build_memory_context: 【%s】过滤掉 %d 条非事实记忆（仅保留事实类）",
+                        label, dropped,
+                    )
+                text = kept
+                if not text:
+                    continue
             if cap is not None:
                 text = text[:cap]
             remaining = max_chars - total

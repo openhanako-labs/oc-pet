@@ -32,51 +32,80 @@ class MemoryItem:
             self.tags = []
 
 
-# 情感类关键词（这些记忆不进桌宠调度）
-EMOTIONAL_KEYWORDS = [
+# 情感状态关键词（这些记忆不进桌宠调度：影响状态，不是信息）
+# 2026-09-10 修复：原实现将「喜欢/爱/想」也归入此类，且情感判定在前，
+# 导致 docstring 明确要保留的偏好类记忆（如「用户喜欢美式咖啡」）被全部丢弃。
+# 现在按语义拆表：情感状态 / 偏好立场，后者算事实。
+EMOTIONAL_STATE_KEYWORDS = [
     "情绪", "心情", "感受", "感觉", "寂寞", "孤单", "孤独",
-    "想", "思念", "想念", "难过", "伤心", "开心", "快乐",
+    "想念", "思念", "难过", "伤心", "开心", "快乐",
     "害怕", "恐惧", "焦虑", "压力", "抑郁", "低落",
-    "爱", "喜欢", "讨厌", "恨", "嫉妒", "羡慕"
+]
+
+# 偏好 / 立场关键词（属于事实：是“关于用户的稳定信息”）
+PREFERENCE_KEYWORDS = [
+    "喜欢", "偏好", "爱好", "讨厌", "爱吃", "爱喝", "习惯",
 ]
 
 # 事实类关键词（这些记忆可以进桌宠调度）
 FACT_KEYWORDS = [
     "考试", "会议", "工作", "学习", "上课", "课程",
-    "喜欢", "偏好", "习惯", "爱好", "兴趣",
+    "习惯", "爱好", "兴趣", "偏好",
     "计划", "安排", "时间", "日期", "截止", "deadline",
-    "地址", "位置", "地点", "电话", "邮箱"
+    "地址", "位置", "地点", "电话", "邮箱",
 ]
+
+# 兼容旧名（供外部/测试引用）
+EMOTIONAL_KEYWORDS = EMOTIONAL_STATE_KEYWORDS
 
 
 def is_fact_memory(content: str) -> bool:
     """判断是否是事实类记忆
-    
-    事实类记忆：纯信息性内容，不包含情感表达
+
+    事实类记忆：纯信息性内容，或关于用户的稳定偏好/立场
     情感类记忆：包含情感表达、心理状态
+
+    2026-09-10 修复：原实现里「喜欢」同时存在于情感/事实两张表，
+    且情感判定在前，导致所有偏好类记忆被误判为情感类而丢弃。
+
+    判定顺序（有意如此）：
+      1) 情感状态词命中 → 不算事实（“最近心情不好”不进调度）
+      2) 偏好/立场词、事实词、日期、时间 → 算事实
+      3) 短文本且无情感词 → 算事实
+
+    注：过短的因果句可能混淆（“我不喜欢他”含「喜欢」→ 判为事实）。
+    这是有意取向：宁可多保留事实，也不丢用户偏好。
     """
+    if not content:
+        return False
     content_lower = content.lower()
-    
-    # 检查情感类关键词（优先）
-    for keyword in EMOTIONAL_KEYWORDS:
+
+    # 1) 情感状态优先排除（但先让明确的日期/时间事实通过，避免“考试压力”被误杀）
+    has_datetime = bool(
+        re.search(r'\d{4}[-/]\d{2}[-/]\d{2}', content)
+        or re.search(r'\d+[:：]\d{2}', content)
+    )
+    if not has_datetime:
+        for keyword in EMOTIONAL_STATE_KEYWORDS:
+            if keyword in content_lower:
+                return False
+
+    # 2) 偏好 / 事实关键词
+    for keyword in PREFERENCE_KEYWORDS:
         if keyword in content_lower:
-            return False
-    
-    # 检查事实类关键词
+            return True
     for keyword in FACT_KEYWORDS:
         if keyword in content_lower:
             return True
-    
-    # 默认：如果包含数字、时间、日期，可能是事实类
-    if re.search(r'\d{4}[-/]\d{2}[-/]\d{2}', content):  # 日期
+
+    # 3) 日期 / 时间
+    if has_datetime:
         return True
-    if re.search(r'\d+[:：]\d{2}', content):  # 时间
+
+    # 4) 短文本且无情感词
+    if len(content) < 20:
         return True
-    
-    # 默认：短文本（< 20 字）且没有情感词，可能是事实类
-    if len(content) < 20 and not any(kw in content_lower for kw in EMOTIONAL_KEYWORDS):
-        return True
-    
+
     return False
 
 

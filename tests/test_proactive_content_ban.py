@@ -138,6 +138,25 @@ def test_broken_usage_memory_does_not_block_speaking():
 
 # ── 5. 回归锁定：不得有绕过 _speak 的直调 ────────────────────────────
 
+def test_memory_citation_helper_appends_date():
+    """接线 memory_filter.add_memory_citation：引用场景记忆须明示日期。"""
+    from core.perception.proactive import _with_memory_citation
+
+    import time as _t
+    ts = _t.mktime((2026, 9, 8, 12, 0, 0, 0, 0, -1))
+    out = _with_memory_citation("你之前提过这家店", ts)
+
+    assert "2026-09-08" in out
+    assert out.startswith("你之前提过这家店")
+
+
+def test_memory_citation_helper_is_safe_without_ts():
+    from core.perception.proactive import _with_memory_citation
+
+    assert _with_memory_citation("你之前提过这家店", 0.0) == "你之前提过这家店"
+    assert _with_memory_citation("", 123.0) == ""
+
+
 def test_no_direct_on_proactive_call_outside_speak():
     """源码级检查：on_proactive 只允许在 _speak 内被调用。
 

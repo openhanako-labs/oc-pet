@@ -37,6 +37,26 @@ from .proactive_state import ProactiveThrottle
 from .proactive_generation import ProactiveGenerator
 
 
+def _with_memory_citation(text: str, first_ts: float) -> str:
+    """为引用场景记忆的搭话补上日期明示。
+
+    2026-09-10 接线 core/memory_filter.add_memory_citation：
+    该模块的产品决策是「引用记忆必须在气泡里明示日期」
+    （避免桌宠显得无所不知）。不可用时原样返回，不阻断搭话。
+    """
+    if not text or not first_ts:
+        return text
+    try:
+        from datetime import datetime
+        from core.memory_filter import add_memory_citation
+        return add_memory_citation(
+            text, datetime.fromtimestamp(first_ts).strftime("%Y-%m-%d")
+        )
+    except Exception as e:
+        logger.warning("[proactive] 记忆引用标记添加失败: %s", e)
+        return text
+
+
 DEFAULT_RULES = [
     {"idle_min": 5,  "foreground": ["writing", "development", "browsing"], "prompt": "写了这么久，休息一下吧？", "weight": 0.7},
     {"idle_min": 15, "foreground": ["gaming", "entertainment"],             "prompt": "带我一起玩嘛～",          "weight": 0.5},
@@ -744,6 +764,7 @@ class ProactiveScheduler:
             if matches:
                 scene = matches[0]
                 text = get_recall_reaction(scene, {"topic": scene.topics[0] if scene.topics else ""})
+                text = _with_memory_citation(text, getattr(scene, "first_ts", 0.0))
                 if text:
                     # P0-2 同会话去重：与近期主动搭话高度相似 → 跳过
                     if self._throttle.is_duplicate(text, now=now):
@@ -779,6 +800,7 @@ class ProactiveScheduler:
                     text = get_associate_reaction(
                         scene, {"topic": scene.topics[0] if scene.topics else ""}
                     )
+                    text = _with_memory_citation(text, getattr(scene, "first_ts", 0.0))
                     if text:
                         # P0-2 同会话去重：与近期主动搭话高度相似 → 跳过
                         if self._throttle.is_duplicate(text, now=now):
