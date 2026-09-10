@@ -215,13 +215,28 @@ class PerceptionController:
             logger.debug("Failed to read session: %s", e)
             return {}
 
+    def _note_degraded(self, name: str, e: Exception) -> None:
+        """记一次感知降级（去重 + 可见）。
+
+        2026-09-10：本类原有多处 `except Exception: return ""` 完全无日志，
+        表现为「跨会话上下文静默为空 / 会话列表静默为空」——用户以为正常，
+        实际是功能没生效。同名只报一次，避免每轮对话刷屏。
+        """
+        seen = getattr(self, "_degraded_reported", None)
+        if seen is None:
+            seen = self._degraded_reported = set()
+        if name not in seen:
+            seen.add(name)
+            logger.warning("Perception 降级 [%s]: %s（同名后续静音）", name, e)
+
     def get_session_context(self) -> str:
         """获取 Session 摘要文本（注入 LLM prompt 用）"""
         try:
             from core.hanako_context import HanakoContext
             ctx = HanakoContext(self._character_id)
             return ctx.get_session_summary()
-        except Exception:
+        except Exception as e:
+            self._note_degraded("get_session_context", e)
             return ""
 
     def list_other_sessions(self, max_count: int = 10) -> list[dict]:
@@ -232,7 +247,8 @@ class PerceptionController:
             from core.hanako_context import HanakoContext
             ctx = HanakoContext(self._character_id)
             return ctx.list_sessions(max_count)
-        except Exception:
+        except Exception as e:
+            self._note_degraded("list_other_sessions", e)
             return []
 
     def get_cross_session_context(self) -> str:
@@ -241,7 +257,8 @@ class PerceptionController:
             from core.hanako_context import HanakoContext
             ctx = HanakoContext(self._character_id)
             return ctx.get_cross_session_summary()
-        except Exception:
+        except Exception as e:
+            self._note_degraded("get_cross_session_context", e)
             return ""
 
     # ── 日报生成 ──

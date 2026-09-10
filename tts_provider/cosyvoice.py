@@ -299,8 +299,12 @@ class CosyVoiceProvider(TTSProvider):
     def _pump_stderr(self):
         """必须排空，否则管道写满会把子进程卡死。
 
-        worker 的 fp16/CUDA/ORT provider 实锤行提到 info 级别（默认 INFO 配置
-        下 oc_pet.log 可见），其余保持 debug 防刷屏。
+        可见性策略（2026-09-10 修）：
+        - 以 ``[cosyvoice-worker]`` 开头的是我们自己 worker 的 _log 输出，一律提到 info。
+          原实现靠关键词（fail/error/cuda/...）猜，会漏掉不带关键词的失败描述，
+          如「instruct2 produced no audio, falling back to zero_shot」——
+          而这类恰恰是「没声音但也不报错」的情形，必须可见。
+        - 第三方噪声（torch/ORT 警告）仍留 debug 防刷屏。
         """
         proc = self._proc
         try:
@@ -308,13 +312,16 @@ class CosyVoiceProvider(TTSProvider):
                 line = line.rstrip()
                 if not line:
                     continue
-                if any(k in line for k in ("fp16", "ORT", "ready", "cuda", "CUDA",
-                                          "provider", "error", "Error", "fail")):
+                if line.startswith("[cosyvoice-worker]"):
+                    logger.info("[cosyvoice] %s", line[:300])
+                elif any(k in line for k in ("fp16", "ORT", "ready", "cuda", "CUDA",
+                                             "provider", "error", "Error", "fail")):
                     logger.info("[cosyvoice] %s", line[:300])
                 else:
                     logger.debug("[cosyvoice] %s", line[:500])
-        except Exception:
-            logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            # stderr 停止排空 = 管道写满 → worker 卡死 → 合成永久停摆。不能静默。
+            logger.warning("cosyvoice: stderr 排空中断，worker 可能卡死: %s", e)
 
     def _drain_replies(self) -> int:
         """清空响应队列，返回丢弃条数。

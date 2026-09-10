@@ -14,17 +14,18 @@ import logging
 import os
 import tempfile
 
-# 确保 ffmpeg 可用（whisper 依赖）
+# 确保 ffmpeg 可用（whisper 依赖）。
+# 2026-09-10: 原为本地 import 期探测（与 asr_provider/whisper_local.py 逐字重复，
+# 且 setdefault 让 import 顺序决定 PATH）。现统一走 core.ffmpeg_bridge 单一入口。
+#
+# 注意：此处不得使用模块级 logger —— 它定义在下方（原实现因此有个真 bug：
+# 一旦 imageio_ffmpeg 导入失败，except 分支引用未定义的 logger 会抛 NameError，
+# 直接导致整个模块 import 失败、语音功能静默消失）。
 try:
-    import imageio_ffmpeg
-    _ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    os.environ.setdefault('FFMPEG_BINARY', _ffmpeg)
-    # 把 ffmpeg 目录加到 PATH
-    _ffmpeg_dir = os.path.dirname(_ffmpeg)
-    if _ffmpeg_dir not in os.environ.get('PATH', ''):
-        os.environ['PATH'] = _ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
-except Exception:
-    logger.debug("voice_input: 非致命异常(已静默吞掉)", exc_info=True)
+    from core.ffmpeg_bridge import ensure_ffmpeg
+    ensure_ffmpeg()
+except Exception as e:  # 桥接模块自身不可用属极端情况，不阻断本模块导入
+    logging.getLogger(__name__).warning("voice_input: ffmpeg 桥接不可用: %s", e)
 import threading
 import time
 import wave

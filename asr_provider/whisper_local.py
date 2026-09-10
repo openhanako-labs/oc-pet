@@ -12,16 +12,14 @@ from .base import ASRProvider
 
 logger = logging.getLogger(__name__)
 
-# 确保 ffmpeg 可用
+# 确保 ffmpeg 可用。
+# 2026-09-10: 原为本地 import 期探测（与 voice_input.py 逐字重复，且 setdefault
+# 使先后 import 顺序决定 FFMPEG_BINARY）。现统一走 core.ffmpeg_bridge 单一入口。
 try:
-    import imageio_ffmpeg
-    _ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    os.environ.setdefault("FFMPEG_BINARY", _ffmpeg)
-    _ffmpeg_dir = os.path.dirname(_ffmpeg)
-    if _ffmpeg_dir not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = _ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
-except Exception:
-    logger.debug("whisper_local: 非致命异常(已静默吞掉)", exc_info=True)
+    from core.ffmpeg_bridge import ensure_ffmpeg
+    ensure_ffmpeg()
+except Exception as e:
+    logger.warning("whisper_local: ffmpeg 桥接不可用: %s", e)
 
 
 class WhisperLocalProvider(ASRProvider):
