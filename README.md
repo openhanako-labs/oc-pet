@@ -7,11 +7,11 @@
 
 本项目**不随仓库分发任何 Live2D 模型文件**（`characters/*/live2d/` 已在 `.gitignore` 中排除）。
 
-- 内置 **Shizuku** 角色包（Live2D 默认模型，骨架含 pet.json + 下载说明）——模型本体不随仓库分发，按 `characters/shizuku/README.md` 下载官方 Cubism SDK 示例模型即可开箱使用。
+- 仓库仅内置 **miku** 占位角色配置（`pet.json` + `profile.json`），**不含任何模型素材**；`Rory` / `sample_live2d` 等完整角色包由用户本地放置模型后使用，不随仓库分发。
 - Live2D 渲染器代码完整保留，但**模型需用户自行提供**——请使用有分发许可的模型（如 [Live2D 官方示例](https://www.live2d.com/en/learn/sample/)），或运行 `python tools/fetch_free_live2d_sample.py` 下载官方 Haru 示例模型。
 - 请勿将无再分发许可的模型（如游戏提取模型）放入仓库。
 
-> **占位角色（需自备模型）**：`miku` 与 `shizuku` 是**占位角色**——仓库仅含 `pet.json` 与 `README.md`，**不含任何模型素材**。切换前请先按对应角色目录的 `README.md` 自行下载/放置模型文件；**缺少模型时桌宠会提示「需下载模型」且不会加载**（不会白屏或崩溃）。
+> **占位角色（需自备模型）**：`miku` / `Rory` / `sample_live2d` 是**占位角色**——仓库仅含配置与 `profile.json`，**不含任何模型素材**。使用前请按对应角色目录放置模型文件；**缺少模型时桌宠会提示「需下载模型」且不会加载**（不会白屏或崩溃）。
 >
 > **无默认角色**：首次启动由引导流程选择角色包；仓库不含内置精灵图角色。
 
@@ -179,7 +179,7 @@ pip install -r requirements.txt
 python tools/fetch_free_live2d_sample.py haru
 
 # 方式 B：按角色目录 README 下载
-# 见 characters/shizuku/README.md
+# 见 characters/miku/README.md（或任意角色目录的 README.md）
 ```
 
 **模型硬要求**（三条）：
@@ -197,8 +197,8 @@ python main.py
 
 或双击 `start_pet.bat`。
 
-首次启动由引导流程选择角色包。内置 **Shizuku**（Live2D 角色包）：
-按 `characters/shizuku/README.md` 下载官方模型后，把 config.json 的 `character` 改为 `shizuku` 即切换为 Live2D 桌宠。
+首次启动由引导流程选择角色包（默认无内置模型，需自行提供）。以 **miku** 占位角色为例：
+把官方/有许可的 Live2D 模型放入 `characters/miku/live2d/`，再把 config.json 的 `character` 改为 `miku` 即切换为 Live2D 桌宠；其他角色同理。
 
 ## 本地 CosyVoice TTS 部署（从零）
 
@@ -414,7 +414,7 @@ oc-pet/
 ├── asr_provider/           # ASR 引擎
 ├── characters/             # 内置角色
 │   ├── miku/                 # Miku（占位，模型自备）
-│   ├── shizuku/              # Shizuku（默认 Live2D，模型按 README 下载）
+│   ├── Rory/                # Rory（本地角色包，模型自备，不入库）
 │   └── sample_live2d/        # 免费示例模型（Haru 等）
 └── requirements.txt        # 依赖列表
 ```

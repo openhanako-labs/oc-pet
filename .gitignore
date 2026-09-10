@@ -39,12 +39,9 @@ dist/
 build/
 node_modules/
 
-# characters 目录除了内置角色外忽略
+# characters 目录：仅 miku 占位角色的配置入库（无模型二进制）；
+# Rory / sample_live2d 等含模型的完整角色包不随仓库分发（用户自行放置）
 characters/*
-!characters/yuexinmiao/
-!characters/yuexinmiao/**
-!characters/shizuku/
-!characters/shizuku/**
 !characters/miku/
 !characters/miku/**
 
@@ -69,8 +66,10 @@ temp_alife/
 temp_amadeus/
 third_party_reference/
 
-# 测试文件（不提交）
-tests/
+# 误提交的第三方 Live2D 模型副本（已移出 git 跟踪，仅本地保留，不随仓库分发）
+.tmp-llm-live2d/
+
+# 测试：回归脚本入库并由 CI 运行（不再忽略）
 
 # 内部文档（不提交）
 docs/2026-09-05-execution-log.md
