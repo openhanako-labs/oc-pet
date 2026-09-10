@@ -22,14 +22,39 @@ import subprocess
 import logging
 from pathlib import Path
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] [LAUNCHER] %(levelname)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+HERE = Path(__file__).resolve().parent
+
+# ── 日志（2026-09-10 加固）──
+# 原来只靠 basicConfig 的 stderr StreamHandler。实测事故：HanaAgent → cmd /c →
+# launcher → main.py，cmd 的 stderr 是**无人读取的管道**，写满后 launcher 自己
+# 也卡在 log.critical 上，看门狗无法复活子进程。现在改成：
+#   1) 写 logs/launcher.log（文件不会因“没人读”而填满）
+#   2) 文件 handler 就位后，摘掉可能阻塞的 stderr handler
+# 注意顺序：必须先保证文件 handler 存在，摘 stderr 才不会把日志弄丢。
+_LOG_FMT = "[%(asctime)s] [LAUNCHER] %(levelname)s: %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+logging.basicConfig(level=logging.INFO, format=_LOG_FMT, datefmt=_LOG_DATEFMT)
+
+try:
+    from logging.handlers import RotatingFileHandler
+    (_log_dir := HERE / "logs").mkdir(parents=True, exist_ok=True)
+    _fh = RotatingFileHandler(
+        _log_dir / "launcher.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8",
+    )
+    _fh.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT))
+    logging.getLogger().addHandler(_fh)
+except Exception:
+    pass  # 文件日志不可用不影响监督（下面也不会摘 stderr，因为无 durable handler）
+
+try:
+    from log_setup import drop_blocking_stderr_handler
+    drop_blocking_stderr_handler()
+except Exception:
+    pass  # 加固失败不影响监督循环
+
 log = logging.getLogger("launcher")
 
-HERE = Path(__file__).resolve().parent
 # 默认入口；可用 OC_MAIN 环境变量覆盖（便于测试或将来换入口），
 # 传入的路径若非绝对路径则相对仓库根解析。
 _main_env = os.environ.get("OC_MAIN", "")
@@ -110,13 +135,17 @@ def _watchdog_wait(child, child_pid: int, ready_time: "float | None") -> bool:
                     if mtime > last_beat:
                         last_beat = mtime
                     elif time.time() - last_beat > HEARTBEAT_TIMEOUT:
+                        # 先杀后记（2026-09-10）：看门狗的职责是恢复，不能被日志挡住。
+                        # 实测事故（HanaAgent → cmd /c → launcher → main.py）：stderr 是
+                        # 无人读取的管道，写满后原来那句 log.critical 永久阻塞 → 永远走不到
+                        # child.kill() → “自动复活”失效，进程卡死 9 分钟无人管。
+                        child.kill()
                         log.critical(
                             "子进程主线程疑似卡死（心跳停滞 %ds，最后心跳 %s），"
-                            "强制终止以触发自动复活",
+                            "已强制终止以触发自动复活",
                             int(time.time() - last_beat),
                             time.strftime("%H:%M:%S", time.localtime(last_beat)),
                         )
-                        child.kill()
                         return True
                 else:
                     # 心跳文件尚未创建：不计时，避免把"还没开始心跳"误判成"心跳停了"

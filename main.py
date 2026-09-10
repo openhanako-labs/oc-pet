@@ -96,6 +96,11 @@ if "--sandbox" in sys.argv:
     from sandbox_runner import apply_patches, run_interactive
     logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(name)s: %(message)s')
     _setup_file_logging()
+    try:
+        from log_setup import drop_blocking_stderr_handler
+        drop_blocking_stderr_handler()
+    except Exception:
+        pass
     apply_patches()
     run_interactive()
     sys.exit(0)
@@ -115,6 +120,19 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 _setup_file_logging()
+
+# ── 日志流加固（2026-09-10）──
+# 上面 basicConfig 会挂一个 StreamHandler(sys.stderr)，而它是**同步阻塞写**且
+# 处在 logging 的全局锁内。实测事故：HanaAgent → cmd /c → launcher → main.py，
+# cmd 的 stderr 是无人读取的管道；写满后主线程阻塞在 stream.write，其他所有线程
+# （GUI/WS/感知/工具注册）全在等日志锁 → **整个应用冻死**。
+# 文件 handler 已就位，此处摘掉会阻塞的 stderr handler。
+# 必须在 _setup_file_logging() 之后调用：它内部会校验“已有非流处理器”才动作。
+try:
+    from log_setup import drop_blocking_stderr_handler
+    drop_blocking_stderr_handler()
+except Exception:
+    pass  # 加固失败不影响启动
 
 # ── 全局未捕获异常钩子 ──
 # 桌宠闪退后自动重启却无 Python 堆栈，难定位根因。这里把任何未捕获异常
