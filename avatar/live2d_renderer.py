@@ -2018,9 +2018,10 @@ class Live2DRenderer(AvatarRenderer):
         # 仲裁通过：播放
         played = False
         if req.motion_group:
-            played = self._play_motion_kw(req.motion_group)
+            # from_arbiter=True：这是 mixer 刚批准的动作本人，不受仲裁保护拦截
+            played = self._play_motion_kw(req.motion_group, from_arbiter=True)
             if not played and fallback_motion:
-                played = self._play_motion_kw(fallback_motion)
+                played = self._play_motion_kw(fallback_motion, from_arbiter=True)
         if req.expression_name:
             self._apply_expression(req.expression_name)
             played = True
@@ -2089,7 +2090,7 @@ class Live2DRenderer(AvatarRenderer):
             if "priority is too low" not in str(e):
                 logger.warning("Live2DRenderer: 起始待机动作失败: %s", e)
 
-    def _play_motion_kw(self, *groups, priority=None) -> bool:
+    def _play_motion_kw(self, *groups, priority=None, from_arbiter: bool = False) -> bool:
         """按文件名关键词从 motion 列表找第一个匹配并播放。
 
         模型所有动作都在一个组（如空串 ""），组名匹配不上任何关键词，
@@ -2114,12 +2115,14 @@ class Live2DRenderer(AvatarRenderer):
                 for i, f in enumerate(self._motion_files):
                     low = f.lower()
                     if all(k in low for k in kws):
-                        return self._start_motion_at(i, priority, exclusive=True)
+                        return self._start_motion_at(
+                            i, priority, exclusive=True, from_arbiter=from_arbiter)
                 # 宽松：任一关键词命中
                 for i, f in enumerate(self._motion_files):
                     low = f.lower()
                     if any(k in low for k in kws):
-                        return self._start_motion_at(i, priority, exclusive=True)
+                        return self._start_motion_at(
+                            i, priority, exclusive=True, from_arbiter=from_arbiter)
             return False
         except Exception as e:
             # 忽略 "motion priority is too low" 警告（正常行为）
@@ -2133,6 +2136,7 @@ class Live2DRenderer(AvatarRenderer):
         priority=None,
         force_restart: bool = False,
         exclusive: bool = False,
+        from_arbiter: bool = False,
     ) -> bool:
         """按索引播 motion 并记录起始状态（卡手势超时兜底用）。
 
@@ -2155,6 +2159,26 @@ class Live2DRenderer(AvatarRenderer):
                 if getattr(self, "_debug", False):
                     logger.debug("Live2DRenderer: 同一 motion 已在播(idx=%d)，去重跳过", idx)
                 return True  # 继续播（Loop），不计时不受影响
+
+            # ── 仲裁保护（2026-09-10 选项 A）──
+            # AI 明确点名的动作（[action:] → Layer.DIALOG，带 duration）在它自己
+            # 声明的时长内，不被情绪/状态驱动的重播顶掉。
+            #
+            # 为什么需要：play_anim / _start_motion_at **不经过 mixer**，而
+            # exclusive=True 会无条件 StopAllMotions()。实测一次挥手在 :56 播出，
+            # :57 被情绪 happy 顶掉、:58 被 idle 顶掉——用户看到的是闪一下。
+            # 混流层是真的建好了，只是这条通道没问过它。
+            #
+            # from_arbiter=True 是动作本人（mixer 刚批准），放行；
+            # force_restart=True 是用户手动点菜单，用户意图优先，也放行。
+            if (exclusive and not force_restart and not from_arbiter
+                    and self._mixer.get_active_layer() >= Layer.DIALOG):
+                if getattr(self, "_debug", False):
+                    logger.debug(
+                        "Live2DRenderer: AI 动作活跃中（层=%s），跳过低优先级重播 idx=%d",
+                        self._mixer.get_active_layer(), idx,
+                    )
+                return False
             prio = priority if priority is not None else self._live2d.MotionPriority.NORMAL
             if exclusive and self._model:
                 # 关键：彻底清场，避免新旧动作/表情叠加
@@ -2568,6 +2592,12 @@ class Live2DRenderer(AvatarRenderer):
             played = self._trigger_gesture(gesture, intensity)
             if played:
                 logger.info("已触发动作: %s (intensity=%.1f)", gesture, intensity)
+            elif self._mixer.get_active_layer() >= Layer.DIALOG:
+                # 被仲裁保护拦下：动作层正被占用，属正常情况（不是“没找到动作”）
+                logger.info(
+                    "动作 %s 未执行：当前有层=%s 的动作在场（仲裁保护，待其到期后生效）",
+                    gesture, self._mixer.get_active_layer(),
+                )
             else:
                 # 2026-09-10：原实现无条件打「已触发动作」，即使什么都没播。
                 # 日志声称成功而实际无声，是排查时的最大干扰源。

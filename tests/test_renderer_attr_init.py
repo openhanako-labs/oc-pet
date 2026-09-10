@@ -133,6 +133,7 @@ def test_submit_motion_request_works_after_init():
 
 def _bare_renderer():
     from avatar.live2d_renderer import Live2DRenderer
+    from avatar.motion_mixer import MotionMixer
 
     r = Live2DRenderer.__new__(Live2DRenderer)
     r._model = None
@@ -140,6 +141,7 @@ def _bare_renderer():
     r._motion_groups = {}
     r._live2d = None
     r._param_intent = {}
+    r._mixer = MotionMixer()          # 与真实初始化一致（仲裁保护会读它）
     r._current_anim = ""
     r._emotion_motion_cooldown = {}
     r._emotion_target = ""
