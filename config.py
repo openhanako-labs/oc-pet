@@ -216,6 +216,29 @@ DEFAULT_CONFIG = {
     "plugin_tools": {
         "enabled": False,
     },
+    # 需求②：Minecraft 桥接配置（默认关；启用后注册 mc_method/mc_task 能力）。
+    # 跟 state_http/external_trigger/plugin_tools 同款形状。配置由设置面板「🎮 Minecraft」
+    # 标签页读写（config.json），不进 .env（.env 只放 API 凭据）。
+    # guardrails（P4，默认收紧）：
+    #   allow_remote=False  → 仅允许本机 127.0.0.1/localhost，防误连远程/防 token 泄露
+    #   require_token=True  → 调用方法必须带 token
+    #   block_destructive=True → 拦截高危方法（op/ban/give/fill/summon/execute…）
+    #   allowed_methods=[]  → 空=放行除高危外全部；非空=仅白名单前缀放行
+    "mc": {
+        "enabled": False,
+        "transport": "http",            # http | ws
+        "http_url": "http://127.0.0.1:8765",
+        "ws_url": "ws://127.0.0.1:48909",
+        "token": "",
+        "timeout": 120,                  # 单任务最长等待秒
+        "http_timeout_ms": 10000,
+        "guardrails": {
+            "allow_remote": False,
+            "require_token": True,
+            "block_destructive": True,
+            "allowed_methods": [],
+        },
+    },
     # P1-5 反重复（语义指纹 + 时间窗去重）：阈值与 N.E.K.O. session_settings 一致，
     # 可在此覆盖；关闭 enabled 后 proactive 仅保留字符串相似去重（旧行为）
     "anti_repeat": {

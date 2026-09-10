@@ -11,13 +11,18 @@
 - 懒连接、离线优雅降级、不阻塞主循环：mc_task 火速返回「已派发」，结果经回调异步回报。
 - 不碰 pet.py 主循环；只通过 capability_registry.register_capability 注入能力。
 
-配置（环境变量，避免硬依赖 config 模块；也可以后并入 oc-pet config）：
-  OC_MC_TRANSPORT   http | ws   （默认 http，最稳、零配置即连本机 minecraft-mcp）
-  OC_MC_HTTP_URL    http://127.0.0.1:8765
-  OC_MC_WS_URL      ws://127.0.0.1:48909
-  OC_MC_TOKEN       minecraft-mcp 的 Bearer 令牌（与 MCPBRIDGE_TOKEN 同源）
-  OC_MC_TIMEOUT     单任务最长等待秒数（默认 120）
-  OC_MC_HTTP_TIMEOUT 单次 HTTP 方法调用超时毫秒（默认 10000）
+配置：
+  - 主来源：config.json 的 `mc:` 块（由设置面板「🎮 Minecraft」标签页写入），
+    经 init_mc_bridge(mc_config=...) 传入。
+  - 后备/兼容：环境变量（避免早期版本无 config 时不可用）：
+      OC_MC_TRANSPORT   http | ws   （默认 http，最稳、零配置即连本机 minecraft-mcp）
+      OC_MC_HTTP_URL    http://127.0.0.1:8765
+      OC_MC_WS_URL      ws://127.0.0.1:48909
+      OC_MC_TOKEN       minecraft-mcp 的 Bearer 令牌（与 MCPBRIDGE_TOKEN 同源）
+      OC_MC_TIMEOUT     单任务最长等待秒数（默认 120）
+      OC_MC_HTTP_TIMEOUT 单次 HTTP 方法调用超时毫秒（默认 10000）
+  - 护栏（P4，默认收紧，可在 mc.guardrails 关闭）：
+      allow_remote / require_token / block_destructive / allowed_methods
 """
 from __future__ import annotations
 
@@ -32,6 +37,27 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+# 高危方法（P4 护栏默认拦截）：能改世界规则/封禁/大量生成/任意命令执行的入口。
+# 建造类（setBlock/placeBlock/getXxx）刻意不在内——那是桌宠的核心用途。
+DEFAULT_DESTRUCTIVE_METHODS = {
+    "op", "deop", "ban", "banip", "ban_ip", "pardon", "pardonip",
+    "kick", "stop", "give", "tp", "teleport", "fill", "summon", "execute",
+    "gamemode", "setworldspawn", "worldborder", "difficulty", "weather",
+    "time", "gamerule",
+}
+
+
+def _is_loopback_host(url: str) -> bool:
+    """判定 URL 是否指向本机。非本机（含解析失败/空 host）一律视为非 loopback（失败闭合）。"""
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:  # noqa: BLE001
+        return False
+    if not host:
+        return False
+    return host in ("127.0.0.1", "::1", "localhost", "0.0.0.0", "[::1]")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -56,28 +82,107 @@ class McResult:
 # ─────────────────────────────────────────────────────────────
 # 配置
 # ─────────────────────────────────────────────────────────────
-def _load_config() -> dict:
-    return {
-        "transport": os.environ.get("OC_MC_TRANSPORT", "http").strip().lower(),
+def _load_config(mc_config: Optional[dict] = None) -> dict:
+    """构建运行时配置。
+
+    优先级：mc_config（config.json 的 mc: 块，用户通过 GUI 明确设置）覆盖环境变量，
+    环境变量覆盖内置默认值。无 mc_config 时退化为「纯环境变量」路径（向后兼容旧用法）。
+
+    护栏字段默认收紧：仅本机、必须 token、拦截高危方法。
+    """
+    # 内置默认（env 作为后备来源）
+    cfg: dict = {
+        "transport": os.environ.get("OC_MC_TRANSPORT", "http").strip().lower() or "http",
         "ws_url": os.environ.get("OC_MC_WS_URL", "ws://127.0.0.1:48909").strip(),
         "http_url": os.environ.get("OC_MC_HTTP_URL", "http://127.0.0.1:8765").strip().rstrip("/"),
         "token": (os.environ.get("OC_MC_TOKEN") or os.environ.get("MCPBRIDGE_TOKEN") or "").strip(),
         "task_timeout": float(os.environ.get("OC_MC_TIMEOUT", "120")),
         "http_timeout_ms": int(os.environ.get("OC_MC_HTTP_TIMEOUT", "10000")),
+        "http_allow_remote": os.environ.get("OC_MC_ALLOW_REMOTE", "").strip().lower()
+                                in ("1", "true", "yes", "on"),
+        "http_require_token": os.environ.get("OC_MC_REQUIRE_TOKEN", "").strip().lower() != "false",
+        "http_allowed_methods": [],
+        "http_block_destructive": os.environ.get("OC_MC_BLOCK_DESTRUCTIVE", "").strip().lower() != "false",
     }
+    if mc_config:
+        if "transport" in mc_config:
+            t = str(mc_config["transport"]).strip().lower()
+            if t:
+                cfg["transport"] = t
+        if "ws_url" in mc_config and mc_config["ws_url"]:
+            cfg["ws_url"] = str(mc_config["ws_url"]).strip()
+        if "http_url" in mc_config and mc_config["http_url"]:
+            cfg["http_url"] = str(mc_config["http_url"]).strip().rstrip("/")
+        if "token" in mc_config:
+            cfg["token"] = str(mc_config.get("token") or "").strip()
+        if "timeout" in mc_config:
+            try:
+                cfg["task_timeout"] = float(mc_config["timeout"])
+            except (TypeError, ValueError):
+                pass
+        if "http_timeout_ms" in mc_config:
+            try:
+                cfg["http_timeout_ms"] = int(mc_config["http_timeout_ms"])
+            except (TypeError, ValueError):
+                pass
+        g = mc_config.get("guardrails") or {}
+        if "allow_remote" in g:
+            cfg["http_allow_remote"] = bool(g["allow_remote"])
+        if "require_token" in g:
+            cfg["http_require_token"] = bool(g["require_token"])
+        if "block_destructive" in g:
+            cfg["http_block_destructive"] = bool(g["block_destructive"])
+        am = g.get("allowed_methods")
+        if isinstance(am, (list, tuple)):
+            cfg["http_allowed_methods"] = [str(x).strip() for x in am if str(x).strip()]
+        elif isinstance(am, str) and am.strip():
+            cfg["http_allowed_methods"] = [x.strip() for x in re.split(r"[\s,;]+", am) if x.strip()]
+    return cfg
 
 
 # ─────────────────────────────────────────────────────────────
 # HTTP transport（minecraft-mcp 方法桥，零依赖 requests）
 # ─────────────────────────────────────────────────────────────
 class HttpTransport:
-    """连 minecraft-mcp 的模组内嵌 HTTP 桥：POST /rpc + Bearer token。"""
+    """连 minecraft-mcp 的模组内嵌 HTTP 桥：POST /rpc + Bearer token。
 
-    def __init__(self, url: str, token: str, timeout_ms: int):
+    P4 护栏：call_method 在真正发请求前先过 _guard_error——
+      - 仅本机（allow_remote=False 时拒绝非 loopback 地址）
+      - 必须 token（require_token=True 且无 token 时拒绝）
+      - 拦截高危方法（block_destructive=True 时拒绝 DEFAULT_DESTRUCTIVE_METHODS 前缀）
+      - 白名单（allowed_methods 非空时仅放行前缀匹配项）
+    失败闭合：任何解析/判定异常都按「非本机/拒绝」处理。
+    """
+
+    def __init__(self, url: str, token: str, timeout_ms: int,
+                 allow_remote: bool = False, require_token: bool = True,
+                 allowed_methods: Optional[list] = None,
+                 block_destructive: bool = True):
         self.url = url
         self.token = token
         self.timeout_ms = timeout_ms
+        self.allow_remote = allow_remote
+        self.require_token = require_token
+        self.allowed_methods = [str(a).strip().lower() for a in (allowed_methods or [])]
+        self.block_destructive = block_destructive
         self._lock = threading.Lock()
+
+    def _guard_error(self, name: str) -> Optional[str]:
+        """返回护栏拒绝原因；None 表示放行。"""
+        if not self.allow_remote and not _is_loopback_host(self.url):
+            return "host 绑定护栏：URL 非本机地址，且未开启「允许远程」(allow_remote)"
+        if self.require_token and not self.token:
+            return "token 护栏：require_token=true 但未配置 token"
+        n = (name or "").strip().lower()
+        if self.block_destructive:
+            for d in DEFAULT_DESTRUCTIVE_METHODS:
+                dl = d.lower()
+                if n == dl or n.startswith(dl + ".") or n.startswith(dl):
+                    return f"高危方法护栏：{name} 在拦截名单（设置可关闭『拦截高危方法』）"
+        if self.allowed_methods:
+            if not any(n == a or n.startswith(a) for a in self.allowed_methods):
+                return f"白名单护栏：{name} 不在允许名单 {self.allowed_methods}"
+        return None
 
     # 健康检查无需鉴权
     def health(self) -> McResult:
@@ -91,8 +196,9 @@ class HttpTransport:
             return McResult.fail(f"无法连接 minecraft-mcp HTTP 桥：{e}")
 
     def call_method(self, name: str, params: Optional[dict] = None) -> McResult:
-        if not self.token:
-            return McResult.fail("缺少 OC_MC_TOKEN / MCPBRIDGE_TOKEN（minecraft-mcp 首次启动后生成）")
+        gerr = self._guard_error(name)
+        if gerr:
+            return McResult.fail(gerr)
         payload = {
             "jsonrpc": "2.0",
             "id": uuid.uuid4().hex,
@@ -240,7 +346,13 @@ class GameBridge:
     def __init__(self, config: Optional[dict] = None):
         self.cfg = config or _load_config()
         self.transport_kind = self.cfg["transport"]
-        self.http = HttpTransport(self.cfg["http_url"], self.cfg["token"], self.cfg["http_timeout_ms"])
+        self.http = HttpTransport(
+            self.cfg["http_url"], self.cfg["token"], self.cfg["http_timeout_ms"],
+            allow_remote=self.cfg["http_allow_remote"],
+            require_token=self.cfg["http_require_token"],
+            allowed_methods=self.cfg["http_allowed_methods"],
+            block_destructive=self.cfg["http_block_destructive"],
+        )
         self.ws = WsTransport(self.cfg["ws_url"], self.cfg["task_timeout"])
         self._result_handlers: list[Callable[[McResult, str], None]] = []
         self._frame_handlers: list[Callable[[dict, str], None]] = []
@@ -321,26 +433,41 @@ def _extract_goal(text: str) -> str:
     return t or text.strip()
 
 
-def init_mc_bridge() -> Optional[GameBridge]:
+def init_mc_bridge(mc_config: Optional[dict] = None) -> Optional[GameBridge]:
     """初始化 mc_bridge 并注册能力。返回桥接实例（供测试/调试），未启用时返回 None。
 
-    显式启用才注册能力，避免无 MC 配置的用户被注入一个只会报错的能力：
-      - 设置 OC_MC_ENABLE=1，或
-      - 设置了 OC_MC_TRANSPORT（http/ws）
-    即视为启用。
+    启用判定（GUI 显式优先，环境变量后备）：
+      - mc_config 里 enabled 显式 True/False → 直接决定（设置面板可开可关）
+      - 没给 mc_config 或没写 enabled → 退回环境变量 OC_MC_ENABLE=1 / OC_MC_TRANSPORT
+    不启用就不注册能力，免得给没跑 MC 的用户注入一个只会报错的能力。
     """
-    _enabled = (
-        os.environ.get("OC_MC_ENABLE", "").strip().lower() in ("1", "true", "yes", "on")
-        or bool(os.environ.get("OC_MC_TRANSPORT"))
-    )
-    if not _enabled:
-        logger.info("[mc_bridge] 未配置（设置 OC_MC_ENABLE=1 或 OC_MC_TRANSPORT 开启）；跳过能力注册")
+    _gui_enabled: Optional[bool] = None
+    if isinstance(mc_config, dict) and "enabled" in mc_config:
+        _gui_enabled = bool(mc_config["enabled"])
+
+    if _gui_enabled is False:
+        logger.info("[mc_bridge] 已在设置中关闭；跳过能力注册")
         return None
+    if _gui_enabled is None:
+        if not (
+            os.environ.get("OC_MC_ENABLE", "").strip().lower() in ("1", "true", "yes", "on")
+            or bool(os.environ.get("OC_MC_TRANSPORT"))
+        ):
+            logger.info(
+                "[mc_bridge] 未启用（在设置「🎮 Minecraft」页打开，或设 OC_MC_ENABLE=1）；跳过能力注册"
+            )
+            return None
 
-    from core.capability_registry import Capability, RouteResult, register_capability
+    from core.capability_registry import (
+        Capability, RouteResult, register_capability, unregister_capability,
+    )
 
-    cfg = _load_config()
+    cfg = _load_config(mc_config)
     bridge = GameBridge(cfg)
+
+    # 幂等：transport 切换 / 重复初始化时先摘掉旧能力，避免同名重复注册
+    unregister_capability("mc_task")
+    unregister_capability("mc_method")
 
     # 默认回调：记录结果（P4 再接 proactive_state 主动播报）
     bridge.on_result(lambda res, src: logger.info("[mc_bridge] %s 结果: %s", src, res))

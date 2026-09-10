@@ -183,29 +183,13 @@ class ConversationEngine:
         self._mc_bridge = None
         self._mc_window = None
         try:
-            from core.mc_bridge import init_mc_bridge
-            self._mc_bridge = init_mc_bridge()
-            if self._mc_bridge is not None:
-                logger.info("mc_bridge 能力已注册（transport=%s）", self._mc_bridge.transport_kind)
-                # P3：按需建「看 bot 玩」迷你画面窗（主线程；QApplication 已在 main.py 先于 engine 创建）
-                try:
-                    from ui.mc_stream_window import MCStreamWindow
-                    self._mc_window = MCStreamWindow(theme=self._mc_theme())
-                    self._mc_window.close_requested.connect(self._mc_window.hide)
-                    # 截图帧/状态来自 WS 后台线程 → 经窗口信号跨线程安全投递到主线程
-                    self._mc_bridge.on_frame(
-                        lambda payload, src: self._mc_window.frame_received.emit(payload)
-                    )
-                    self._mc_bridge.on_result(self._mc_on_result)
-                    logger.info("mc_bridge 迷你画面窗已就绪")
-                except Exception as e:  # noqa: BLE001
-                    self._mc_window = None
-                    logger.warning("mc_bridge 画面窗创建失败（仅日志，能力仍可用）：%s", e)
-            else:
-                logger.info("mc_bridge 未启用（设置 OC_MC_ENABLE=1 或 OC_MC_TRANSPORT 开启）")
-        except Exception as e:  # noqa: BLE001
-            self._mc_bridge = None
-            logger.warning("mc_bridge 初始化跳过（不可用）：%s", e)
+            # P4：优先读 config.json 的 mc: 块（设置面板「🎮 Minecraft」页写入）
+            from config import load_config
+            _mc_cfg = load_config().get("mc")
+        except Exception as _e:  # noqa: BLE001
+            logger.debug("读取 mc 配置失败，退化为环境变量：%s", _e)
+            _mc_cfg = None
+        self.setup_mc_bridge(_mc_cfg)
 
         # P7: 统一工具调度层——显式插件优先，其次静态能力、关键词直达，
         # 未命中兜底 LLM/Hanako 服务端。插件支持 30s 热刷新（新增/删除即生效，无需重启）。
@@ -277,6 +261,49 @@ class ConversationEngine:
     def _mc_theme(self) -> str:
         """迷你画面窗主题；pet 可在构造后设置 self._engine._theme（默认 light）。"""
         return getattr(self, "_theme", "light")
+
+    def setup_mc_bridge(self, mc_cfg=None):
+        """按给定的 mc 配置（重）建 Minecraft 桥接能力。可重复调用。
+
+        设置面板改完开关后由 pet._apply_settings() 再次调用，做到不用重启桌宠。
+        关闭时会摘掉能力并隐藏画面窗。返回桥接实例或 None（未启用/不可用）。
+        """
+        try:
+            from core.mc_bridge import init_mc_bridge
+            bridge = init_mc_bridge(mc_cfg)
+        except Exception as e:  # noqa: BLE001
+            self._mc_bridge = None
+            logger.warning("mc_bridge 初始化跳过（不可用）：%s", e)
+            return None
+
+        if bridge is None:
+            # 已关闭：能力已被 init_mc_bridge 内部摘除，这里收掉画面窗
+            self._mc_bridge = None
+            if self._mc_window is not None:
+                try:
+                    self._mc_window.hide()
+                except Exception:  # noqa: BLE001
+                    pass
+            logger.info("mc_bridge 未启用（在设置「🎮 Minecraft」页打开开关即可）")
+            return None
+
+        self._mc_bridge = bridge
+        logger.info("mc_bridge 能力已注册（transport=%s）", bridge.transport_kind)
+
+        # P3：「看 bot 玩」迷你画面窗——已有则复用，只重绑回调
+        try:
+            from ui.mc_stream_window import MCStreamWindow
+            if self._mc_window is None:
+                # 主线程；QApplication 已于 main.py 先于 engine 创建
+                self._mc_window = MCStreamWindow(theme=self._mc_theme())
+                self._mc_window.close_requested.connect(self._mc_window.hide)
+            # 截图帧/状态来自 WS 后台线程 → 经窗口信号跨线程安全投递到主线程
+            bridge.on_frame(lambda payload, src: self._mc_window.frame_received.emit(payload))
+            bridge.on_result(self._mc_on_result)
+            logger.info("mc_bridge 迷你画面窗已就绪")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("mc_bridge 画面窗创建失败（仅日志，能力仍可用）：%s", e)
+        return bridge
 
     @property
     def tts_ready(self) -> bool:

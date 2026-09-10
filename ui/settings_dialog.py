@@ -927,6 +927,9 @@ class SettingsDialog(QDialog):
         api_layout.addStretch()
         self._main_tabs.addTab(api_tab, "🔌 API")
 
+        # ── Tab: Minecraft（需求② P4：开关 + transport + HTTP 护栏）──
+        self._main_tabs.addTab(self._build_mc_tab(), "🎮 Minecraft")
+
         # .env / agent / 角色包列表在 showEvent 中异步加载
 
         # ── 按钮 ──
@@ -1647,10 +1650,182 @@ class SettingsDialog(QDialog):
                         if not ac["dialog"]:
                             ac.pop("dialog", None)
 
+        # Minecraft（需求② P4）
+        if hasattr(self, "mc_enabled"):
+            mc = c.setdefault("mc", {})
+            mc["enabled"] = self.mc_enabled.isChecked()
+            mc["transport"] = "ws" if self.mc_transport.currentIndex() == 1 else "http"
+            mc["http_url"] = self.mc_http_url.text().strip()
+            mc["ws_url"] = self.mc_ws_url.text().strip()
+            mc["token"] = self.mc_token.text().strip()
+            mc["timeout"] = self.mc_timeout.value()
+            mc["http_timeout_ms"] = self.mc_http_timeout.value()
+            gr = mc.setdefault("guardrails", {})
+            gr["allow_remote"] = self.mc_allow_remote.isChecked()
+            gr["require_token"] = self.mc_require_token.isChecked()
+            gr["block_destructive"] = self.mc_block_destructive.isChecked()
+            gr["allowed_methods"] = [
+                x.strip() for x in self.mc_allowed_methods.text().replace("，", ",").split(",") if x.strip()
+            ]
+
         # 落盘：将内存改动持久化到 config.json（原子写），否则关闭后配置丢失。
         save_config(self._config)
 
         self.accept()
+
+    # ── Minecraft 标签页（需求② P4：开关 / transport / HTTP 护栏）──
+
+    def _build_mc_tab(self) -> QWidget:
+        """🎮 Minecraft 页：启用开关、transport、连接参数、安全护栏。"""
+        mc = self._config.get("mc") or {}
+        g = mc.get("guardrails") or {}
+        muted = "color: rgb(%s); font-size: 11px;" % rgb(self._ui_theme, "text_muted")
+
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(14)
+
+        hint = QLabel(
+            "接入 Minecraft：http 方式让桌宠调用具体游戏方法，ws 方式让桌宠派任务和看 bot 玩。\n"
+            "默认关闭。两种方式都需要你先运行对应的外部桥接程序，保存后立即生效。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(muted)
+        lay.addWidget(hint)
+
+        # ── 连接 ──
+        conn = QGroupBox("连接")
+        form = QFormLayout(conn)
+
+        self.mc_enabled = QCheckBox("启用 Minecraft 接入")
+        self.mc_enabled.setChecked(bool(mc.get("enabled", False)))
+        form.addRow(self.mc_enabled)
+
+        self.mc_transport = QComboBox()
+        self.mc_transport.addItems([
+            "http — minecraft-mcp（JSON-RPC 方法桥，需令牌）",
+            "ws — mc-agent-neko（派高层任务 + 实时画面）",
+        ])
+        self.mc_transport.setCurrentIndex(1 if str(mc.get("transport", "http")).lower() == "ws" else 0)
+        form.addRow("方式", self.mc_transport)
+
+        self.mc_http_url = QLineEdit(str(mc.get("http_url", "http://127.0.0.1:8765")))
+        self.mc_http_url.setPlaceholderText("http://127.0.0.1:8765")
+        form.addRow("HTTP 地址", self.mc_http_url)
+
+        self.mc_ws_url = QLineEdit(str(mc.get("ws_url", "ws://127.0.0.1:48909")))
+        self.mc_ws_url.setPlaceholderText("ws://127.0.0.1:48909")
+        form.addRow("WS 地址", self.mc_ws_url)
+
+        self.mc_token = QLineEdit(str(mc.get("token", "") or ""))
+        self.mc_token.setEchoMode(QLineEdit.Password)
+        self.mc_token.setPlaceholderText("minecraft-mcp 首次启动生成的令牌")
+        form.addRow("令牌 (token)", self.mc_token)
+
+        tok_hint = QLabel("令牌存在 config.json（该文件已被 .gitignore 忽略，不会入库）；http 方式必需。")
+        tok_hint.setWordWrap(True)
+        tok_hint.setStyleSheet(muted)
+        form.addRow("", tok_hint)
+
+        self.mc_timeout = QSpinBox()
+        self.mc_timeout.setRange(10, 3600)
+        self.mc_timeout.setValue(int(mc.get("timeout", 120)))
+        self.mc_timeout.setSuffix(" 秒")
+        form.addRow("任务最长等待", self.mc_timeout)
+
+        self.mc_http_timeout = QSpinBox()
+        self.mc_http_timeout.setRange(1000, 60000)
+        self.mc_http_timeout.setSingleStep(1000)
+        self.mc_http_timeout.setValue(int(mc.get("http_timeout_ms", 10000)))
+        self.mc_http_timeout.setSuffix(" 毫秒")
+        form.addRow("单次调用超时", self.mc_http_timeout)
+
+        lay.addWidget(conn)
+
+        # ── 护栏 ──
+        guard = QGroupBox("安全护栏（HTTP 方式）")
+        gform = QFormLayout(guard)
+
+        self.mc_allow_remote = QCheckBox("允许连接非本机地址")
+        self.mc_allow_remote.setChecked(bool(g.get("allow_remote", False)))
+        gform.addRow(self.mc_allow_remote)
+
+        self.mc_require_token = QCheckBox("必须配置令牌才允许调用")
+        self.mc_require_token.setChecked(bool(g.get("require_token", True)))
+        gform.addRow(self.mc_require_token)
+
+        self.mc_block_destructive = QCheckBox("拦截高危方法（op / ban / give / fill / summon / execute…）")
+        self.mc_block_destructive.setChecked(bool(g.get("block_destructive", True)))
+        gform.addRow(self.mc_block_destructive)
+
+        am = g.get("allowed_methods") or []
+        am_text = ", ".join(str(x) for x in am) if isinstance(am, (list, tuple)) else str(am)
+        self.mc_allowed_methods = QLineEdit(am_text)
+        self.mc_allowed_methods.setPlaceholderText(
+            "留空 = 放行除高危外的全部方法；例：getInventory, getPosition, setBlock"
+        )
+        gform.addRow("方法白名单", self.mc_allowed_methods)
+
+        g_hint = QLabel("默认只连本机、必须有令牌、拦截高危方法——三项都是刻意收紧的，放宽前先想清楚后果。")
+        g_hint.setWordWrap(True)
+        g_hint.setStyleSheet(muted)
+        gform.addRow("", g_hint)
+
+        lay.addWidget(guard)
+
+        # ── 自检 ──
+        test_row = QHBoxLayout()
+        test_row.addStretch()
+        self.mc_test_btn = QPushButton("测试连接")
+        self.mc_test_btn.clicked.connect(self._mc_test_connection)
+        test_row.addWidget(self.mc_test_btn)
+        lay.addLayout(test_row)
+        lay.addStretch()
+        return tab
+
+    def _mc_test_connection(self):
+        """就地探一下 HTTP 桥是否可达（用界面当前值，不落盘）。"""
+        if self.mc_transport.currentIndex() == 1:
+            QMessageBox.information(
+                self, "测试连接",
+                "ws 方式没有健康检查接口。\n\n"
+                "确认 mc-agent-neko 已运行后，保存重启，再让桌宠派一个任务即可验证是否连通。",
+            )
+            return
+
+        url = (self.mc_http_url.text() or "").strip().rstrip("/")
+        token = (self.mc_token.text() or "").strip()
+
+        if not self.mc_allow_remote.isChecked():
+            try:
+                from core.mc_bridge import _is_loopback_host
+                if not _is_loopback_host(url):
+                    QMessageBox.critical(
+                        self, "测试连接",
+                        "护栏拦截：地址不是本机，而「允许连接非本机地址」未勾选。\n\n"
+                        "这是默认行为，防止误连远程机器或把令牌发出去。",
+                    )
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+
+        if self.mc_require_token.isChecked() and not token:
+            QMessageBox.critical(self, "测试连接", "缺少令牌，而「必须配置令牌才允许调用」已勾选。")
+            return
+
+        try:
+            import requests
+            r = requests.get(f"{url}/health", timeout=3)
+            if r.status_code == 200:
+                QMessageBox.information(self, "测试连接", f"已连通：{url}\n\n{r.text[:200]}")
+            else:
+                QMessageBox.warning(self, "测试连接", f"已连上但返回异常：HTTP {r.status_code}")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "测试连接",
+                f"连接失败：{e}\n\n请先在游戏里运行 minecraft-mcp，再回来试。",
+            )
 
     def _filter_settings(self, text: str):
         """UI优化: 根据搜索文本过滤设置项（隐藏不匹配的标签页）"""
@@ -1658,10 +1833,13 @@ class SettingsDialog(QDialog):
         
         # 标签页名称映射
         tab_keywords = {
-            0: ["基础", "behavior", "behavior", "window", "sfx", "render", "per_pet"],
+            0: ["基础", "behavior", "window", "sfx", "render", "per_pet"],
             1: ["功能", "voice", "tts", "asr", "interaction", "memory", "active", "screen", "break"],
-            2: ["角色包", "package", "pkg", "m5"],
-            3: ["api", "llm", "tts", "asr", "endpoint"],
+            2: ["快捷键", "shortcut", "hotkey", "keys"],
+            3: ["角色包", "package", "pkg", "m5"],
+            4: ["主动对话", "proactive", "cooldown", "dnd"],
+            5: ["api", "llm", "tts", "asr", "endpoint"],
+            6: ["minecraft", "mc", "我的世界", "bot", "bridge", "token", "护栏"],
         }
         
         for i in range(self._main_tabs.count()):

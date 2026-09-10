@@ -2538,6 +2538,14 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             except Exception:
                 screen.set_interval(120)
 
+        # Minecraft（需求② P4）：面板里改完开关/transport 即时重建桥接，不必重启桌宠
+        try:
+            _engine = getattr(self, "_engine", None)
+            if _engine is not None and hasattr(_engine, "setup_mc_bridge"):
+                _engine.setup_mc_bridge(self.config.get("mc"))
+        except Exception as e:
+            logger.warning("PetWindow: 应用 Minecraft 配置失败：%s", e)
+
     # ── 角色加载 ──
 
     def load_character(self, char_id: str):
