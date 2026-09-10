@@ -62,7 +62,6 @@ scripts/*.pid
 scripts/_wt_live.py
 
 # 参考项目副本（不提交）
-temp_alife/
 temp_amadeus/
 third_party_reference/
 
@@ -86,5 +85,7 @@ docs/poc-silero-vad-onnx-2026-09-04.md
 docs/refactor-2026-09-03-incremental-design.md
 docs/SILENT-EXCEPTIONS.md
 docs/SPIKE-BORROW-SHELL.md
-docs/TEST-FAILURES.md
 docs/upgrade-a-g-design.md
+
+# 评审产物（内部，不提交；与上面"内部文档"同规）
+docs/review-*/

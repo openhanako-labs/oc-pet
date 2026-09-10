@@ -32,7 +32,6 @@ pydantic~=2.0
 # ── L4 可选依赖（高级功能）──
 onnxruntime>=1.17.0   # 记忆向量化（缺失时自动降级纯 BM25）
 tokenizers>=0.15.0    # HuggingFace tokenizer
-portalocker>=2.8.0    # 事实库跨进程文件锁
 
 # ── SMTC 媒体感知（Windows）──
 comtypes>=1.4.0       # Windows COM 接口（SMTC 媒体感知）
