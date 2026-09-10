@@ -162,6 +162,38 @@ class HanakoPetAdapter:
     def model_config(self) -> dict:
         return dict(self._model_cfg)
 
+    # ── 输出规则（唯一来源）───────────────────────────────
+    # 2026-09-10：原实现只在 chat_direct / _chat_stream_direct 里内联这段规则，
+    # 而实际运行走 chat_via_hanako（transport_mode=prefer_hanako）——标签契约从未送达。
+    # 实测：14 次回复，0 次带 [emotion:]，14 次全部走兜底表。
+    # 现在抽为唯一来源，两个路径共用，避免「一边教、一边不教」。
+    _OUTPUT_RULES = (
+        "1. 回复简短自然，不超过 2 句话。"
+        "2. 必须嵌入情绪标签，格式 [emotion:xxx]，可选值：happy/sad/angry/surprised/thinking/neutral/cute/missing。可以在句末或句中。例如：'你回来啦！[emotion:happy]' 或 '[emotion:thinking]让我想想……'"
+        "3. 必须嵌入动作标签，格式 [action:{\"gesture\":\"waving\",\"intensity\":0.6}]，可选动作：idle/waving/happy/touch/thinking/sad/angry/walk/sleep/working/pat/stroke。intensity 范围 0.0-1.0。示例：'早上好~[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}]'"
+        "4. 必须嵌入表情参数精确控制面部表情，格式 [expression:smile=80,eye_smile=50]。常用参数：smile(嘴型)/eye_smile(眯眼)/blush(脸红)/mouth_form(嘴型)/eye_open(眼睛开合)。数值范围：0.0-1.0（部分参数可负值）。示例：'今天好开心！[emotion:happy][expression:smile=90,blush=60]' 或 '哼，不理你。[emotion:sad][expression:mouth_form=-0.3]'"
+        "5. 必须指定持续时间（秒），格式 [duration:3]。表情/动作将在指定秒后自动恢复 idle。示例：'晚安~[emotion:happy][expression:smile=70][duration:5]'"
+        "6. 组合使用：[emotion:xxx] + [action:{...}] + [expression:xxx] + [duration:xxx] 必须同时使用，让桌宠的反应更生动。"
+        "7. 注意：以上四个标签必须同时出现在回复中，缺一不可。完整示例：'早上好~[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}][expression:smile=90,blush=60][duration:5]'"
+    )
+
+    # 输出交给机器读的来源：不得注入标签规则（否则污染其结构化输出）
+    _NON_DISPLAY_SOURCES = frozenset({
+        "memory_extract", "memory_reflect", "screen_enrich",
+    })
+
+    def _output_rules(self) -> str:
+        """输出规则全文（含当前角色可用动作清单）。"""
+        return self._OUTPUT_RULES + self._build_action_prompt()
+
+    def _needs_output_rules(self, source: str) -> bool:
+        """该来源的回复是否会展示给用户 —— 决定要不要教它用标签。
+
+        memory_extract / memory_reflect / screen_enrich 的输出是给机器读的，
+        注入「必须嵌入情绪标签」会污染它们。其余（user/proactive/idle/...）都要。
+        """
+        return source not in self._NON_DISPLAY_SOURCES
+
     def chat_direct(self, message: str, inject_memory: bool = True, extra_context: str = "", tools: list = None, source: str = "user") -> tuple:
         """直接调用 LLM API（不走 Hanako WS） - 原 chat() 的完整实现
 
@@ -195,14 +227,7 @@ class HanakoPetAdapter:
             user_content = f"[{source}] {user_content}"
 
         messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] "
-            "1. 回复简短自然，不超过 2 句话。"
-            "2. 必须嵌入情绪标签，格式 [emotion:xxx]，可选值：happy/sad/angry/surprised/thinking/neutral/cute/missing。可以在句末或句中。例如：'你回来啦！[emotion:happy]' 或 '[emotion:thinking]让我想想……'"
-            "3. 必须嵌入动作标签，格式 [action:{\"gesture\":\"waving\",\"intensity\":0.6}]，可选动作：idle/waving/happy/touch/thinking/sad/angry/walk/sleep/working/pat/stroke。intensity 范围 0.0-1.0。示例：'早上好~[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}]'"
-            "4. 必须嵌入表情参数精确控制面部表情，格式 [expression:smile=80,eye_smile=50]。常用参数：smile(嘴型)/eye_smile(眯眼)/blush(脸红)/mouth_form(嘴型)/eye_open(眼睛开合)。数值范围：0.0-1.0（部分参数可负值）。示例：'今天好开心！[emotion:happy][expression:smile=90,blush=60]' 或 '哼，不理你。[emotion:sad][expression:mouth_form=-0.3]'"
-            "5. 必须指定持续时间（秒），格式 [duration:3]。表情/动作将在指定秒后自动恢复 idle。示例：'晚安~[emotion:happy][expression:smile=70][duration:5]'"
-            "6. 组合使用：[emotion:xxx] + [action:{...}] + [expression:xxx] + [duration:xxx] 必须同时使用，让桌宠的反应更生动。"
-            "7. 注意：以上四个标签必须同时出现在回复中，缺一不可。完整示例：'早上好~[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}][expression:smile=90,blush=60][duration:5]'"
-            + self._build_action_prompt()}]
+            + self._output_rules()}]
 
         # 注入记忆
         if inject_memory:
@@ -418,14 +443,7 @@ class HanakoPetAdapter:
             user_content = f"[{source}] {user_content}"
 
         messages = [{"role": "system", "content": self._system_prompt + "\n\n[输出规则] "
-            "1. 回复简短自然，不超过 2 句话。"
-            "2. 必须嵌入情绪标签，格式 [emotion:xxx]，可选值：happy/sad/angry/surprised/thinking/neutral/cute/missing。可以在句末或句中。例如：'你回来啦！[emotion:happy]' 或 '[emotion:thinking]让我想想……'"
-            "3. 必须嵌入动作标签，格式 [action:{\"gesture\":\"waving\",\"intensity\":0.6}]，可选动作：idle/waving/happy/touch/thinking/sad/angry/walk/sleep/working/pat/stroke。intensity 范围 0.0-1.0。示例：'早上好~[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}]'"
-            "4. 必须嵌入表情参数精确控制面部表情，格式 [expression:smile=80,eye_smile=50]。常用参数：smile(嘴型)/eye_smile(眯眼)/blush(脸红)/mouth_form(嘴型)/eye_open(眼睛开合)。数值范围：0.0-1.0（部分参数可负值）。示例：'今天好开心！[emotion:happy][expression:smile=90,blush=60]' 或 '哼，不理你。[emotion:sad][expression:mouth_form=-0.3]'"
-            "5. 必须指定持续时间（秒），格式 [duration:3]。表情/动作将在指定秒后自动恢复 idle。示例：'晚安~[emotion:happy][expression:smile=70][duration:5]'"
-            "6. 组合使用：[emotion:xxx] + [action:{...}] + [expression:xxx] + [duration:xxx] 必须同时使用，让桌宠的反应更生动。"
-            "7. 注意：以上四个标签必须同时出现在回复中，缺一不可。完整示例：'早上好~[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}][expression:smile=90,blush=60][duration:5]'"
-            + self._build_action_prompt()}]
+            + self._output_rules()}]
 
         if inject_memory:
             memory_text = self._context.build_memory_context(max_chars=self._memory_budget)
@@ -630,8 +648,17 @@ class HanakoPetAdapter:
             except Exception as e:
                 raise HanakoUnavailableBeforeSend("无法准备 Hanako Session") from e
 
-        # 拼装 text：extra_context 作为前缀附加（Hanako 自己管记忆，inject_memory 被忽略）
+        # 拼装 text：
+        # 1) 输出规则（2026-09-10 接线）——Hanako 通道原本不携带标签契约，
+        #    导致模型从不输出 [emotion:]/[action:]/[expression:]/[duration:]，
+        #    全部落到兜底表。与下方 [pet-context] 同构，便于 Hanako 侧识别。
+        # 2) extra_context（Hanako 自己管记忆，inject_memory 被忽略）
         text = message.strip()
+        if self._needs_output_rules(source):
+            text = (
+                f"[pet-output-rules]\n{self._output_rules()}\n[/pet-output-rules]\n\n"
+                + text
+            )
         if extra_context and extra_context.strip():
             text = f"[pet-context]\n{extra_context.strip()}\n[/pet-context]\n\n{text}"
 
