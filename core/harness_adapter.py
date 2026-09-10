@@ -166,15 +166,20 @@ class HanakoPetAdapter:
     # 2026-09-10：原实现只在 chat_direct / _chat_stream_direct 里内联这段规则，
     # 而实际运行走 chat_via_hanako（transport_mode=prefer_hanako）——标签契约从未送达。
     # 实测：14 次回复，0 次带 [emotion:]，14 次全部走兜底表。
-    # 现在抽为唯一来源，两个路径共用，避免「一边教、一边不教」。
+    #
+    # 2026-09-10 二次收敛：原四个标签（emotion / action / expression / duration）
+    # 职责重叠且要求「必须同时出现，缺一不可」，模型面对「该写哪个」选择了全不写。
+    # 改为一个必给 + 一个可选：
+    #   [feel:v,a]  — 连续 VA 坐标，直驱渲染器已有的逐帧插值层（_va_target→_va_cur）
+    #   [do:名称]   — 可选，明确要一个动作时
+    # 旧标签仍被解析（向后兼容与兜底路径），但不再要求模型输出。
     _OUTPUT_RULES = (
         "1. 回复简短自然，不超过 2 句话。"
-        "2. 必须嵌入情绪标签，格式 [emotion:xxx]，可选值：happy/sad/angry/surprised/thinking/neutral/cute/missing。可以在句末或句中。例如：'你回来啦！[emotion:happy]' 或 '[emotion:thinking]让我想想……'"
-        "3. 必须嵌入动作标签，格式 [action:{\"gesture\":\"waving\",\"intensity\":0.6}]，可选动作：idle/waving/happy/touch/thinking/sad/angry/walk/sleep/working/pat/stroke。intensity 范围 0.0-1.0。示例：'早上好~[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}]'"
-        "4. 必须嵌入表情参数精确控制面部表情，格式 [expression:smile=80,eye_smile=50]。常用参数：smile(嘴型)/eye_smile(眯眼)/blush(脸红)/mouth_form(嘴型)/eye_open(眼睛开合)。数值范围：0.0-1.0（部分参数可负值）。示例：'今天好开心！[emotion:happy][expression:smile=90,blush=60]' 或 '哼，不理你。[emotion:sad][expression:mouth_form=-0.3]'"
-        "5. 必须指定持续时间（秒），格式 [duration:3]。表情/动作将在指定秒后自动恢复 idle。示例：'晚安~[emotion:happy][expression:smile=70][duration:5]'"
-        "6. 组合使用：[emotion:xxx] + [action:{...}] + [expression:xxx] + [duration:xxx] 必须同时使用，让桌宠的反应更生动。"
-        "7. 注意：以上四个标签必须同时出现在回复中，缺一不可。完整示例：'早上好~[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}][expression:smile=90,blush=60][duration:5]'"
+        "2. 必须给出情绪坐标，格式 [feel:valence,arousal]。"
+        "valence ∈[-1,1]：-1 很消极（难过/生气），0 中性，+1 很积极（开心/温暖）。"
+        "arousal ∈[-1,1]：-1 很平静（放松/低落），0 一般，+1 很兴奋（激动/紧张）。"
+        "两者独立判断。例：[feel:0.8,0.7] 开心兴奋；[feel:-0.5,-0.4] 低落安静；"
+        "[feel:-0.6,0.8] 生气激动；[feel:0.2,0.1] 平静。拿不准就写 [feel:0,0]。"
     )
 
     # 输出交给机器读的来源：不得注入标签规则（否则污染其结构化输出）
@@ -795,6 +800,10 @@ class HanakoPetAdapter:
         cleaned = re.sub(r"\s*\[expression:[^\]]*\]\s*", " ", cleaned, flags=re.IGNORECASE)
         # 剥离 [duration:xxx] 标签（持续时间，不显示给用户）
         cleaned = re.sub(r"\s*\[duration:[^\]]*\]\s*", " ", cleaned, flags=re.IGNORECASE)
+        # 剥离 [feel:v,a] / [do:name]（2026-09-10 新增标签）。
+        # 这里是第二道闸：无论哪条路径先剥，气泡/TTS 都不得漏出原始标签。
+        cleaned = re.sub(r"\s*\[feel:[^\]]*\]\s*", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*\[do:[^\]]*\]\s*", " ", cleaned, flags=re.IGNORECASE)
         # BugFix #4：整段剥离 <mood>...</mood> 内省块（Vibe/Reflections/Will/
         # Sparks 字段是给服务端/记忆用的元数据，不是给用户的回复）——必须在
         # HTML 剥离之前做，否则 <mood> 标签被剥掉后只剩 Vibe 文本。
@@ -968,42 +977,28 @@ class HanakoPetAdapter:
             return ""
     
     def _build_action_prompt(self) -> str:
-        """构建动作列表 prompt（注入到 system prompt 输出规则）。
+        """构建可选动作提示（注入输出规则）。
 
-        让 LLM 知道有哪些动作/表情/持续时间可以调用，格式：
-        [action:{"gesture":"touch","intensity":0.6}]
-        [expression:smile=80,eye_smile=50]
-        [duration:3]
-        
-        P1: 隐式文档按需注入 — 只放简短列表，AI 用了才 Poke 完整文档。
-        省 token 且渐进式学习。
+        只列动作**名**——模型报名字即可（`[do:waving]`）。
+
+        2026-09-10 收敛：原来要模型写完整 JSON（`[action:{"gesture":"waving",
+        "intensity":0.8}]`）+ 表情参数 + 时长，实测四标签命中率 0/14。
+        名字比 JSON 便宜一个数量级。
         """
         try:
             renderer = getattr(self, '_renderer', None) or getattr(self, '_pet_renderer', None)
-            actions_prompt = ""
             if renderer and hasattr(renderer, 'available_actions'):
                 actions = renderer.available_actions
                 if actions:
-                    action_names = [a['name'] for a in actions]
-                    actions_prompt = (
-                        "\n3. 可在回复中嵌入动作标签触发桌宠动作，格式 [action:{...}]"
-                        "\n可用动作：" + "/".join(action_names) +
-                        "\n提示：当用户描述场景或情绪时，主动配合动作让互动更生动。"
+                    names = "/".join(a['name'] for a in actions)
+                    return (
+                        "3. 可选：想做一个明确动作时加 [do:动作名]，可用："
+                        + names
+                        + "。例：[feel:0.7,0.6] [do:waving]"
                     )
-            # 表情参数控制（新增）
-            expression_prompt = (
-                "\n4. 可嵌入表情参数精确控制面部表情，格式 [expression:smile=80,eye_smile=50]"
-                "\n常用参数：smile(嘴型)/eye_smile(眯眼)/blush(脸红)/mouth_form(嘴型)/eye_open(眼睛开合)"
-                "\n数值范围：0.0-1.0（部分参数可负值，如 mouth_form=-0.3 表示撇嘴）"
-                "\n提示：[expression] 比 [emotion] 更精细，适合特定场景（如脸红、俏皮嘴型）"
-            )
-            duration_prompt = (
-                "\n5. 可指定持续时间（秒），格式 [duration:3]"
-                "\n提示：表情/动作将在指定秒后自动恢复 idle，不用 duration 则持续直到下次变化"
-            )
-            return actions_prompt + expression_prompt + duration_prompt
         except Exception:
             return ""
+        return ""
 
     def get_action_documentation(self, action_name: str) -> str:
         """P1: 获取单个动作的完整文档（按需注入）。

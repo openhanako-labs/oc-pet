@@ -398,6 +398,11 @@ class Live2DRenderer(AvatarRenderer):
         # 读取）。原只在 _set_intent_params 里赋值，而 submit_motion_request 会先
         # 直接 .update() → 同样 AttributeError。在此无条件初始化。
         self._param_intent: dict = {}
+        # [feel:] 设定的 VA 目标在此时刻前不被离散情绪覆盖（2026-09-10）。
+        # 没有它的话：apply_action_intent 刚写完 _va_target，紧接着
+        # pet.py:2873 的 _sync_renderer_master_emotion 就会用离散 emotion
+        # 查表盖掉——新通道被旧通道踩掉。
+        self._va_hold_until: float = 0.0
         # 渲染器运行状态（防御性初始化）：无论 load() 是否成功、模型是否存在，
         # 这些属性都必须存在，使 set_emotion 等被 tick 无条件调用的方法成为安全 no-op。
         # 否则 load() 提前 return False（如占位角色无 live2d/ 目录）时，_model 为 None，
@@ -1348,7 +1353,11 @@ class Live2DRenderer(AvatarRenderer):
         """
         emotion = emotion or "neutral"
         # T10: 同步 V/A 目标坐标（与 set_emotion 保持一致）
-        self._va_target = self._EMOTION_VA.get(emotion, (0.0, 0.0))
+        # 2026-09-10：如果 [feel:] 刚设过 VA，则保持它不被离散情绪覆盖。
+        if time.monotonic() >= getattr(self, "_va_hold_until", 0.0):
+            self._va_target = self._EMOTION_VA.get(emotion, (0.0, 0.0))
+        else:
+            logger.debug("set_master_emotion: VA 保持中，跳过覆盖（%s）", emotion)
         self._current_emotion = emotion
         self._emotion_target = emotion
         if self._model:
@@ -2399,7 +2408,9 @@ class Live2DRenderer(AvatarRenderer):
 
     def set_emotion(self, emotion: str, intensity: float = 1.0) -> None:
         # T10: 同步 V/A 目标坐标（情绪切换变成 V/A 空间路径插值）
-        self._va_target = self._EMOTION_VA.get(emotion, (0.0, 0.0))
+        # 2026-09-10：与 set_master_emotion 同理——[feel:] 保持期内不被覆盖。
+        if time.monotonic() >= getattr(self, "_va_hold_until", 0.0):
+            self._va_target = self._EMOTION_VA.get(emotion, (0.0, 0.0))
         self._emotion_intensity = max(0.0, min(1.0, intensity))
         # 同一 emotion 短时间内重复调用：直接同步表情，不重播 motion。
         # 真实场景：_unified_tick 每秒检查 emotion 并 set_emotion，
@@ -2554,6 +2565,7 @@ class Live2DRenderer(AvatarRenderer):
         - gesture 非空 → 触发对应 motion/expression（情绪名走表情+对应 motion，
           否则当作 motion 组名尝试播放）。
         - duration > 0 → 通过 MotionMixer 提交，指定秒后自动回 idle。
+        - va=[v,a] → 直接驱动连续 VA 坐标（_va_target），逐帧插值到面部参数。
         - 缺省/非法字段安全忽略（不抛异常）。
         """
         if not isinstance(intent, dict):
@@ -2566,6 +2578,26 @@ class Live2DRenderer(AvatarRenderer):
         except (TypeError, ValueError):
             intensity = 1.0
         intensity = max(0.0, min(1.0, intensity))
+
+        # ── [feel:v,a] 连续 VA 坐标（2026-09-10）──
+        # 直驱渲染器已有的逐帧插值层：_va_target ──平滑──▶ _va_cur ──插值──▶ 面部参数。
+        # 这是「AI 自己做细微动作」的入口：连续值 → 平滑逼近，而非 7 档跳变。
+        _va = intent.get("va")
+        if (isinstance(_va, (list, tuple)) and len(_va) == 2):
+            try:
+                self._va_target = (
+                    max(-1.0, min(1.0, float(_va[0]))),
+                    max(-1.0, min(1.0, float(_va[1]))),
+                )
+                # 保持期内不让离散情绪覆盖（默认与兜底 duration 一致：3s）
+                _hold = float(duration) if duration and duration > 0 else 3.0
+                self._va_hold_until = time.monotonic() + _hold
+                logger.info(
+                    "设定 VA 目标: %.2f, %.2f（保持 %.1fs）",
+                    self._va_target[0], self._va_target[1], _hold,
+                )
+            except (TypeError, ValueError):
+                logger.warning("apply_action_intent: va 数值非法，忽略: %r", _va)
         
         # 调试日志：记录动作意图
         logger.info("apply_action_intent: gesture=%s, intensity=%.1f, params=%s, duration=%.1f",

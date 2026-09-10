@@ -54,11 +54,33 @@ def _adapter(reply="好的~[emotion:happy]"):
 #  规则文本本身
 # ══════════════════════════════════════════════════════════════
 
-def test_output_rules_contain_all_four_tags():
+def test_output_rules_contain_primary_tag():
+    """主标签是 [feel:v,a]（连续 VA）。
+
+    2026-09-10 收敛：原四个标签（emotion/action/expression/duration）职责重叠且
+    要求「必须同时出现，缺一不可」，实测命中率 0/14。改为一个必给 + 一个可选。
+    """
     rules = _adapter()._output_rules()
-    for tag in ("[emotion:", "[action:", "[expression:", "[duration:"):
-        assert tag in rules, f"输出规则缺少 {tag}"
+    assert "[feel:" in rules, "必须给出情绪坐标"
+    assert "valence" in rules and "arousal" in rules, "两个维度都要解释"
     assert "必须" in rules
+
+
+def test_output_rules_mention_optional_do_tag():
+    """[do:] 是可选的（需 renderer 提供动作列表时才出现）。"""
+    rules = _adapter()._output_rules()
+    # 本测试的替身未注入 renderer → 无动作列表 → 不出现 [do:]
+    assert "[do:" not in rules or "可选" in rules
+
+
+def test_legacy_tags_no_longer_demanded():
+    """旧标签不再作为「必须」要求（仍能被解析，但不让模型写）。
+
+    这是本次收敛的核心：模型面对「四个标签该写哪个」选择了全不写。
+    """
+    rules = _adapter()._output_rules()
+    assert "四个标签必须同时" not in rules
+    assert "缺一不可" not in rules
 
 
 def test_rules_are_single_source_of_truth():
@@ -91,14 +113,13 @@ def test_display_sources_get_rules(source):
 # ══════════════════════════════════════════════════════════════
 
 def test_hanako_path_carries_output_rules():
-    """核心断言：用户消息经 Hanako 通道发送时，text 必须带标签契约。"""
+    """核心断言：用户消息经 Hanako 通道发送时，text 必须带表达契约。"""
     a = _adapter()
     a.chat_via_hanako("举个手?")
 
     sent = a._session_manager.sent_texts[0]
     assert "[pet-output-rules]" in sent
-    assert "[emotion:xxx]" in sent
-    assert "[duration:3]" in sent
+    assert "[feel:" in sent, "主标签必须在通道里"
     assert "举个手?" in sent, "原消息必须保留"
     assert sent.rstrip().endswith("举个手?"), "规则应在消息之前"
 
@@ -116,13 +137,13 @@ def test_hanako_path_keeps_pet_context():
 
 
 def test_machine_source_via_hanako_has_no_rules():
-    """memory_extract 经 Hanako 通道时不得夹带标签契约。"""
+    """memory_extract 经 Hanako 通道时不得夹带表达契约。"""
     a = _adapter(reply='{"facts": []}')
     a.chat_via_hanako("抽取事实", source="memory_extract")
 
     sent = a._session_manager.sent_texts[0]
     assert "[pet-output-rules]" not in sent
-    assert "[emotion:xxx]" not in sent
+    assert "[feel:" not in sent
 
 
 # ══════════════════════════════════════════════════════════════
@@ -130,12 +151,13 @@ def test_machine_source_via_hanako_has_no_rules():
 # ══════════════════════════════════════════════════════════════
 
 def test_reply_with_tags_survives_parsing():
-    """模型给出完整四标签时，emotion 应被解析出来（而不是落到 neutral）。"""
+    """模型给出标签时，emotion 应被解析出来（而不是落到 neutral）。"""
     a = _adapter(
-        reply="好呀！[emotion:happy][action:{\"gesture\":\"waving\",\"intensity\":0.8}]"
-              "[expression:smile=90][duration:5]"
+        reply="好呀！[emotion:happy][feel:0.8,0.7]"
+              "[action:{\"gesture\":\"waving\",\"intensity\":0.8}]"
     )
     cleaned, emotion = a.chat_via_hanako("举个手?")
 
-    assert emotion == "happy", "带标签的回复必须解析出真情绪"
+    assert emotion == "happy", "带 emotion 标签的回复必须解析出真情绪"
     assert "[emotion:" not in cleaned, "标签须从展示文本中剥离"
+    assert "[feel:" not in cleaned, "[feel:] 也不得漏给用户"

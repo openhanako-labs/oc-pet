@@ -1109,18 +1109,25 @@ class ConversationEngine:
             has_action_tag = "[action:" in reply
             has_expression_tag = "[expression:" in reply
             has_duration_tag = "[duration:" in reply
-            logger.info("标签检测: emotion=%s action=%s expression=%s duration=%s",
-                        has_emotion_tag, has_action_tag, has_expression_tag, has_duration_tag)
+            # 2026-09-10 新增：主标签（连续 VA）+ 可选动作简写
+            has_feel_tag = "[feel:" in reply
+            has_do_tag = "[do:" in reply
+            logger.info(
+                "标签检测: feel=%s do=%s emotion=%s action=%s expression=%s duration=%s",
+                has_feel_tag, has_do_tag, has_emotion_tag, has_action_tag,
+                has_expression_tag, has_duration_tag,
+            )
             
-            if not has_emotion_tag and not has_action_tag:
+            if not has_emotion_tag and not has_action_tag and not has_do_tag:
                 # 内部补默认 emotion 标签，不上送 LLM
                 if not reply.strip().startswith("（嗯"):
                     reply = reply.strip() + " [emotion:neutral]"
                     logger.debug("格式纠正: 内部补充 emotion:neutral 标签")
             
-            # P1: 自动补充 [expression:xxx] 和 [duration:xxx]（如果 LLM 没输出）
-            # 基于情绪推断默认表情参数
-            if not has_expression_tag:
+            # P1: 自动补充 [expression:xxx]（如果 LLM 没输出）
+            # 2026-09-10：有 [feel:] 时跳过——VA 直驱渲染器的逐帧插值层，
+            # 比离散 emotion 查表精细；再补一份静态参数反而会盖掉它。
+            if not has_expression_tag and not has_feel_tag:
                 # 根据情绪推断默认表情参数
                 expression_defaults = {
                     "happy": "smile=80,blush=40",
@@ -1136,7 +1143,7 @@ class ConversationEngine:
             
             # P1: 自动补充 [action:{...}]（如果 LLM 没输出）
             # 基于情绪推断默认动作
-            if not has_action_tag:
+            if not has_action_tag and not has_do_tag:
                 # 根据情绪推断默认动作
                 action_defaults = {
                     "happy": {"gesture": "happy", "intensity": 0.6},
@@ -1462,6 +1469,39 @@ class ConversationEngine:
         # 剥离 [duration:...] 标签
         cleaned = _re.sub(r'\s*\[duration:[^\]]*\]\s*', ' ', cleaned, flags=_re.IGNORECASE)
 
+        # ── 解析 [feel:valence,arousal]（2026-09-10 新增，主表达信号）──
+        # 连续 VA 坐标，直驱渲染器已有的逐帧插值层：
+        #   _va_target ──平滑──▶ _va_cur ──双线性插值──▶ 面部参数
+        # 比 [emotion:xxx] 的 7 个离散点精细（能表达「有点开心但不太兴奋」），
+        # 且模型只需输出两个数——不用记参数名/枚举表/时长。
+        va = None
+        feel_match = _re.search(
+            r'\[feel:\s*(-?(?:\d+\.?\d*|\.\d+))\s*,\s*(-?(?:\d+\.?\d*|\.\d+))\s*\]',
+            reply, flags=_re.IGNORECASE,
+        )
+        if feel_match:
+            try:
+                va = (
+                    max(-1.0, min(1.0, float(feel_match.group(1)))),
+                    max(-1.0, min(1.0, float(feel_match.group(2)))),
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    "conversation_engine: [feel:] 数值非法，忽略: %r", feel_match.group(0),
+                )
+                va = None
+        # 剥离 [feel:...] 标签
+        cleaned = _re.sub(r'\s*\[feel:[^\]]*\]\s*', ' ', cleaned, flags=_re.IGNORECASE)
+
+        # ── 解析 [do:动作名]（[action:{...}] 的简写）──
+        # 模型报名字即可，不用写 JSON。与 [action:] 共用同一条手势链路。
+        do_name = ""
+        do_match = _re.search(r'\[do:\s*([^\]\s]+)\s*\]', reply, flags=_re.IGNORECASE)
+        if do_match:
+            do_name = do_match.group(1).strip().lower()
+        # 剥离 [do:...] 标签
+        cleaned = _re.sub(r'\s*\[do:[^\]]*\]\s*', ' ', cleaned, flags=_re.IGNORECASE)
+
         # ── 解析 [action:{...}]（如果存在）──
         # 逐个扫描 [action:{...}]：按大括号配平定位闭合 }，再要求其后紧跟 ]。
         # 不用正则贪婪（``\{.*\}`` 配 DOTALL 会在一条回复含多个标签时把所有
@@ -1508,8 +1548,8 @@ class ConversationEngine:
                 i = closed + 2
         cleaned = _re.sub(r"\s{2,}", " ", cleaned).strip()
         
-        # ── 合并 [expression:xxx] 和 [duration:xxx] 到 intent ──
-        if expr_params or duration > 0:
+        # ── 合并 [expression:xxx] / [duration:xxx] / [feel:] / [do:] 到 intent ──
+        if expr_params or duration > 0 or va is not None or do_name:
             if intent is None:
                 intent = {}
             # 合并 params（[expression:xxx] 的参数）
@@ -1523,6 +1563,12 @@ class ConversationEngine:
             # 设置 duration
             if duration > 0:
                 intent["duration"] = duration
+            # 连续 VA 坐标（渲染器据此驱动 _va_target）
+            if va is not None:
+                intent["va"] = [va[0], va[1]]
+            # [do:name] → gesture（不覆盖 [action:] 已给的 gesture）
+            if do_name and not intent.get("gesture"):
+                intent["gesture"] = do_name
         
         if intent is None:
             return cleaned, None
