@@ -44,6 +44,8 @@ class InspectionPerception:
         # agent_id 优先显式传入，否则从 schedule 继承（SchedulePerception._agent_id）
         self._agent_id = (agent_id or getattr(self._schedule, "_agent_id", "") or "").strip()
         self._last_tick_at: float = 0.0
+        # 是否已过首个 tick：仅首个 tick 跳过当时已有历史，其后出现的文件从头处理
+        self._primed: bool = False
         self._reported: dict[str, float] = {}       # 节流：key -> 上次通知时间
         self._last_findings: list[str] = []          # 最近一次命中（供 prompt 注入）
         # cron-runs 文件游标：每文件已读取行数（只处理新增行，避免重复播报）
@@ -68,6 +70,7 @@ class InspectionPerception:
         if now - self._last_tick_at < INSPECTION_INTERVAL_SECONDS:
             return []
         self._last_tick_at = now
+        priming = not self._primed
 
         # 刷新 cron-jobs.json（仅供 label 查表；缺失/损坏容错）
         try:
@@ -77,7 +80,7 @@ class InspectionPerception:
 
         findings: list[tuple[str, str]] = []
         try:
-            findings.extend(self._check_cron_runs(now))
+            findings.extend(self._check_cron_runs(now, priming))
         except Exception as e:
             logger.debug("Inspection cron-runs check failed: %s", e)
         try:
@@ -92,6 +95,7 @@ class InspectionPerception:
         # 只保留通过去重的命中
         triggers = [t for t in findings if self._allow_report(t[0], now)]
         self._last_findings = [t[1] for t in triggers]
+        self._primed = True
         if triggers:
             logger.info("Inspection triggers: %d 条（%s）", len(triggers),
                         "；".join(t[1] for t in triggers[:3]))
@@ -117,11 +121,16 @@ class InspectionPerception:
 
     # ── 命中检测 ──────────────────────────────────────────
 
-    def _check_cron_runs(self, now: float) -> list[tuple[str, str]]:
+    def _check_cron_runs(self, now: float, priming: bool = False) -> list[tuple[str, str]]:
         """监控 cron-runs/*.jsonl 新增行；status=success → 完成，failed/error → 失败。
 
         studio 运行记录文件名即 job id（JSONL 行内不一定含 jobId），
         且只播报属于当前 agent 的任务（过滤不在 job_map 中的记录）。
+
+        Args:
+            now: 当前时间（注入用）。
+            priming: 是否为本实例首个 tick——仅此时跳过当时已存在的所有历史行，
+                避免重启后回放旧 run；其后才出现的文件（cursor 仍为 None）从头处理新增行。
 
         Returns:
             [(dedup_key, 触发文案), ...]
@@ -142,16 +151,17 @@ class InspectionPerception:
             except Exception as e:
                 logger.debug("读取 %s 失败: %s", jsonl, e)
                 continue
-            
-            # 2026-09-08: 启动时跳过历史记录，只处理新增记录
+
+            # 首个 tick：跳过当时已有历史（游标置文件末尾）；其后出现的文件从头处理
             if cursor is None:
-                self._run_cursors[key] = len(lines)  # 设置游标为文件末尾，跳过历史记录
-                continue
-            
+                if priming:
+                    self._run_cursors[key] = len(lines)
+                    continue
+                cursor = 0
             new_lines = lines[cursor:]
+            self._run_cursors[key] = len(lines)
             if not new_lines:
                 continue
-            self._run_cursors[key] = len(lines)
             for raw in new_lines:
                 raw = raw.strip()
                 if not raw:
@@ -256,7 +266,7 @@ class InspectionPerception:
                 if jid and label:
                     mapping[jid] = label
         except Exception:
-            pass
+            logger.debug("inspection: 非致命异常(已静默吞掉)", exc_info=True)
         return mapping
 
     @staticmethod

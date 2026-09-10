@@ -85,9 +85,11 @@ class ProactiveScheduler:
       - LLM 生成（ProactiveGenerator）：复用 Hanako 通道；失败/超时回退模板池
     """
 
-    def __init__(self, foreground_watcher=None, on_proactive: callable = None, activity_tracker=None):
+    def __init__(self, foreground_watcher=None, on_proactive: callable = None, activity_tracker=None, config: dict | None = None):
         self._foreground_watcher = foreground_watcher
         self._activity_tracker = activity_tracker  # 可选注入 ActivityTracker
+        # 配置（_is_dnd_active 等会读 proactive.dnd）：缺省空字典，避免 AttributeError
+        self._config: dict = config or {}
         self._enabled = True
         self._cooldown_minutes = 10
         self._rules: list[dict] = list(DEFAULT_RULES)
@@ -498,7 +500,7 @@ class ProactiveScheduler:
             signals["period"] = tctx.get("period", "other")
             signals["is_weekend"] = tctx.get("is_weekend", False)
         except Exception:
-            pass
+            logger.debug("proactive: 非致命异常(已静默吞掉)", exc_info=True)
         if self._foreground_watcher:
             signals["category"] = getattr(self._foreground_watcher, "last_category", "") or "other"
             signals["fg_duration_min"] = getattr(self._foreground_watcher, "fg_duration_min", 0.0) or 0.0
