@@ -387,6 +387,17 @@ class Live2DRenderer(AvatarRenderer):
         # T2-1: 帧管线化 —— 每帧的 idle/手势超时/自动动作/表情超时/视线/口型/
         # 程序化表情/待机摇摆/绘制 全部收敛到 FramePipeline，各处理器独立 try/except。
         self._pipeline = create_default_pipeline()
+        # ── T08 动作混流层（D2）──
+        # 2026-09-10 接线：MotionMixer 一直被 import、被调用（submit_motion_request /
+        # force_idle / get_motion_layer / is_motion_idle 四处），但**从未实例化**。
+        # 后果：每次带 duration 的动作意图都在 `self._mixer.submit(req)` 抛
+        # AttributeError，被上游 try 吞掉 → 标签解析出来的动作全部静默死亡，
+        # 桌宠能动的只有空闲时随机播的那几个。
+        self._mixer = MotionMixer()
+        # 结构化动作意图的平滑目标集（_set_intent_params 写入、_update_procedural_emotion
+        # 读取）。原只在 _set_intent_params 里赋值，而 submit_motion_request 会先
+        # 直接 .update() → 同样 AttributeError。在此无条件初始化。
+        self._param_intent: dict = {}
         # 渲染器运行状态（防御性初始化）：无论 load() 是否成功、模型是否存在，
         # 这些属性都必须存在，使 set_emotion 等被 tick 无条件调用的方法成为安全 no-op。
         # 否则 load() 提前 return False（如占位角色无 live2d/ 目录）时，_model 为 None，
@@ -2228,7 +2239,14 @@ class Live2DRenderer(AvatarRenderer):
         "complete": (("complete",),),
     }
 
-    def play_anim(self, anim: str, emotion: str = "", frame_range=None) -> None:
+    def play_anim(self, anim: str, emotion: str = "", frame_range=None) -> bool:
+        """播放动作。
+
+        Returns:
+            True 表示真的播了；False 表示无匹配（调用方不得声称已触发）。
+            2026-09-10：原来返回 None，调用方无法区分「播了」与「没播」，
+            导致 apply_action_intent 无条件打「已触发动作」。
+        """
         self._current_anim = anim
         if emotion:
             # 缺陷② 修复：播放指定动作时，情绪只同步表情、不再重复播情绪 motion，
@@ -2238,14 +2256,16 @@ class Live2DRenderer(AvatarRenderer):
         kws = self._ANIM_TO_MOTION_KW.get(anim) or self._ANIM_TO_MOTION_KW.get(emotion)
         if kws:
             if self._play_motion_kw(*kws):
-                return
+                return True
         # fallback：老逻辑（组名匹配）
         if self._model and anim in self._motion_groups:
             try:
                 self._model.StartRandomMotion(anim, self._live2d.MotionPriority.NORMAL)
                 self._note_motion_started("")  # 未知 motion → 按限时手势处理
+                return True
             except Exception:
                 logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        return False
 
     def set_emotion_expression_only(self, emotion: str) -> None:
         """仅同步情绪表情（不播动作）。给 play_anim 用，避免动作/表情错位。"""
@@ -2538,8 +2558,16 @@ class Live2DRenderer(AvatarRenderer):
             self._set_intent_params(params, intensity)
             logger.info("已设置表情参数: %s (intensity=%.1f)", params, intensity)
         if gesture:
-            self._trigger_gesture(gesture, intensity)
-            logger.info("已触发动作: %s (intensity=%.1f)", gesture, intensity)
+            played = self._trigger_gesture(gesture, intensity)
+            if played:
+                logger.info("已触发动作: %s (intensity=%.1f)", gesture, intensity)
+            else:
+                # 2026-09-10：原实现无条件打「已触发动作」，即使什么都没播。
+                # 日志声称成功而实际无声，是排查时的最大干扰源。
+                logger.warning(
+                    "动作未生效: gesture=%s 未匹配到任何 motion（模型 motion 列表：%s）",
+                    gesture, [f for f in self._motion_files] or "空",
+                )
 
     def _set_intent_params(self, params: dict, intensity: float) -> None:
         """把 params 字典归一化为平滑目标值（按 intensity 缩放幅度）。
@@ -2559,31 +2587,34 @@ class Live2DRenderer(AvatarRenderer):
         self._param_intent = targets
         # 不清空 _param_cur：保留当前平滑值作为起点，继续平滑过渡。
 
-    def _trigger_gesture(self, gesture, intensity: float) -> None:
+    def _trigger_gesture(self, gesture, intensity: float) -> bool:
         """gesture 名 → 触发对应 motion/expression。
 
         - 已知情绪名（config.EXPRESSION_MAP）→ 同步表情并播放对应 anim 的 motion。
         - 否则当作 motion 组名直接播放（play_anim 内部会按 _ANIM_TO_MOTION_KW /
           motion 组匹配，无匹配则安全忽略）。
+
+        Returns:
+            True 表示真的播了；False 表示无匹配（调用方不得声称已触发）。
         """
         if not gesture or not isinstance(gesture, str):
-            return
+            return False
         g = gesture.strip().lower()
         if not g:
-            return
+            return False
         try:
             from config import EXPRESSION_MAP
             if g in EXPRESSION_MAP:
                 anim = (EXPRESSION_MAP.get(g) or (None,))[0] or "idle"
-                self.play_anim(anim, emotion=g)
-                return
+                return bool(self.play_anim(anim, emotion=g))
         except Exception as e:
             self._note_frame_failure("GestureExpressionMap", e)
         try:
-            self.play_anim(g)
+            return bool(self.play_anim(g))
         except Exception as e:
             # 失败 = 用户点击/触发手势，桌宠毫无反应
             self._note_frame_failure("GesturePlayAnim", e)
+            return False
 
     # ── 视线 ──
 
