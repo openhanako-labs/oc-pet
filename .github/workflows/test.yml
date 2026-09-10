@@ -1,0 +1,36 @@
+name: Tests
+
+# 回归测试入库后，让 CI 真正跑测试（此前仅有 build.yml 在打 tag 时构建，零测试）。
+# 触发：push 到 master、任意 PR、手动。
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest
+          pip install -r requirements.txt
+
+      - name: Run pytest
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m pytest tests/ -q -p no:cacheprovider
