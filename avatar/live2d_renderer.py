@@ -2174,6 +2174,13 @@ class Live2DRenderer(AvatarRenderer):
             self._model.StartMotion(self._motion_group_name, idx, prio)
             self._current_motion_idx = idx
             self._note_motion_started(fname, is_idle=False)
+            # 2026-09-10：补上成功路径的可见性。
+            # 原实现只在失败时报（而且大部分失败还静默），没播出来时无从判定到底
+            # 是「没找到动作」还是「找到了但没画」—— 排查时只能靠猜。
+            logger.info(
+                "Live2DRenderer: 播放动作 idx=%d（%s）prio=%s group=%r",
+                idx, fname or "?", prio, self._motion_group_name,
+            )
             return True
         except Exception as e:
             logger.warning("Live2DRenderer.StartMotion 异常: %s", e)

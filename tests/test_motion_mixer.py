@@ -57,10 +57,13 @@ def test_reset_cooldown_blocks_submits():
 
 def test_reset_cooldown_expires():
     m = MotionMixer()
+    # 裕量必须远大于 Windows 的 monotonic 时钟粒度（实测约 15.6ms）：
+    # 原来 cooldown=0.05 / sleep=0.06，裕量仅 10ms，实测约 1/5 概率把 60ms
+    # 读成 46.8ms → 判为“仍在冷却” → 假失败。
     m.RESET_COOLDOWN_S = 0.05
     m.force_reset()
     assert m.is_in_reset_cooldown()
-    time.sleep(0.06)
+    time.sleep(0.25)
     assert not m.is_in_reset_cooldown()
     # 冷却期后可正常提交
     assert m.submit(MotionRequest(layer=Layer.IDLE, name="idle"))
@@ -69,9 +72,10 @@ def test_reset_cooldown_expires():
 
 def test_duration_expiry():
     m = MotionMixer()
+    # 同上：裕量取大，避开 Windows monotonic 的 15.6ms 粒度
     assert m.submit(MotionRequest(layer=Layer.SCREEN, duration=0.05, name="screen"))
     assert m.get_active_layer() == Layer.SCREEN
-    time.sleep(0.06)
+    time.sleep(0.25)
     assert m.get_active_layer() == Layer.IDLE
     assert m.get_active() is None
 
