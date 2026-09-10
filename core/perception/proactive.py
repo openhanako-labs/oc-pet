@@ -98,6 +98,11 @@ class ProactiveScheduler:
         self._typing_since: float | None = None  # 连续打字起始时间（None=不在打字）
         self.on_proactive: callable = on_proactive or (lambda text: None)
 
+        # 2026-09-10: 接用使用记忆（core/usage_memory.py）——用户明确说「别再说 X」后
+        # 24h 内不再触发该类内容。None 时惰性创建，不阻断调度。
+        self._usage_memory = None
+        self._last_speak_key = ""  # 最近一次主动说话的内容键（供桌面菜单「别再说这类」使用）
+
         # ── P6 自适应冷却：动态冷却（无视→翻倍惩罚 / 回应→减半奖励）──
         self._current_cooldown: float = 10.0  # 动态冷却，初始同静态默认
         self._last_proactive_at: float = 0.0  # 上次主动触发时间
@@ -346,6 +351,68 @@ class ProactiveScheduler:
         logger.info("[proactive] fallback: %s", fallback_prompt)
         self._deliver(fallback_prompt, source_key=source_key)
 
+    def set_usage_memory(self, memory) -> None:
+        """注入 UsageMemory（可选；不注入时惰性创建单例）。"""
+        self._usage_memory = memory
+
+    def _get_usage_memory(self):
+        """惰性获取 UsageMemory 单例；不可用时返回 None（不阻断主流程）。"""
+        if self._usage_memory is not None:
+            return self._usage_memory
+        try:
+            from core.usage_memory import UsageMemory
+            self._usage_memory = UsageMemory()
+        except Exception as e:
+            logger.warning("[proactive] 使用记忆不可用，跳过内容禁言检查: %s", e)
+            self._usage_memory = False  # 哨兵：标记已尝试且失败，避免每次重试
+            return None
+        return self._usage_memory
+
+    def is_content_banned(self, source_key: str) -> bool:
+        """该内容类型是否被用户禁止（或在 24h 禁言期内）。"""
+        if not source_key:
+            return False
+        mem = self._get_usage_memory()
+        if not mem:
+            return False
+        try:
+            return bool(mem.is_banned(source_key))
+        except Exception as e:
+            logger.warning("[proactive] 禁言查询失败: %s", e)
+            return False
+
+    def _speak(self, prompt: str, source_key: str = "") -> None:
+        """**唯一**调用 on_proactive 的出口。
+
+        所有主动说话路径（_deliver / intent / recall / associate / rules）都经过这里，
+        所以内容禁言只需在此拦一次。新增触发路径必须走本方法，不得直调 on_proactive。
+        """
+        if self.is_content_banned(source_key):
+            logger.info("[proactive] 内容类型已被用户禁止，跳过：%s", source_key)
+            return
+        self._last_speak_key = source_key or ""
+        self.on_proactive(prompt)
+
+    def ban_last_content(self, hours: float = 24.0) -> str:
+        """禁言最近一次主动说话的内容类型（供桌面菜单「别再说这类」）。
+
+        Returns:
+            被禁言的内容键；无内容键时返回空字符串。
+        """
+        key = self._last_speak_key
+        if not key:
+            return ""
+        mem = self._get_usage_memory()
+        if not mem:
+            return ""
+        try:
+            mem.record_usage(key, action="explicit_ban", text=key)
+            logger.info("[proactive] 已禁言内容类型 %s（%.0fh）", key, hours)
+        except Exception as e:
+            logger.warning("[proactive] 禁言记录失败: %s", e)
+            return ""
+        return key
+
     def _deliver(self, prompt: str, source_key: str = "") -> None:
         """统一投递入口：记录触发 + 节流 + on_proactive。
 
@@ -353,6 +420,10 @@ class ProactiveScheduler:
         保证无论文案来自 LLM 还是模板池，触发簿记/节流/每日计数都一致。
         """
         if not (prompt or "").strip():
+            return
+        # 内容禁言：在簿记前拦截，避免被禁内容浪费当日预算与冷却
+        if self.is_content_banned(source_key):
+            logger.info("[proactive] 内容类型已被用户禁止，跳过：%s", source_key)
             return
         now = time.time()
         # P1-5 语义去重（生成路径兜底：fallback 模板也可能与历史话题重复）
@@ -363,7 +434,7 @@ class ProactiveScheduler:
             self._throttle.record_used(source_key, kind="chat", now=now)
         self._throttle.record_chat(prompt, now=now)
         self._anti_repeat_record(prompt, now)
-        self.on_proactive(prompt)
+        self._speak(prompt, source_key)
 
     def mark_conversation(self, user_reply: bool = False):
         """标记对话发生。
@@ -612,7 +683,7 @@ class ProactiveScheduler:
                 "Proactive intent triggered: scenario=%s intent=%s conf=%.2f %s",
                 scenario, intent.get("intent"), confidence, intent.get("reason"),
             )
-            self.on_proactive(prompt)
+            self._speak(prompt, scenario)
             return prompt
         except Exception as e:
             logger.debug("Proactive intent failed (fallback to rules): %s", e)
@@ -690,7 +761,7 @@ class ProactiveScheduler:
                         "Proactive recall triggered: scene=%s category=%s scenario=%s",
                         scene.scene_id, category, scenario,
                     )
-                    self.on_proactive(text)
+                    self._speak(text, scene.scene_id)
                     return text
                 return None
             # E 联想：回忆未命中且开关开启 → 标签交集联想
@@ -725,7 +796,7 @@ class ProactiveScheduler:
                             "Proactive associate triggered: from=%s to=%s",
                             scene.scene_id, category,
                         )
-                        self.on_proactive(text)
+                        self._speak(text, scene.scene_id)
                         return text
         except Exception as e:
             logger.debug("Proactive recall failed: %s", e)
@@ -865,6 +936,6 @@ class ProactiveScheduler:
                             "Proactive triggered: idle=%ds fg=%s act=%s w=%.2f rule='%s'",
                             int(conversation_idle), category, activity, weight, prompt,
                         )
-                        self.on_proactive(prompt)
+                        self._speak(prompt, prompt)
                         return prompt
         return None

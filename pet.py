@@ -1591,6 +1591,27 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             logger.warning("打开桌宠总览失败: %s", e)
             self._show_bubble("总览面板打开失败", emotion="sad")
 
+    def _ban_last_proactive_topic(self):
+        """禁言最近一次主动说话的话题类型（24h）。
+
+        消费 core/usage_memory.py：写入 explicit_ban 后，
+        ProactiveScheduler._speak 会在同一内容键上拦截 24h。
+        """
+        sched = getattr(self, "_proactive", None)
+        if sched is None:
+            self._show_bubble("主动对话未启用", emotion="neutral")
+            return
+        try:
+            key = sched.ban_last_content(hours=24.0)
+        except Exception as e:
+            logger.warning("内容禁言失败: %s", e)
+            self._show_bubble("禁言没成功", emotion="sad")
+            return
+        if key:
+            self._show_bubble("好，这类话题我 24 小时内不提了", emotion="neutral")
+        else:
+            self._show_bubble("还没说过什么，先记下这条规则也行", emotion="neutral")
+
     # ── 屏幕查询 ──
 
     def _current_screen_geometry(self):
@@ -2295,6 +2316,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             self._manage_menu.addAction("🐾 桌宠总览", self._open_pet_overview)
         # M4: 新建对话入口（仅在 Hanako WS 模式下有意义）
         self._new_session_action = self._manage_menu.addAction("🔄 新对话", self._create_new_session)
+        # 2026-09-10: 内容禁言——禁掉最近一次主动说话的话题类型（24h）
+        # 消费 core/usage_memory.py；不注入时 ProactiveScheduler 自理惰性单例
+        self._ban_topic_action = self._manage_menu.addAction("🙊 别再说这类", self._ban_last_proactive_topic)
         # 注：不再提供全局“切换助手”菜单——助手绑定已 per-pet 化
         # （每个桌宠在设置面板独立配置，见“桌宠独立配置”组）
         # 全局切换会破坏各桌宠自己的绑定，故移除。
