@@ -229,6 +229,31 @@ def main():
     except Exception as _e:
         logging.getLogger(__name__).warning("写入业务就绪哨兵失败（不影响运行）: %s", _e)
 
+    # ── 主线程存活心跳（供 launcher 看门狗检测 GUI 卡死）──
+    # Qt 计时器跑在主线程事件循环；主线程一旦卡死（如 Live2D WebView stall），
+    # 计时器不再触发 → 心跳文件停止更新 → launcher 判定 hang 并强杀子进程触发自动复活。
+    # 必须在 app.exec() 之前创建并 start；父对象设为 app 防止被 Python GC 误回收。
+    try:
+        from PySide6.QtCore import QTimer as _QTimer
+        import time as _hbtime
+        from pathlib import Path as _HbPath
+        _hb_path = _HbPath(__file__).resolve().parent / "logs" / f"heartbeat_{os.getpid()}.txt"
+        _hb_timer = _QTimer(app)
+        _hb_timer.setInterval(5000)
+
+        def _write_heartbeat():
+            try:
+                _hb_path.write_text(_hbtime.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+            except Exception:
+                pass
+
+        _hb_timer.timeout.connect(_write_heartbeat)
+        _hb_timer.start()
+        _write_heartbeat()
+        logging.getLogger(__name__).info("主线程心跳已启动: %s", _hb_path)
+    except Exception as _hb_e:
+        logging.getLogger(__name__).warning("主线程心跳启动失败（不影响运行）: %s", _hb_e)
+
     rc = app.exec()
     # 退出前 flush 防抖写盘，避免丢失最后一次位置保存
     try:

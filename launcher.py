@@ -45,6 +45,10 @@ RESTART_WINDOW = 600.0       # 重启计数时间窗（秒，默认 10 分钟）
 HEALTHY_UPTIME = 30.0        # 收到就绪哨兵后运行超过此秒数视为健康，重置重启计数
 READY_TIMEOUT = 120.0        # 子进程业务就绪超时（秒）：import/初始化超过此时间视为启动失败，kill
 READY_POLL_INTERVAL = 0.5    # 就绪哨兵轮询间隔（秒）
+# 真卡死是永久性的，超时放宽不影响检测效果，但能避免误杀健康进程。
+# 实测启动期主线程忙（模型 fit/绘图）会延迟 Qt 计时器约 25s，故阈值取 90s 留足余量。
+HEARTBEAT_TIMEOUT = 90.0      # 心跳超过此秒数未更新 → 判定主线程卡死（GUI hang）
+HEARTBEAT_POLL_INTERVAL = 3.0 # 看门狗轮询心跳间隔（秒）；需远小于 HEARTBEAT_TIMEOUT
 
 
 def _ready_flag_path(pid: int) -> Path:
@@ -60,6 +64,67 @@ def _remove_ready_flag(pid: int) -> None:
             flag.unlink()
     except Exception:
         log.debug("launcher: 非致命异常(已静默吞掉)", exc_info=True)
+
+
+def _heartbeat_path(pid: int) -> Path:
+    """子进程主线程心跳文件路径：logs/heartbeat_<pid>.txt（由 main.py 周期更新）。"""
+    return HERE / "logs" / f"heartbeat_{pid}.txt"
+
+
+def _remove_heartbeat(pid: int) -> None:
+    """删除心跳文件（子进程退出后兜底清理，防残留）。"""
+    try:
+        p = _heartbeat_path(pid)
+        if p.exists():
+            p.unlink()
+    except Exception:
+        log.debug("launcher: 非致命异常(已静默吞掉)", exc_info=True)
+
+
+def _watchdog_wait(child, child_pid: int, ready_time: "float | None") -> bool:
+    """主线程存活看门狗：阻塞到子进程退出，返回是否因「判定卡死」而强杀。
+
+    为什么需要：launcher 原本只在子进程**异常退出**时自动复活；但 GUI 主线程卡死
+    （如 Live2D WebView stall）时进程并不退出，看门狗永远等不到退出事件 —— 桌宠
+    就永久假死在桌面上，只能人工干预。本函数补齐「卡死」这一半。
+
+    原理：子进程 main.py 用主线程 Qt 计时器每 ~5s 更新心跳文件；主线程一旦冻结，
+    计时器不再触发、心跳停止更新。此处若超过 HEARTBEAT_TIMEOUT 未更新即判定卡死。
+
+    防误杀三道保险：
+      1) 仅在子进程曾发出业务就绪哨兵（ready_time 非 None）后启用 —— 启动期导入
+         重型依赖/模型 fit 可能很久，且那时心跳尚未开始；
+      2) 心跳文件尚不存在时（子进程还没跑到心跳初始化）不计时，只重置基准；
+      3) HEARTBEAT_TIMEOUT 取 90s 而非 45s —— 实测启动期主线程忙会延迟 Qt 计时器
+         约 25s，阈值太小会把"正在忙"误判成"已卡死"。真卡死是永久性的，放宽无损。
+
+    抽成独立函数是为了可测：真实起一个「写完心跳就挂起」的子进程即可验证。
+    """
+    last_beat = time.time()
+    while child.poll() is None:
+        if ready_time is not None:
+            try:
+                hb = _heartbeat_path(child_pid)
+                if hb.exists():
+                    mtime = hb.stat().st_mtime
+                    if mtime > last_beat:
+                        last_beat = mtime
+                    elif time.time() - last_beat > HEARTBEAT_TIMEOUT:
+                        log.critical(
+                            "子进程主线程疑似卡死（心跳停滞 %ds，最后心跳 %s），"
+                            "强制终止以触发自动复活",
+                            int(time.time() - last_beat),
+                            time.strftime("%H:%M:%S", time.localtime(last_beat)),
+                        )
+                        child.kill()
+                        return True
+                else:
+                    # 心跳文件尚未创建：不计时，避免把"还没开始心跳"误判成"心跳停了"
+                    last_beat = time.time()
+            except Exception:
+                log.debug("launcher: 非致命异常(已静默吞掉)", exc_info=True)
+        time.sleep(HEARTBEAT_POLL_INTERVAL)
+    return False
 
 
 def _latest_crash_dump() -> "Path | None":
@@ -118,6 +183,7 @@ def main() -> int:
         if child is not None:
             try:
                 _remove_ready_flag(child.pid)
+                _remove_heartbeat(child.pid)
             except Exception:
                 log.debug("launcher: 非致命异常(已静默吞掉)", exc_info=True)
         sys.exit(0)
@@ -172,9 +238,16 @@ def main() -> int:
                 break
             time.sleep(READY_POLL_INTERVAL)
 
+        # ── 主线程存活看门狗：检测 GUI 卡死（进程未退出但事件循环冻结）──
+        # 子进程 main.py 每 ~5s 更新一次心跳文件（logs/heartbeat_<pid>.txt）；
+        # 若超过 HEARTBEAT_TIMEOUT 未更新，判定主线程卡死（如 Live2D WebView stall），
+        # 强杀子进程以触发下方的自动复活。仅在该子进程曾发出业务就绪哨兵后启用，
+        # 避免误杀启动期的慢加载（导入重型依赖可能 30s+）。
+        _watchdog_wait(child, child_pid, ready_time)
         exit_code = child.wait()
-        # 清理就绪哨兵（收到哨兵时已删一次；这里兜底防残留）
+        # 清理就绪哨兵与心跳文件（收到哨兵/心跳时已删一次；这里兜底防残留）
         _remove_ready_flag(child_pid)
+        _remove_heartbeat(child_pid)
         if stopping:
             break
 
