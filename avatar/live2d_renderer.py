@@ -1146,50 +1146,70 @@ class Live2DRenderer(AvatarRenderer):
         dt = min(now - getattr(self, "_frame_last_t", now), 0.1)
         self._frame_last_t = now
 
-        try:
-            mm.Update(dt)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
-        try:
-            mm.LoadParameters()
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
-        motion_updated = False
-        try:
-            motion_updated = bool(mm.UpdateMotion(dt))
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        # 帧内各步骤：单个失败不拖垮其余步骤，但绝不静默。
+        # 2026-09-10 修：原为 10 个独立 try/except + logger.debug。
+        # 生产日志级别 INFO 下 → 每秒最多 600 次静默失败，用户看到的是
+        # 「模型还在画，但不动了」——最难排查的一种失败形态。
+        self._frame_step("Update", mm.Update, dt)
+        self._frame_step("LoadParameters", mm.LoadParameters)
+        motion_updated = bool(self._frame_step("UpdateMotion", mm.UpdateMotion, dt))
         if not motion_updated:
-            try:
-                mm.UpdateBlink(dt)
-            except Exception:
-                logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
-        try:
-            mm.UpdateExpression(dt)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+            self._frame_step("UpdateBlink", mm.UpdateBlink, dt)
+        self._frame_step("UpdateExpression", mm.UpdateExpression, dt)
         # 水印抑制：模型自带 Param137(水印) 表情默认开，表情更新后强制置 0
-        self._suppress_watermark(mm)
+        self._frame_step("SuppressWatermark", self._suppress_watermark, mm)
+        self._frame_step("UpdateDrag", mm.UpdateDrag, dt)
+        self._frame_step("UpdateBreath", mm.UpdateBreath, dt)
+        self._frame_step("UpdatePhysics", mm.UpdatePhysics, dt)
+        self._frame_step("UpdatePose", mm.UpdatePose, dt)
+        self._frame_step("SaveParameters", mm.SaveParameters)
+
+    def _note_frame_failure(self, name: str, e: Exception) -> None:
+        """记一次帧内失败（去重 + 置降级状态）。
+
+        帧内失败的处理原则（2026-09-10）：
+          不静默（用户能看到「模型画着但不动」，日志却一无所有）
+          不刷屏（60fps 下逐帧记日志会爆）
+          可查询（frame_degraded / frame_failed_steps）
+        所以同名只报一次，恢复时再报一次。
+        """
+        failed = getattr(self, "_frame_failed_steps", None)
+        if failed is None:
+            failed = self._frame_failed_steps = set()
+        if name not in failed:
+            failed.add(name)
+            logger.warning(
+                "Live2DRenderer: %s 失败，已降级（同类失败后续静音，恢复时会再报）: %s",
+                name, e,
+            )
+        self._frame_degraded = True
+
+    def _frame_step(self, name: str, fn, *args):
+        """执行一个帧渲染步骤。失败 → 记一次 warning + 进降级状态，不中断其余步骤。
+
+        失败状态可查：`frame_degraded` / `frame_failed_steps()`。
+        """
         try:
-            mm.UpdateDrag(dt)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
-        try:
-            mm.UpdateBreath(dt)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
-        try:
-            mm.UpdatePhysics(dt)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
-        try:
-            mm.UpdatePose(dt)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
-        try:
-            mm.SaveParameters()
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+            result = fn(*args)
+        except Exception as e:
+            self._note_frame_failure(name, e)
+            return None
+        failed = getattr(self, "_frame_failed_steps", None)
+        if failed and name in failed:
+            failed.discard(name)
+            logger.info("Live2DRenderer: 帧步骤 %s 已恢复", name)
+            if not failed:
+                self._frame_degraded = False
+        return result
+
+    @property
+    def frame_degraded(self) -> bool:
+        """帧管线是否处于降级状态（有步骤持续失败）。供诊断 / UI 查询。"""
+        return bool(getattr(self, "_frame_degraded", False))
+
+    def frame_failed_steps(self) -> list[str]:
+        """当前持续失败的帧步骤名（空 = 全部正常）。"""
+        return sorted(getattr(self, "_frame_failed_steps", set()))
 
     # ── 内部：参数驱动 ──
 
@@ -1254,8 +1274,9 @@ class Live2DRenderer(AvatarRenderer):
         for i in idxs:
             try:
                 target.SetPartOpacity(i, 0.0)
-            except Exception:
-                logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+            except Exception as e:
+                # 失败 = 模型作者版权水印直接显在屏幕上，用户能看到
+                self._note_frame_failure("SuppressWatermarkPart", e)
 
     def _update_gaze_params(self) -> None:
         if not self._model:
@@ -1274,8 +1295,9 @@ class Live2DRenderer(AvatarRenderer):
             self._model.SetParameterValue(P.ParamAngleY, self._gaze_cur_angle_y, 1.0)
             self._model.SetParameterValue(P.ParamEyeBallX, self._gaze_cur_ball_x, 1.0)
             self._model.SetParameterValue(P.ParamEyeBallY, self._gaze_cur_ball_y, 1.0)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            # 失败 = 视觉不跟随鼠标，用户 100% 能感知，不能静默
+            self._note_frame_failure("GazeParams", e)
 
     def _update_mouth(self) -> None:
         if not self._model:
@@ -1289,8 +1311,9 @@ class Live2DRenderer(AvatarRenderer):
             val = 0.0
         try:
             self._model.SetParameterValue(P.ParamMouthOpenY, val, 1.0)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            # 失败 = 说话时嘴不动（TTS 同步的核心），用户 100% 能看见
+            self._note_frame_failure("MouthOpen", e)
 
     # ── P4/P2-6: 程序化自主动作层（让 Live2D 真正"活"，不依赖 motion 文件）──
 
@@ -1449,21 +1472,21 @@ class Live2DRenderer(AvatarRenderer):
                     _ev = max(0.0, min(1.0, float(_fast["eye_open"])))
                     self._model.SetParameterValue(P.ParamEyeLOpen, _ev, 0.9)
                     self._model.SetParameterValue(P.ParamEyeROpen, _ev, 0.9)
-                except Exception:
-                    logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+                except Exception as e:
+                    self._note_frame_failure("ProceduralEyeOpen", e)
             # 单眼眨眼（wink）：左右眼分开写，保留另一只眼的情绪开合
             if _fast.get("eye_open_l") is not None:
                 try:
                     _ev = max(0.0, min(1.0, float(_fast["eye_open_l"])))
                     self._model.SetParameterValue(P.ParamEyeLOpen, _ev, 0.9)
-                except Exception:
-                    logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+                except Exception as e:
+                    self._note_frame_failure("ProceduralEyeOpenL", e)
             if _fast.get("eye_open_r") is not None:
                 try:
                     _ev = max(0.0, min(1.0, float(_fast["eye_open_r"])))
                     self._model.SetParameterValue(P.ParamEyeROpen, _ev, 0.9)
-                except Exception:
-                    logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+                except Exception as e:
+                    self._note_frame_failure("ProceduralEyeOpenR", e)
             # 写入结构化动作意图参数目标（已在上方按 alpha 平滑到 _param_cur）
             _intent_cur = getattr(self, "_param_cur", None) or {}
             for _name, _val in _intent_cur.items():
@@ -1475,10 +1498,10 @@ class Live2DRenderer(AvatarRenderer):
                     if _pid not in self._PARAM_WHITE_LIST:
                         continue
                     self._model.SetParameterValue(_pid, float(_val), 1.0)
-                except Exception:
-                    logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+                except Exception as e:
+                    self._note_frame_failure("IntentParams", e)
+        except Exception as e:
+            self._note_frame_failure("ProceduralEmotion", e)
 
     # ── 动作优化层：idle 微摆动 / 动作叠加 / 表情序列 ──
 
@@ -1525,13 +1548,13 @@ class Live2DRenderer(AvatarRenderer):
         try:
             self._model.SetParameterValue(P.ParamAngleX, head_x, 0.25)
             self._model.SetParameterValue(P.ParamAngleY, head_y, 0.25)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            self._note_frame_failure("IdleSwayHead", e)
         try:
             self._model.SetParameterValue(P.ParamEyeBallX, ball_x, 0.2)
             self._model.SetParameterValue(P.ParamEyeBallY, ball_y, 0.2)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            self._note_frame_failure("IdleSwayGaze", e)
 
     def _randomize_idle_sway(self) -> None:
         """重新随机 idle 摆动参数（相位/幅度/频率），避免机械循环感。"""
@@ -1710,19 +1733,19 @@ class Live2DRenderer(AvatarRenderer):
             try:
                 self._model.SetParameterValue(cheek_param, blush * 0.6, 0.6)
                 return
-            except Exception:
-                logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+            except Exception as e:
+                self._note_frame_failure("BlushCheek", e)
         # 2) 组合模拟：眯眼 + 眉毛形态微弯（害羞/脸颊微鼓的观感）
         try:
             self._model.SetParameterValue(P.ParamEyeLSmile, blush * 0.25, 0.5)
             self._model.SetParameterValue(P.ParamEyeRSmile, blush * 0.25, 0.5)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            self._note_frame_failure("BlushEyes", e)
         try:
             self._model.SetParameterValue(P.ParamBrowLForm, blush * 0.15, 0.5)
             self._model.SetParameterValue(P.ParamBrowRForm, blush * 0.15, 0.5)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            self._note_frame_failure("BlushBrow", e)
 
     def _note_motion_started(self, fname: str = "", is_idle: bool = False) -> None:
         """记录当前 motion 是否常态 idle 并重置计时（卡手势超时兜底用）。
@@ -1812,7 +1835,8 @@ class Live2DRenderer(AvatarRenderer):
                     )
                     return
         except Exception as e:
-            logger.debug("Live2DRenderer: 自动表情序列失败（继续随机 motion）: %s", e)
+            # 自动表情序列失败：原本只 debug —— 用户会看到「长时间不动」
+            self._note_frame_failure("AutoEmotionSequence", e)
         # 到点：选一个非 idle 的 motion；按 pet.json 配置的 weight 加权随机。
         # P8 权重机制：weight=0（如 touch 交互专属 / idle）不参与自动播放；
         # 未配置 weight 的动作默认 1.0。每个模型在 pet.json 的 animations 块配。
@@ -1859,7 +1883,7 @@ class Live2DRenderer(AvatarRenderer):
                 chosen, self._motion_files[chosen],
             )
         except Exception as e:
-            logger.debug("Live2DRenderer: 自动随机动作启动失败: %s", e)
+            self._note_frame_failure("AutoRandomMotion", e)
         # 安排下一次（30~80s 随机区间）
         try:
             self._auto_motion_next_at = now + random.uniform(
@@ -2123,21 +2147,17 @@ class Live2DRenderer(AvatarRenderer):
             prio = priority if priority is not None else self._live2d.MotionPriority.NORMAL
             if exclusive and self._model:
                 # 关键：彻底清场，避免新旧动作/表情叠加
+                # （2026-09-10: 原为 StopAllMotions 连调两次的重复块，去重）
                 try:
                     if hasattr(self._model, "StopAllMotions"):
                         self._model.StopAllMotions()
-                except Exception:
-                    logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
-                try:
-                    if hasattr(self._model, "StopAllMotions"):
-                        self._model.StopAllMotions()
-                except Exception:
-                    logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+                except Exception as e:
+                    self._note_frame_failure("StopAllMotions", e)
                 try:
                     if hasattr(self._model, "ResetExpressions"):
                         self._model.ResetExpressions()
-                except Exception:
-                    logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+                except Exception as e:
+                    self._note_frame_failure("ResetExpressions", e)
                 self._expression_active = False
                 self._last_expression = ""
             self._model.StartMotion(self._motion_group_name, idx, prio)
@@ -2264,8 +2284,8 @@ class Live2DRenderer(AvatarRenderer):
                 # P2-10: 无条件重置，彻底清除贴图表情，不依赖簿记状态
                 try:
                     self._model.ResetExpressions()
-                except Exception:
-                    logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+                except Exception as e:
+                    self._note_frame_failure("ApplyExpressionReset", e)
                 self._expression_active = False
                 self._last_expression = ""
                 return
@@ -2318,8 +2338,9 @@ class Live2DRenderer(AvatarRenderer):
         if now - self._expression_set_at > self.GESTURE_TIMEOUT:
             try:
                 self._model.ResetExpressions()
-            except Exception:
-                logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+            except Exception as e:
+                # 失败 = 表情卡住不回落，与「已重置」的日志矛盾
+                self._note_frame_failure("ExpireExpression", e)
             self._expression_active = False
             self._expression_suppress_until = now + self.GESTURE_TIMEOUT
             logger.info("Live2DRenderer: 表情超时(%ds)，已自动重置回默认，%s 秒冷却",
@@ -2398,19 +2419,20 @@ class Live2DRenderer(AvatarRenderer):
                         if hasattr(self._model, "StopAllMotions"):
                             try:
                                 self._model.StopAllMotions()
-                            except Exception:
-                                logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+                            except Exception as e:
+                                self._note_frame_failure("EmotionStopMotions", e)
                         if hasattr(self._model, "ResetExpressions"):
                             try:
                                 self._model.ResetExpressions()
-                            except Exception:
-                                logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+                            except Exception as e:
+                                self._note_frame_failure("EmotionResetExpressions", e)
                     self._expression_active = False
                     self._last_expression = ""
                     self._model.StartRandomMotion(motion, self._live2d.MotionPriority.FORCE)
                     motion_played = True
-                except Exception:
-                    logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+                except Exception as e:
+                    # 切情绪但动作没换 —— 用户能看出「表情变了动作没变」
+                    self._note_frame_failure("EmotionMotion", e)
         # 记录该情绪 motion 的播放时间，用于 emotion 级冷却
         if motion_played:
             self._emotion_motion_cooldown[emotion] = time.monotonic()
@@ -2555,12 +2577,13 @@ class Live2DRenderer(AvatarRenderer):
                 anim = (EXPRESSION_MAP.get(g) or (None,))[0] or "idle"
                 self.play_anim(anim, emotion=g)
                 return
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            self._note_frame_failure("GestureExpressionMap", e)
         try:
             self.play_anim(g)
-        except Exception:
-            logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            # 失败 = 用户点击/触发手势，桌宠毫无反应
+            self._note_frame_failure("GesturePlayAnim", e)
 
     # ── 视线 ──
 
