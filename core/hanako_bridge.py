@@ -252,9 +252,28 @@ class IncomingWatcher(threading.Thread):
         self.on_incoming = on_incoming
         self._stop = threading.Event()
         self._watermark: dict[str, Optional[datetime]] = {}   # sessionKey -> 最新已见 ts
+        self._file_stamp: dict[str, tuple] = {}               # sessionKey -> (size, mtime) 变更检测
         self._seen: set[str] = set()
         self._hour_bucket: list[float] = []
         self._primed = False
+
+    @staticmethod
+    def _session_stamp(session: dict):
+        """会话 jsonl 的 (size, mtime)：廉价的变更检测信号。
+
+        实测 `/messages` 端点**忽略 limit/after/since 所有参数**，永远返回整段会话
+        （某 QQ 会话一次 690 KB），所以每次轮询都去拉是白白烧 CPU。
+        会话的实时落盘文件就在 sessions[].sessionPath，先 stat 一下：
+        文件没变 → 连请求都不发，直接跳过。拿不到路径就退化成每次都拉。
+        """
+        path = session.get("sessionPath") or ""
+        if not path:
+            return None
+        try:
+            st = os.stat(path)
+            return (st.st_size, int(st.st_mtime))
+        except OSError:
+            return None
 
     # ---- 限流 ----
     def _within_budget(self) -> bool:
@@ -305,6 +324,10 @@ class IncomingWatcher(threading.Thread):
             key = s.get("sessionKey") or ""
             if not key:
                 continue
+            # 文件没动过 -> 直接跳过（该端点忽略 limit，稳态下没必要反复拉整段会话）
+            stamp = self._session_stamp(s)
+            if stamp is not None and self._file_stamp.get(key) == stamp:
+                continue
             mres = self.client.messages(agent, key, int(self.cfg.get("message_limit", 20)))
             if not mres:
                 continue
@@ -341,6 +364,8 @@ class IncomingWatcher(threading.Thread):
             if newest is not None:
                 prev = self._watermark.get(key)
                 self._watermark[key] = newest if prev is None or newest > prev else prev
+            if stamp is not None:
+                self._file_stamp[key] = stamp
 
         if not self._primed:
             self._primed = True
