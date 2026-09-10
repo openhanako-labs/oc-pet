@@ -2,6 +2,44 @@
 
 所有重要变更都会记录在此文件中。
 
+## [未发布] - 2026-09-10
+
+### 移除（零引用模块）
+
+以下模块在全部 388 个 commit 中**从未有过调用方**（`git log -S` 核实），且绝大多数本身即为临时产物或架构错配。详见 `docs/review-2026-09-10/`。
+
+```
+core/plugin_kv.py                  # 插件级 KV 存储 —— 架构错配：插件走 Node subprocess，无法消费 Python 侧 KV
+tts_provider/register_speakers.py  # 一次性运维脚本，与 quick_register 重复
+tts_provider/quick_register.py     # 同上，且硬编码本机绝对路径
+test_auto_supplement.py            # 假测试：抄生产逻辑副本测副本，生产改动不会使其失败
+```
+
+### 接线（已实现 → 已生效）
+
+```
+core/backup_service.py    # 366 行 → 补 __main__ 入口 + 设置面板按钮
+core/usage_memory.py      # 215 行 → 接气泡 dismiss 事件 + 主动对话查询
+core/memory_filter.py     # 125 行 → 接记忆注入点（事实类过滤 + 引用日期明示）
+core/startup_check.py     # 242 行 → 接 launcher 就绪后自检
+```
+
+### 修复（静默异常，四条高危路径）
+
+将 INFO 级别下不可见的 `log.debug` 提为 `warning` 或显式降级状态，覆盖 TTS / Live2D / 感知 / 音频。验收口径：**不是「有没有日志」，而是「INFO 下看不看得见 + 失败是否变成可查询状态」**。
+
+### 新增
+
+```
+docs/review-2026-09-10/    # 评审产物（本目录按内部文档规则不入库，此处仅作索引）
+```
+
+### 依赖
+
+- `requirements.txt`：移除 `portalocker`（全仓零引用，死声明）
+
+---
+
 ## [0.9.0] - 2026-09-06
 
 ### 新增功能（17 项）
@@ -52,10 +90,10 @@ core/motion_slot.py                         # 动作槽位自动映射
 core/service_health.py                      # 子服务健康四态
 core/usage_tracker.py                       # Token/费用统计
 core/memory_write_buffer.py                 # 记忆写入优化
-core/plugin_kv.py                           # 插件级 KV 存储
+core/plugin_kv.py                           # 插件级 KV 存储  ← 已于 2026-09-10 移除（架构错配，插件走 Node）
 core/autonomy_panel.py                      # 主动能力面板
-core/backup_service.py                      # 备份恢复服务
-core/memory_maintenance.py                  # 记忆自动维护
+core/backup_service.py                      # 备份恢复服务  ← 已于 2026-09-10 接线生效
+core/memory_maintenance.py                  # 记忆自动维护  ← 已于 2026-09-09 移除（零引用死代码）
 scripts/embedded_python_bootstrap.py        # 嵌入式 Python 引导
 setup-runtime.bat                           # 双击启动脚本
 version.py                                  # 版本信息
