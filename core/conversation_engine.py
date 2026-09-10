@@ -191,6 +191,16 @@ class ConversationEngine:
             _mc_cfg = None
         self.setup_mc_bridge(_mc_cfg)
 
+        # 需求③：Hanako QQ/微信只读桥接（未启用即零副作用）
+        self._hanako_watcher = None
+        try:
+            from config import load_config as _load_config_hb
+            _hb_cfg = _load_config_hb().get("hanako_bridge")
+        except Exception as _e:  # noqa: BLE001
+            logger.debug("读取 hanako_bridge 配置失败：%s", _e)
+            _hb_cfg = None
+        self.setup_hanako_bridge(_hb_cfg)
+
         # P7: 统一工具调度层——显式插件优先，其次静态能力、关键词直达，
         # 未命中兜底 LLM/Hanako 服务端。插件支持 30s 热刷新（新增/删除即生效，无需重启）。
         from .unified_tool_router import UnifiedToolRouter
@@ -304,6 +314,55 @@ class ConversationEngine:
         except Exception as e:  # noqa: BLE001
             logger.warning("mc_bridge 画面窗创建失败（仅日志，能力仍可用）：%s", e)
         return bridge
+
+    # ── 需求③：Hanako QQ/微信只读桥接 ──
+    def _hb_on_incoming(self, items: list) -> None:
+        """收到新消息 → 交给 LLM 生成一句提醒，走 proactive 通道让桌宠说出来。
+
+        之所以给 LLM 而不是硬编码模板：桌宠的口吻本来就由提示词决定，硬模板会串味。
+        顺带把多条合并成一次提醒，避免连续刷屏。
+        """
+        lines = []
+        for it in items[:3]:
+            plat_raw = str(it.get("platform") or "").lower()
+            plat = {"qq": "QQ", "wechat": "微信"}.get(plat_raw, plat_raw or "消息")
+            who = str(it.get("from") or "某人")
+            content = str(it.get("content") or "").strip()
+            if not content and it.get("has_media"):
+                content = "[图片/文件]"
+            if len(content) > 120:
+                content = content[:120] + "…"
+            lines.append(f"[{plat}] {who}：{content}")
+        if not lines:
+            return
+        prompt = (
+            "（这是 Hanako 桥接转发来的消息提醒，不是我正在跟你说话。）\n"
+            + "\n".join(lines)
+            + "\n请用一句简短自然的话提醒我有新消息，不要复述过长。"
+        )
+        try:
+            self.send(prompt, source="proactive")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[hanako_bridge] 投递主动提醒失败：%s", e)
+
+    def setup_hanako_bridge(self, hb_cfg=None):
+        """按给定的 hanako_bridge 配置（重）启只读观察者。可重复调用。"""
+        old = getattr(self, "_hanako_watcher", None)
+        if old is not None:
+            try:
+                old.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._hanako_watcher = None
+        try:
+            from core.hanako_bridge import init_hanako_bridge
+            watcher = init_hanako_bridge(hb_cfg, on_incoming=self._hb_on_incoming)
+        except Exception as e:  # noqa: BLE001
+            self._hanako_watcher = None
+            logger.warning("hanako_bridge 初始化跳过（不可用）：%s", e)
+            return None
+        self._hanako_watcher = watcher
+        return watcher
 
     @property
     def tts_ready(self) -> bool:

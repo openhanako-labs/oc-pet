@@ -2543,8 +2543,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             _engine = getattr(self, "_engine", None)
             if _engine is not None and hasattr(_engine, "setup_mc_bridge"):
                 _engine.setup_mc_bridge(self.config.get("mc"))
+            # 需求③：QQ/微信桥接同理即时生效
+            if _engine is not None and hasattr(_engine, "setup_hanako_bridge"):
+                _engine.setup_hanako_bridge(self.config.get("hanako_bridge"))
         except Exception as e:
-            logger.warning("PetWindow: 应用 Minecraft 配置失败：%s", e)
+            logger.warning("PetWindow: 应用 Minecraft/QQ微信 配置失败：%s", e)
 
     # ── 角色加载 ──
 

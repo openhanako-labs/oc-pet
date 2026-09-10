@@ -930,6 +930,9 @@ class SettingsDialog(QDialog):
         # ── Tab: Minecraft（需求② P4：开关 + transport + HTTP 护栏）──
         self._main_tabs.addTab(self._build_mc_tab(), "🎮 Minecraft")
 
+        # ── Tab: QQ/微信（需求③：Hanako 只读桥接）──
+        self._main_tabs.addTab(self._build_hb_tab(), "💬 QQ/微信")
+
         # .env / agent / 角色包列表在 showEvent 中异步加载
 
         # ── 按钮 ──
@@ -1668,6 +1671,18 @@ class SettingsDialog(QDialog):
                 x.strip() for x in self.mc_allowed_methods.text().replace("，", ",").split(",") if x.strip()
             ]
 
+        # QQ/微信（需求③：只读桥接）
+        if hasattr(self, "hb_enabled"):
+            hbc = c.setdefault("hanako_bridge", {})
+            hbc["enabled"] = self.hb_enabled.isChecked()
+            hbc["agent_id"] = self.hb_agent_id.currentText().strip()
+            hbc["platforms"] = [p for p, cb in (("qq", self.hb_qq), ("wechat", self.hb_wechat))
+                                if cb.isChecked()]
+            hbc["owner_only"] = self.hb_owner_only.isChecked()
+            hbc["max_per_hour"] = self.hb_max_per_hour.value()
+            hbc["poll_interval"] = self.hb_poll_interval.value()
+            hbc["localhost_only"] = self.hb_localhost_only.isChecked()
+
         # 落盘：将内存改动持久化到 config.json（原子写），否则关闭后配置丢失。
         save_config(self._config)
 
@@ -1827,6 +1842,156 @@ class SettingsDialog(QDialog):
                 f"连接失败：{e}\n\n请先在游戏里运行 minecraft-mcp，再回来试。",
             )
 
+    # ── QQ/微信标签页（需求③：Hanako 只读桥接）──
+
+    @staticmethod
+    def _list_hanako_agents() -> list:
+        """列出 ~/.hanako/agents/ 下的 agent 名（本地目录读取，安全）。"""
+        try:
+            import os
+            base = os.path.join(os.path.expanduser("~"), ".hanako", "agents")
+            return sorted(d for d in os.listdir(base)
+                          if os.path.isdir(os.path.join(base, d)))
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _build_hb_tab(self) -> QWidget:
+        """💬 QQ/微信页：只读桥接的开关、目标 agent、平台过滤、节流。"""
+        hb = self._config.get("hanako_bridge") or {}
+        muted = "color: rgb(%s); font-size: 11px;" % rgb(self._ui_theme, "text_muted")
+
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(14)
+
+        hint = QLabel(
+            "订阅 Hanako 已接入的 QQ / 微信消息：来消息时桌宠会提醒你。\n"
+            "⚠️ 只读——Hanako 没有对外开放给第三方的纯文本发送口，所以本功能刻意不能代你回复，"
+            "回复仍请在 Hanako 侧进行。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(muted)
+        lay.addWidget(hint)
+
+        conn = QGroupBox("连接")
+        form = QFormLayout(conn)
+
+        self.hb_enabled = QCheckBox("启用 QQ/微信 消息提醒")
+        self.hb_enabled.setChecked(bool(hb.get("enabled", False)))
+        form.addRow(self.hb_enabled)
+
+        self.hb_agent_id = QComboBox()
+        self.hb_agent_id.setEditable(True)
+        agents = self._list_hanako_agents()
+        if agents:
+            self.hb_agent_id.addItems(agents)
+        cur = str(hb.get("agent_id", "") or "")
+        if cur:
+            if cur not in agents:
+                self.hb_agent_id.addItem(cur)
+            self.hb_agent_id.setCurrentText(cur)
+        self.hb_agent_id.setPlaceholderText("必填：选一个 agent（如 ophelia）")
+        form.addRow("目标 agent", self.hb_agent_id)
+
+        agent_hint = QLabel("必须显式指定：不会自动替你猜，避免读到别人的会话。"
+                            "该 agent 需要在 Hanako 里已经开好 QQ / 微信接入。")
+        agent_hint.setWordWrap(True)
+        agent_hint.setStyleSheet(muted)
+        form.addRow("", agent_hint)
+
+        lay.addWidget(conn)
+
+        scope = QGroupBox("范围")
+        sform = QFormLayout(scope)
+
+        plat_row = QHBoxLayout()
+        plats = [str(x).lower() for x in (hb.get("platforms") or ["qq", "wechat"])]
+        self.hb_qq = QCheckBox("QQ")
+        self.hb_qq.setChecked("qq" in plats)
+        self.hb_wechat = QCheckBox("微信")
+        self.hb_wechat.setChecked("wechat" in plats)
+        plat_row.addWidget(self.hb_qq)
+        plat_row.addWidget(self.hb_wechat)
+        plat_row.addStretch()
+        sform.addRow("平台", plat_row)
+
+        self.hb_owner_only = QCheckBox("只看你自己的会话（建议保持勾选）")
+        self.hb_owner_only.setChecked(bool(hb.get("owner_only", True)))
+        sform.addRow(self.hb_owner_only)
+
+        self.hb_max_per_hour = QSpinBox()
+        self.hb_max_per_hour.setRange(1, 60)
+        self.hb_max_per_hour.setValue(int(hb.get("max_per_hour", 10)))
+        self.hb_max_per_hour.setSuffix(" 次/小时")
+        sform.addRow("提醒上限", self.hb_max_per_hour)
+
+        self.hb_poll_interval = QSpinBox()
+        self.hb_poll_interval.setRange(10, 600)
+        self.hb_poll_interval.setSingleStep(10)
+        self.hb_poll_interval.setValue(int(hb.get("poll_interval", 30)))
+        self.hb_poll_interval.setSuffix(" 秒")
+        sform.addRow("轮询间隔", self.hb_poll_interval)
+
+        self.hb_localhost_only = QCheckBox("只允许连本机 127.0.0.1（建议保持勾选）")
+        self.hb_localhost_only.setChecked(bool(hb.get("localhost_only", True)))
+        sform.addRow(self.hb_localhost_only)
+
+        s_hint = QLabel("Hanako server 默认监听 0.0.0.0 且未开 TLS；强制走本机可以避免把令牌发到内网。"
+                        "取消勾选将使用 server 广告的内网地址，风险自负。")
+        s_hint.setWordWrap(True)
+        s_hint.setStyleSheet(muted)
+        sform.addRow("", s_hint)
+
+        lay.addWidget(scope)
+
+        test_row = QHBoxLayout()
+        test_row.addStretch()
+        self.hb_test_btn = QPushButton("测试连接")
+        self.hb_test_btn.clicked.connect(self._hb_test)
+        test_row.addWidget(self.hb_test_btn)
+        lay.addLayout(test_row)
+        lay.addStretch()
+        return tab
+
+    def _hb_test(self):
+        """就地探一下目标 agent 的 QQ/微信接入状态（用界面当前值，不落盘）。"""
+        aid = self.hb_agent_id.currentText().strip()
+        if not aid:
+            QMessageBox.warning(self, "测试连接", "请先选一个 agent。")
+            return
+        try:
+            from core.hanako_bridge import BridgeClient, ServerInfoLoader
+            client = BridgeClient(
+                ServerInfoLoader(),
+                localhost_only=self.hb_localhost_only.isChecked(),
+            )
+            res = client.status(aid)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "测试连接", f"加载桥接模块失败：{e}")
+            return
+
+        if not res:
+            QMessageBox.critical(
+                self, "测试连接",
+                f"连不上 Hanako server：{res.error}\n\n请确认 Hanako 桌面端正在运行。",
+            )
+            return
+
+        st = res.value or {}
+        lines = [f"agent: {st.get('agentId', aid)}"]
+        for key, label in (("qq", "QQ"), ("wechat", "微信")):
+            d = st.get(key) or {}
+            if not d.get("configured"):
+                state = "未配置"
+            elif not d.get("enabled"):
+                state = "已配置但未启用"
+            else:
+                state = {"connected": "已连接"}.get(d.get("status"), str(d.get("status")))
+            lines.append(f"{label}: {state}")
+        lines.append(f"bridgeReady: {st.get('bridgeReady')}")
+        QMessageBox.information(self, "测试连接", "\n".join(lines))
+
     def _filter_settings(self, text: str):
         """UI优化: 根据搜索文本过滤设置项（隐藏不匹配的标签页）"""
         text = text.lower().strip()
@@ -1840,6 +2005,7 @@ class SettingsDialog(QDialog):
             4: ["主动对话", "proactive", "cooldown", "dnd"],
             5: ["api", "llm", "tts", "asr", "endpoint"],
             6: ["minecraft", "mc", "我的世界", "bot", "bridge", "token", "护栏"],
+            7: ["qq", "微信", "wechat", "消息提醒", "hanako", "桥接", "agent"],
         }
         
         for i in range(self._main_tabs.count()):

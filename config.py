@@ -239,6 +239,19 @@ DEFAULT_CONFIG = {
             "allowed_methods": [],
         },
     },
+    # 需求③：Hanako QQ/微信桥接（只读——收到消息时让桌宠提醒，刻意不提供发送能力。
+    # 实测 server 对外没有第三方可用的纯文本发送口，回复仍由 Hanako 侧完成）。
+    # agent_id 必须显式填，模块不会自动猜别人的 agent。
+    "hanako_bridge": {
+        "enabled": False,
+        "agent_id": "",                  # 必填：~/.hanako/agents/ 下某个 agent（如 ophelia）
+        "platforms": ["qq", "wechat"],
+        "owner_only": True,
+        "max_per_hour": 10,              # 每小时最多提醒几次，防刷屏
+        "poll_interval": 30,             # 轮询间隔（秒）
+        "message_limit": 20,             # 每次拉取条数（用于水位对齐与去重）
+        "localhost_only": True,          # 强制走 127.0.0.1，不用 server-info 广告的内网 IP
+    },
     # P1-5 反重复（语义指纹 + 时间窗去重）：阈值与 N.E.K.O. session_settings 一致，
     # 可在此覆盖；关闭 enabled 后 proactive 仅保留字符串相似去重（旧行为）
     "anti_repeat": {
