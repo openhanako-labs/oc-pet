@@ -98,7 +98,8 @@ def load_focus_settings() -> dict:
             elif key in settings and value is not None:
                 settings[key] = value
     except Exception as exc:  # pragma: no cover - 防御式回退
-        logger.debug("focus 配置读取失败，用默认（enabled=False）: %s", exc)
+        # 失败 = 专注功能静默关闭（enabled=False），用户以为设置不生效
+        logger.warning("focus 配置读取失败，回退默认（enabled=False）: %s", exc)
     return settings
 
 
@@ -400,7 +401,14 @@ class FocusStateMachine:
             try:
                 cb(active, charge, signals)
             except Exception as exc:
-                logger.debug("focus listener 异常: %s", exc)
+                # listener 异常会每 tick 重发，故按回调名去重报警
+                seen = getattr(self, "_listener_err_names", None)
+                if seen is None:
+                    seen = self._listener_err_names = set()
+                name = getattr(cb, "__name__", repr(cb))
+                if name not in seen:
+                    seen.add(name)
+                    logger.warning("focus listener %s 异常（后续同类静音）: %s", name, exc)
 
     # ── 状态更新 ──
 

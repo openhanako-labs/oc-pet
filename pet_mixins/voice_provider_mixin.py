@@ -122,7 +122,8 @@ class VoiceProviderMixin:
             try:
                 engine._voice_resolver = self._resolve_tts_voice
             except Exception as e:
-                logger.debug("voice resolver 挂接失败: %s", e)
+                # 失败 = 角色音色/情绪音色不生效，说话用默认声
+                logger.warning("voice resolver 挂接失败，角色音色将不生效: %s", e)
 
     def _maybe_reload_tts_provider(self):
         """按需重建 TTS provider —— 构造与预热全部在后台线程完成。

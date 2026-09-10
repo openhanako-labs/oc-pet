@@ -590,7 +590,9 @@ class ProactiveScheduler:
             tctx = tp.get_context()
             signals["period"] = tctx.get("period", "other")
             signals["is_weekend"] = tctx.get("is_weekend", False)
-        except Exception:
+        except Exception as e:
+            # 失败 = 时段/周末信号缺失 → 主动对话时机判断退化
+            logger.warning("proactive: 时间感知读取失败，时段信号将退化: %s", e)
             logger.debug("proactive: 非致命异常(已静默吞掉)", exc_info=True)
         if self._foreground_watcher:
             signals["category"] = getattr(self._foreground_watcher, "last_category", "") or "other"
@@ -615,7 +617,8 @@ class ProactiveScheduler:
                         signals["screen_confidence"] = float(raw.get("confidence") or 0.0)
                         signals["screen_propensity"] = raw.get("propensity") or "open"
             except Exception as e:
-                logger.debug("screen scene provider failed: %s", e)
+                # 失败 = 屏幕场景信号缺失；屏幕感知是主动对话的主要输入之一
+                logger.warning("proactive: 屏幕场景 provider 失败，场景信号缺失: %s", e)
         return signals
 
     def _try_intent(self, now: float, signals: dict) -> str | None:
@@ -821,7 +824,8 @@ class ProactiveScheduler:
                         self._speak(text, scene.scene_id)
                         return text
         except Exception as e:
-            logger.debug("Proactive recall failed: %s", e)
+            # 失败 = 记忆召回静默失效（主动对话不再引用记忆），且无任何提示
+            logger.warning("proactive: 记忆召回链路异常，本次不再引用记忆: %s", e)
         return None
 
     def tick(self) -> str | None:

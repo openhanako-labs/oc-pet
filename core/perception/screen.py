@@ -327,8 +327,9 @@ class ScreenPerception:
             hour = int(tctx.get("hour", 12) or 12)
             weekday = int(tctx.get("weekday", 0) or 0)
             is_weekend = bool(tctx.get("is_weekend", False))
-        except Exception:
-            logger.debug("screen: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            # 时间上下文读取失败 → 场景分类退化为通用（影响主动对话时机）
+            logger.warning("screen: 时间上下文读取失败，场景分类将退化: %s", e)
         try:
             return classify_screen_scene(
                 category=activity.category or "other",
@@ -533,8 +534,15 @@ class ScreenPerception:
                     from motion.foreground_watcher import _get_foreground_process_name, _get_foreground_window_title
                     app = _get_foreground_process_name()
                     title = _get_foreground_window_title()
-                except Exception:
+                except Exception as e:
+                    # 失败 = 黑名单与窗口互动失效（截图照常，但判断基础没了）
                     app, title = "", ""
+                    _seen = getattr(self, "_fg_err_reported", None)
+                    if _seen is None:
+                        _seen = self._fg_err_reported = set()
+                    if str(e) not in _seen:
+                        _seen.add(str(e))
+                        logger.warning("screen: 前台窗口信息获取失败，黑名单/窗口互动将失效: %s", e)
                 self._capture_and_analyze(mode="timer", app=app, title=title)
                 self._last_timer_capture = time.time()
                 # 随机化：每次截屏后重新掷下一个间隔，避免固定 120s 的机械感

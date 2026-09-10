@@ -104,7 +104,9 @@ class TTSTtsPlayer:
         """媒体状态变化回调"""
         try:
             from PySide6.QtMultimedia import QMediaPlayer
-        except ImportError:
+        except ImportError as e:
+            # 失败 = 播放状态永远无法判定 → EndOfMedia 回调永不触发 → 口型不会停
+            logger.warning("tts_player: QtMultimedia 不可用，播放状态回调失效: %s", e)
             return
 
         if status == QMediaPlayer.EndOfMedia:
@@ -122,5 +124,7 @@ class TTSTtsPlayer:
             return False
         try:
             return self._player.playbackState() == 1
-        except Exception:
+        except Exception as e:
+            # 失败 = 播放状态恒为 False → 呼叫方判断错（如认为未播放而重复触发）
+            logger.warning("tts_player: playbackState 查询失败: %s", e)
             return False

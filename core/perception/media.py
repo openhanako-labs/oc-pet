@@ -115,8 +115,9 @@ def _read_smtc() -> Optional[MediaInfo]:
                 pid = session.GetProcessId()
                 if pid:
                     info.source = f"pid:{pid}"
-            except Exception:
-                logger.debug("media: 非致命异常(已静默吞掉)", exc_info=True)
+            except Exception as e:
+                # 仅丢失来源应用名，不影响标题/艺术家读取
+                logger.debug("media: GetProcessId 失败（来源应用名缺失）: %s", e)
             
             if info.title or info.artist:
                 return info
@@ -196,7 +197,14 @@ class MediaPerception:
                     self._last_info = None
                 
             except Exception as e:
-                logger.debug("MediaPerception 轮询异常: %s", e)
+                # 失败 = 媒体感知本轮停摆；轮询线程不能死，但也不能无声地一直失败
+                _seen = getattr(self, "_poll_err_reported", None)
+                if _seen is None:
+                    _seen = self._poll_err_reported = set()
+                key = str(e)
+                if key not in _seen:
+                    _seen.add(key)
+                    logger.warning("MediaPerception 轮询异常（同类后续静音）: %s", e)
             
             self._stop_event.wait(self._poll_interval)
     

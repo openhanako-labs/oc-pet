@@ -155,7 +155,9 @@ def provider_valid_voices(provider: str) -> Optional[frozenset]:
         try:
             from .edge_tts import EDGE_VOICES
             return frozenset(EDGE_VOICES)
-        except Exception:
+        except Exception as e:
+            # 失败 = 回退为「不校验音色」→ 传错音色会在合成阶段莫名失败
+            logger.warning("voice_profile: EDGE_VOICES 不可用，edge 音色校验已停用: %s", e)
             return None
     if provider == "mimo":
         return MIMO_KNOWN_VOICES

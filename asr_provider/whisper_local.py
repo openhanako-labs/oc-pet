@@ -39,7 +39,9 @@ class WhisperLocalProvider(ASRProvider):
             from config import load_config
             cfg = load_config()
             return cfg.get("asr", {}).get("model", cls._MODEL_SIZE) or cls._MODEL_SIZE
-        except Exception:
+        except Exception as e:
+            # 失败 = 静默回退默认模型尺寸（配置问题）
+            logger.warning("whisper_local: asr.model 读取失败，回退 %s: %s", cls._MODEL_SIZE, e)
             return cls._MODEL_SIZE
 
     @property
@@ -115,7 +117,9 @@ class WhisperLocalProvider(ASRProvider):
             from config import load_config
             cfg = load_config()
             return (cfg.get("asr", {}).get("backend") or "whisper").lower()
-        except Exception:
+        except Exception as e:
+            # 失败 = 静默回退 whisper 后端（faster-whisper 更轻更快，回退会明显变慢）
+            logger.warning("whisper_local: asr.backend 读取失败，回退 whisper: %s", e)
             return "whisper"
 
     def transcribe(self, audio_path: str, language: str = "zh") -> Optional[str]:
@@ -191,8 +195,9 @@ class WhisperLocalProvider(ASRProvider):
                                 getattr(info, "language", "?"),
                                 getattr(info, "language_probability", 0.0) or 0.0,
                                 avg_lp, no_speech)
-                except Exception:
-                    logger.debug("whisper_local: 非致命异常(已静默吞掉)", exc_info=True)
+                except Exception as e:
+                    # 仅日志行失败，不影响识别结果
+                    logger.debug("whisper_local: 识别统计日志输出失败: %s", e)
             else:
                 # openai-whisper: 直接返回 dict
                 result = WhisperLocalProvider._model.transcribe(

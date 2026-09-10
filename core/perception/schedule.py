@@ -70,18 +70,19 @@ class SchedulePerception:
     def refresh(self) -> None:
         """重读三处数据源，归一化为 _automations 列表。"""
         self._automations = []
-        try:
-            self._automations.extend(self._read_cron_jobs())
-        except Exception as e:
-            logger.debug("Schedule cron refresh failed: %s", e)
-        try:
-            self._automations.extend(self._read_deferred_tasks())
-        except Exception as e:
-            logger.debug("Schedule deferred refresh failed: %s", e)
-        try:
-            self._automations.extend(self._read_plugin_tasks())
-        except Exception as e:
-            logger.debug("Schedule plugin refresh failed: %s", e)
+        # 2026-09-10：三处失败原本均 logger.debug（INFO 不可见）。
+        # 后果 = 日程提醒静默丢失，用户以为没设成功。
+        for name, reader in (
+            ("cron", self._read_cron_jobs),
+            ("deferred", self._read_deferred_tasks),
+            ("plugin", self._read_plugin_tasks),
+        ):
+            try:
+                self._automations.extend(reader())
+            except Exception as e:
+                logger.warning(
+                    "Schedule %s 数据源刷新失败，该类提醒本次不会触发: %s", name, e,
+                )
 
     # ── 数据源 ────────────────────────────────────────────
 

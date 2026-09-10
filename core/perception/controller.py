@@ -455,7 +455,8 @@ class PerceptionController:
             try:
                 self._scan_environment()
             except Exception as e:
-                logger.debug("M2 env scan tick failed: %s", e)
+                # 失败 = 环境扫描停摆（窗口互动/黑名单判断基础缺失）
+                self._note_degraded("env_scan_tick", e)
 
     def _tick_inspection(self):
         """D: 巡检命中 → 回调主动汇报（复用 proactive 触发链路）。
@@ -468,7 +469,8 @@ class PerceptionController:
         try:
             triggers = self._inspection.tick()
         except Exception as e:
-            logger.debug("Inspection tick failed: %s", e)
+            # 失败 = 本次巡检提醒全部不触发
+            self._note_degraded("inspection_tick", e)
             return
         if not triggers or self._inspection_callback is None:
             return
@@ -585,7 +587,7 @@ class PerceptionController:
                     if obs:
                         parts.append(f"[环境观察] {obs}")
             except Exception as e:
-                logger.debug("M2 build_context observation failed: %s", e)
+                self._note_degraded("build_context_observation", e)
 
         # ── 子服务健康状态 ──
         if self._health:
@@ -594,7 +596,7 @@ class PerceptionController:
                 if health_ctx:
                     parts.append(health_ctx)
             except Exception as e:
-                logger.debug("Health build_context failed: %s", e)
+                self._note_degraded("build_context_health", e)
 
         # ── 媒体播放感知（SMTC）──
         if self._media:
@@ -606,7 +608,7 @@ class PerceptionController:
                         media_ctx += f" ({current.album})"
                     parts.append(media_ctx)
             except Exception as e:
-                logger.debug("Media build_context failed: %s", e)
+                self._note_degraded("build_context_media", e)
 
         # ── 手机活动感知 ──
         if self._phone_activity and self._phone_enabled:
@@ -615,7 +617,7 @@ class PerceptionController:
                 if phone_ctx:
                     parts.append(phone_ctx)
             except Exception as e:
-                logger.debug("Phone activity build_context failed: %s", e)
+                self._note_degraded("build_context_phone", e)
 
         return "\n".join(parts) if parts else ""
 

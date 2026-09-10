@@ -45,7 +45,9 @@ def _get_asr_model_name() -> str:
         from config import load_config
         cfg = load_config()
         return cfg.get("asr", {}).get("model", "small") or "small"
-    except Exception:
+    except Exception as e:
+        # 失败 = 静默回退默认模型（配置问题），用户会以为设置没生效
+        logger.warning("voice_input: asr.model 读取失败，回退 small: %s", e)
         return "small"
 
 
@@ -55,7 +57,8 @@ def _asr_language() -> str:
         from config import load_config
         cfg = load_config()
         return cfg.get("asr", {}).get("language", "zh") or "zh"
-    except Exception:
+    except Exception as e:
+        logger.warning("voice_input: asr.language 读取失败，回退 zh: %s", e)
         return "zh"
 
 
@@ -214,8 +217,9 @@ class VoiceInput:
             try:
                 self._stream.stop()
                 self._stream.close()
-            except Exception:
-                logger.debug("voice_input: 非致命异常(已静默吞掉)", exc_info=True)
+            except Exception as e:
+                # 失败 = 录音流可能未真正关闭（麦克风占用），必须可见
+                logger.warning("voice_input: 录音流关闭失败，麦克风可能仍被占用: %s", e)
             self._stream = None
 
         if not self._audio_data:
@@ -300,8 +304,9 @@ class VoiceInput:
             try:
                 self._stream.stop()
                 self._stream.close()
-            except Exception:
-                logger.debug("voice_input: 非致命异常(已静默吞掉)", exc_info=True)
+            except Exception as e:
+                # 失败 = 取消后麦克风可能仍被占用
+                logger.warning("voice_input: 取消时录音流关闭失败: %s", e)
             self._stream = None
         self._audio_data = []
         self._on_status("")

@@ -246,8 +246,9 @@ class ChatMixin:
         if self._engine:
             try:
                 self._engine.interrupt(reason="new_message")
-            except Exception:
-                logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
+            except Exception as e:
+                # 失败 = 旧回复不作废且旧 TTS 不被打断 → 两条声音叠着播
+                logger.warning("新消息到达但引擎打断失败，可能出现重复播报: %s", e)
 
         # 通过对话引擎发送（异步）
         if self._engine:
@@ -295,8 +296,9 @@ class ChatMixin:
         # 立即切换到思考动画（视觉反馈）
         try:
             self._set_anim_seq("working", emotion="thinking", style=get_transition_style("thinking"))
-        except Exception:
-            logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception as e:
+            # 失败 = 发送后无「思考中」动作反馈，用户以为没发出去
+            logger.warning("发送后思考动画切换失败: %s", e)
 
         # 超时保护：30 秒无回复自动恢复
         if not hasattr(self, '_think_timeout'):

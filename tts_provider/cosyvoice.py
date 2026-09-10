@@ -289,10 +289,12 @@ class CosyVoiceProvider(TTSProvider):
                     continue
                 try:
                     self._replies.put(json.loads(line))
-                except Exception:
-                    logger.debug("CosyVoice worker 非 JSON 输出: %s", line[:200])
-        except Exception:
-            logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
+                except Exception as e:
+                    # 失败 = worker 协议异常，不该静默；带原始行便于定位
+                    logger.warning("CosyVoice worker 输出非 JSON（协议异常）: %s | 行: %s", e, line[:200])
+        except Exception as e:
+            # stdout 停止排空 = 管道写满 → worker 卡死 → 合成永久停摆
+            logger.warning("cosyvoice: stdout 排空中断，worker 可能卡死: %s", e)
         finally:
             self._replies.put(None)
 
@@ -402,7 +404,8 @@ class CosyVoiceProvider(TTSProvider):
             if SPEAKER_REFS.exists():
                 self._speaker_refs = json.loads(SPEAKER_REFS.read_text("utf-8"))
         except Exception as e:
-            logger.debug("speaker_refs 读取失败: %s", e)
+            # 失败 = 参考音色缺失，改用默认音色说话（配置/文件问题）
+            logger.warning("speaker_refs 读取失败，将回退默认音色: %s", e)
 
         # 角色→音色映射放在 oc-pet 的 config 里，不去改 cosyvoice-tts
         # 项目共享的 speaker_refs.json（那份还被 CLI 等其他工具使用）。
@@ -413,7 +416,8 @@ class CosyVoiceProvider(TTSProvider):
             from config import load_config
             cfg_map = (load_config().get("tts", {}) or {}).get("voices", {}) or {}
         except Exception as e:
-            logger.debug("tts.voices 读取失败: %s", e)
+            # 失败 = 角色音色映射全丢 → 可能用错音色说话（config 问题）
+            logger.warning("tts.voices 读取失败，角色音色映射将全部失效: %s", e)
         self._voice_map = {**_DEFAULT_VOICE_MAP, **cfg_map}
 
         if not self._spawn():
