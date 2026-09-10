@@ -136,6 +136,62 @@ def test_broken_usage_memory_does_not_block_speaking():
     assert spoken == ["你好呀"], "禁言查询异常时必须放行"
 
 
+# ── 6. 真实 UsageMemory 可构造（防“接好了但构造不出来”）──────────
+
+class TestRealUsageMemoryConstructs:
+    """2026-09-10 发现的真 bug：
+
+    `UsageMemory.__init__` 里 `from config import get_user_data_dir` ——
+    该函数全仓从未定义，导致 **UsageMemory 永远构造失败**（ImportError）。
+
+    而调用方有 graceful 降级（warn + 放行），于是「内容禁言」看似接好了、
+    实际在真环境里从未生效过。
+
+    之前的测试全用 `_FakeUsageMemory`，只验了“接线”，没验“能不能造出来”——
+    这就是漏网处。以下用真实类。
+    """
+
+    def test_constructs_without_missing_config_helper(self, tmp_path):
+        from core.usage_memory import UsageMemory
+
+        # 单例：先清掉可能已存在的实例，才能测真实构造路径
+        UsageMemory._instance = None
+        try:
+            m = UsageMemory(storage_path=str(tmp_path / "um.json"))
+            assert m is not None
+            assert m.is_banned("anything") is False
+        finally:
+            UsageMemory._instance = None
+
+    def test_default_storage_path_is_under_oc_pet(self):
+        """无参构造不得抛异常；路径应落在本仓惯例的 ~/.oc-pet/ 下。"""
+        from pathlib import Path
+
+        from core.usage_memory import UsageMemory
+
+        UsageMemory._instance = None
+        try:
+            m = UsageMemory()
+            assert Path(m._storage_path).parent.name == ".oc-pet"
+        finally:
+            UsageMemory._instance = None
+
+    def test_record_and_ban_roundtrip(self, tmp_path):
+        """真实类上的完整往返：写入 explicit_ban → is_banned 为真。"""
+        from core.usage_memory import UsageMemory
+
+        UsageMemory._instance = None
+        try:
+            m = UsageMemory(storage_path=str(tmp_path / "um.json"))
+            assert m.is_banned("overtime") is False
+
+            m.record_usage("overtime", action="explicit_ban", text="overtime")
+
+            assert m.is_banned("overtime") is True
+        finally:
+            UsageMemory._instance = None
+
+
 # ── 5. 回归锁定：不得有绕过 _speak 的直调 ────────────────────────────
 
 def test_memory_citation_helper_appends_date():

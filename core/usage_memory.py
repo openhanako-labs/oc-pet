@@ -57,9 +57,16 @@ class UsageMemory:
         self._lock = threading.Lock()
         
         # 存储路径
+        # 2026-09-10 修：原为 `from config import get_user_data_dir` ——
+        # 该函数**全仓从未定义**，导致 UsageMemory 永远构造失败（ImportError）。
+        # 而调用方（ProactiveScheduler._get_usage_memory）有 graceful 降级，
+        # 失败时只 warn 并拌过禁言检查——于是「内容禁言」功能看似接好了、
+        # 实际在真环境里从未生效过。
+        #
+        # 回退到本仓惯例路径（与 backup_service.DEFAULT_DATA_DIR 一致）：
+        # `~/.oc-pet/`。
         if storage_path is None:
-            from config import get_user_data_dir
-            storage_path = str(get_user_data_dir() / "usage_memory.json")
+            storage_path = str(Path.home() / ".oc-pet" / "usage_memory.json")
         self._storage_path = storage_path
         
         # 使用记录

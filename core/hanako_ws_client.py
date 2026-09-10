@@ -378,6 +378,33 @@ class HanakoWSClient:
             self._set_state(ConnectionState.STOPPED)
 
     def _fetch_ticket(self) -> str:
+        """获取 WS ticket。
+
+        2026-09-10：403 时重读凭证后重试一次。
+
+        背景：Hanako server 每次重启会换 token（写回 ``~/.hanako/server-info.json``），
+        而本客户端只在**进程启动时**读一次 token（`self._token = token.strip()`，
+        构造后不再刷新）。后果：server 一重启，桌宠就持续 403，
+        重连循环每分钟一次、永不成功，直到用户手动重启桌宠。
+
+        对比：`hana` CLI 不受影响——它每次调用都是新进程，每次重读凭证。
+        这里把同样的“失败则重读”搬到长驻进程里。
+        """
+        ticket, status = self._request_ticket()
+        if status == 403:
+            # 认证被拒：很可能是 server 换过 token。重读一次再试。
+            if self._reload_token():
+                logger.info("WS ticket 403，已重读凭证，重试")
+                ticket, status = self._request_ticket()
+        if status is not None:
+            raise HanakoTicketError(f"ticket request returned HTTP {status}")
+        return ticket
+
+    def _request_ticket(self) -> tuple[str, int | None]:
+        """发一次 ticket 请求。Returns (ticket, http_status)。
+
+        ticket 非空表示成功（status 为 None）；status 非 None 表示失败。
+        """
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
@@ -391,14 +418,32 @@ class HanakoWSClient:
         except requests.RequestException as exc:
             raise HanakoTicketError("ticket request failed") from exc
         if not response.ok:
-            raise HanakoTicketError(f"ticket request returned HTTP {response.status_code}")
+            return "", response.status_code
         try:
             ticket = str(response.json().get("ticket") or "").strip()
         except (TypeError, ValueError) as exc:
             raise HanakoTicketError("ticket response was not JSON") from exc
         if not ticket:
             raise HanakoTicketError("ticket response did not contain a ticket")
-        return ticket
+        return ticket, None
+
+    def _reload_token(self) -> bool:
+        """从 server-info.json 重读 token。
+
+        Returns:
+            True 表示 token 确实变了（调用方可重试）；
+            False 表示读不到或没变（重试也是白搭，不浪费一次请求）。
+        """
+        try:
+            from env_config import get_hanako_config
+            fresh = str(get_hanako_config().get("api_token") or "").strip()
+        except Exception as e:
+            logger.warning("重读 Hanako 凭证失败: %s", e)
+            return False
+        if not fresh or fresh == self._token:
+            return False
+        self._token = fresh
+        return True
 
     def _run_socket(self, ticket: str) -> None:
         ws_url = self._websocket_url(ticket)

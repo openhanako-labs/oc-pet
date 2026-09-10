@@ -60,6 +60,19 @@ def _make_scheduler(foreground_category="writing", activity="idle", conv_idle_mi
     at = MagicMock()
     at.state.state = activity
     sched = ProactiveScheduler(foreground_watcher=fw, on_proactive=lambda t: None, activity_tracker=at)
+    # 中和两个“按时钟小时生效”的门（2026-09-11 修）。
+    #
+    # 截图：本文件的生成类用例在 00:00-08:00 **必挂**，白天全绿。
+    # 原因是 tick() 里有两道夜间门：
+    #   1) `_get_period()` 在 0-8 点返回 "night"，而 night 的干扰预算是 0；
+    #   2) `_is_dnd_active()` 在 0-8 点返回 True。
+    # 两者都会让 tick() 直接 return None，而它们**本身是故意的产品行为**
+    # （深夜不主动搭话），不是 bug。
+    #
+    # 这组用例验的是“生成链路能否投递”，不是时间门，故在此中和——
+    # 否则测试结果会随墙钟变，凌晨重跑回归会把真失败埋进噪声里。
+    sched._get_period = lambda: "evening"
+    sched._is_dnd_active = lambda: False
     sched._last_conversation = time.time() - conv_idle_min * 60
     sched._cooldown_until = 0.0
     if rules is not None:
