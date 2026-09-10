@@ -21,7 +21,7 @@ try:
     if _ffmpeg_dir not in os.environ.get("PATH", ""):
         os.environ["PATH"] = _ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 except Exception:
-    pass
+    logger.debug("whisper_local: 非致命异常(已静默吞掉)", exc_info=True)
 
 
 class WhisperLocalProvider(ASRProvider):
@@ -194,7 +194,7 @@ class WhisperLocalProvider(ASRProvider):
                                 getattr(info, "language_probability", 0.0) or 0.0,
                                 avg_lp, no_speech)
                 except Exception:
-                    pass
+                    logger.debug("whisper_local: 非致命异常(已静默吞掉)", exc_info=True)
             else:
                 # openai-whisper: 直接返回 dict
                 result = WhisperLocalProvider._model.transcribe(

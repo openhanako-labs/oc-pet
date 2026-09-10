@@ -42,7 +42,7 @@ def _resolve_output_dir() -> Path:
     try:
         return Path.home() / ".hanako" / "pets" / "tts_cache"
     except Exception:
-        pass
+        logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
     try:
         import tempfile
         return Path(tempfile.gettempdir()) / "hanako" / "pets" / "tts_cache"
@@ -79,7 +79,7 @@ def _resolve_cosyvoice_dir() -> Path:
         if c:
             return Path(c)
     except Exception:
-        pass
+        logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
 
     adjacent = Path(__file__).resolve().parents[2] / "cosyvoice-tts"
     if adjacent.exists():
@@ -147,7 +147,7 @@ def _resolve_worker_python() -> str:
                for m in ("torch", "soundfile")):
             return sys.executable
     except Exception:
-        pass
+        logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
 
     return _project_venv_python() or sys.executable
 
@@ -292,7 +292,7 @@ class CosyVoiceProvider(TTSProvider):
                 except Exception:
                     logger.debug("CosyVoice worker 非 JSON 输出: %s", line[:200])
         except Exception:
-            pass
+            logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
         finally:
             self._replies.put(None)
 
@@ -314,7 +314,7 @@ class CosyVoiceProvider(TTSProvider):
                 else:
                     logger.debug("[cosyvoice] %s", line[:500])
         except Exception:
-            pass
+            logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _drain_replies(self) -> int:
         """清空响应队列，返回丢弃条数。
@@ -547,11 +547,11 @@ class CosyVoiceProvider(TTSProvider):
                         f.unlink()
                         removed += 1
                 except FileNotFoundError:
-                    pass  # 已被并发/别处删除
+                    logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
             if removed:
                 logger.info("TTS 缓存清理: 删除 %d 个过期 wav", removed)
         except Exception:
-            pass  # 清理失败不影响合成
+            logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
 
     def cleanup(self):
         self._closing = True
@@ -571,5 +571,5 @@ class CosyVoiceProvider(TTSProvider):
                 try:
                     proc.kill()
                 except Exception:
-                    pass
+                    logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
         logger.info("CosyVoice worker 已停止")

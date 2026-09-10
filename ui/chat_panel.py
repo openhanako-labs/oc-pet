@@ -357,7 +357,7 @@ class ChatPanel(QWidget):
         try:
             msg.set_text(full)
         except Exception:
-            pass
+            logger.debug("chat_panel: 非致命异常(已静默吞掉)", exc_info=True)
         self._finish_stream()
 
     def _finish_stream(self) -> None:
@@ -371,7 +371,7 @@ class ChatPanel(QWidget):
             try:
                 msg.set_typewriter_active(False)
             except Exception:
-                pass
+                logger.debug("chat_panel: 非致命异常(已静默吞掉)", exc_info=True)
         self.scroll_to_bottom()
 
     def set_typewriter_speed(self, ms_per_char: int) -> None:
@@ -442,7 +442,7 @@ class ChatPanel(QWidget):
             sb = self._scroll.verticalScrollBar()
             sb.setValue(sb.maximum())
         except Exception:
-            pass
+            logger.debug("chat_panel: 非致命异常(已静默吞掉)", exc_info=True)
 
     @property
     def stick_to_bottom(self) -> bool:

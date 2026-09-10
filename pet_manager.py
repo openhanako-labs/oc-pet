@@ -43,7 +43,7 @@ class PetManager:
             if cfg_path.exists():
                 self._config_mtime = cfg_path.stat().st_mtime
         except Exception:
-            pass
+            logger.debug("pet_manager: 非致命异常(已静默吞掉)", exc_info=True)
         # ── launch 失败兜底：每个 agent 只记一次 ERROR，避免日志刷屏 ──
         self._launch_error_logged: set[str] = set()
         # ── M4: MultiPetBridge ──
@@ -188,7 +188,7 @@ class PetManager:
                 if cfg_path.exists():
                     merged = json.loads(cfg_path.read_text("utf-8"))
             except Exception:
-                pass
+                logger.debug("pet_manager: 非致命异常(已静默吞掉)", exc_info=True)
             # 只覆盖 PetManager 管的字段（agents 等），不碰其他系统字段
             if "agents" in self._config:
                 merged["agents"] = self._config["agents"]
@@ -254,7 +254,7 @@ class PetManager:
                             name = line
                             break
                 except Exception:
-                    pass
+                    logger.debug("pet_manager: 非致命异常(已静默吞掉)", exc_info=True)
 
             has_sprites = self._has_sprites(agent_id)
             discovered.append({
@@ -411,7 +411,7 @@ class PetManager:
             try:
                 self._ws_client.stop(timeout=3)
             except Exception:
-                pass
+                logger.debug("pet_manager: 非致命异常(已静默吞掉)", exc_info=True)
             self._ws_client = None
             self._session_manager = None
 
@@ -545,7 +545,7 @@ class PetManager:
                             )
                 except Exception:
                     # 气泡只是 UX 兜底，绝不能再炸
-                    pass
+                    logger.debug("pet_manager: 非致命异常(已静默吞掉)", exc_info=True)
             # 标记失败 → 任何后续 retry / 自动恢复都跳过（避免定时器反复尝试）
             # 注：PetWindow 内的 QTimer 已随部分构造对象一起 GC，无需手动 stop。
 
@@ -564,7 +564,7 @@ class PetManager:
             try:
                 window.close()
             except Exception:
-                pass
+                logger.debug("pet_manager: 非致命异常(已静默吞掉)", exc_info=True)
 
     def close_all(self):
         """关闭所有桌宠窗口（并停止 bridge）"""

@@ -5,6 +5,9 @@ import sys
 import subprocess
 import time
 from pathlib import Path
+import logging
+logger = logging.getLogger(__name__)
+
 
 # 路径
 _REPO = Path(__file__).parent.parent
@@ -65,7 +68,7 @@ def main():
                 print(f"加载: {resp.get('ok', False)} | speakers: {resp.get('speakers', [])}")
                 break
         except:
-            pass
+            logger.debug("register_speakers: 非致命异常(已静默吞掉)", exc_info=True)
         time.sleep(1)
     
     if not resp.get('ok'):

@@ -16,6 +16,9 @@ from PySide6.QtWidgets import QWidget
 
 from ui.emotion_face import EMOTION_LABEL
 from ui.theme.neko_palette import NEKO_LAYOUT, neko_qcolor, palette
+import logging
+logger = logging.getLogger(__name__)
+
 
 
 # 行定义：(emoji, 名称, 取值键)
@@ -78,7 +81,7 @@ class StatusHUD(QWidget):
                 self._theme = mgr.current
                 mgr.theme_changed.connect(self._on_theme)
         except Exception:
-            pass
+            logger.debug("status_hud: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _on_theme(self, theme: str):
         self._theme = theme
@@ -96,7 +99,7 @@ class StatusHUD(QWidget):
             }
             self.update()
         except Exception:
-            pass
+            logger.debug("status_hud: 非致命异常(已静默吞掉)", exc_info=True)
 
     def set_emotion(self, emotion: str) -> None:
         """设置当前情绪（与头顶情绪脸同步），底部显示文案"""

@@ -57,7 +57,7 @@ class _PydImportTracker:
                     cur = threading.current_thread()
                     self.imported_by[fullname] = (cur.name, cur.ident)
         except Exception:
-            pass
+            log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
         return None  # 永不拦截，交给正常导入机制
 
     @classmethod
@@ -121,7 +121,7 @@ def _collect_once(reason: str) -> str | None:
                             imp_note = "\t(首次 import 线程: 未知/模块启动前已加载)"
                         c_exts.append(f"{name}\t{fn}{imp_note}")
                 except Exception:
-                    pass
+                    log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
             # 也列出可疑的 COM 相关顶层模块是否曾被导入
             com_suspects = [m for m in sys.modules
                             if m.split(".")[0] in
@@ -137,7 +137,7 @@ def _collect_once(reason: str) -> str | None:
             try:
                 frames = sys._current_frames()
             except Exception:
-                pass
+                log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
             threads = []
             for t in threading.enumerate():
                 stack_lines: list[str] = []
@@ -168,7 +168,7 @@ def _collect_once(reason: str) -> str | None:
         try:
             log.error("崩溃收集失败: %s\n%s", e, traceback.format_exc())
         except Exception:
-            pass
+            log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
         return None
 
 
@@ -178,7 +178,7 @@ def install(reason_default: str = "unknown") -> None:
     try:
         atexit.register(lambda: _collect_once("atexit"))
     except Exception:
-        pass
+        log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
 
     # 增强 excepthook：Python 未捕获异常时必跑
     _orig = sys.excepthook
@@ -186,12 +186,12 @@ def install(reason_default: str = "unknown") -> None:
         try:
             _collect_once(f"python_exc:{etype.__name__}")
         except Exception:
-            pass
+            log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
         _orig(etype, exc, tb)
     try:
         sys.excepthook = _hook
     except Exception:
-        pass
+        log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
 
     # 注：faulthandler 的 C 层 dump 时机无法注入 Python 回调，但它会把
     # crash_trace.txt 写到磁盘；C 层崩溃时 atexit 不一定跑，因此我们在
@@ -199,7 +199,7 @@ def install(reason_default: str = "unknown") -> None:
     try:
         _collect_stale_crash()
     except Exception:
-        pass
+        log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
 
 
 def _collect_stale_crash() -> str | None:
@@ -215,5 +215,5 @@ def _collect_stale_crash() -> str | None:
         if age < 30:  # 30s 内视为当前运行期，跳过
             return None
     except Exception:
-        pass
+        log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
     return _collect_once("stale_crash_trace_on_startup")

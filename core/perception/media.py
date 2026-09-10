@@ -116,7 +116,7 @@ def _read_smtc() -> Optional[MediaInfo]:
                 if pid:
                     info.source = f"pid:{pid}"
             except Exception:
-                pass
+                logger.debug("media: 非致命异常(已静默吞掉)", exc_info=True)
             
             if info.title or info.artist:
                 return info

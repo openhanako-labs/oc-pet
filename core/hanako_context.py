@@ -385,7 +385,7 @@ class HanakoContext:
             first = json.loads(lines[0])
             started = first.get("timestamp", "") or first.get("createdAt", "")
         except Exception:
-            pass
+            logger.debug("hanako_context: 非致命异常(已静默吞掉)", exc_info=True)
 
         return {
             "session_id": session_id,
@@ -449,7 +449,7 @@ class HanakoContext:
                     first = json.loads(lines[0])
                     started = first.get("timestamp", "") or first.get("createdAt", "")
                 except Exception:
-                    pass
+                    logger.debug("hanako_context: 非致命异常(已静默吞掉)", exc_info=True)
 
                 results.append({
                     "session_id": f.stem,

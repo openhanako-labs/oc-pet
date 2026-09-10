@@ -86,7 +86,7 @@ class BubbleMixin:
                     except Exception as e:
                         logger.debug("Action from bubble failed: %s", e)
             except Exception:
-                pass
+                logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         
         # 2026-09-06: 添加触发来源标签（调试用）
         if source and source not in ("user", "system"):
@@ -217,7 +217,7 @@ class BubbleMixin:
         try:
             self._menu.popup(self.mapToGlobal(pos))
         except Exception:
-            pass
+            logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     # ── Hanako 状态呈现 ──
 
@@ -244,7 +244,7 @@ class BubbleMixin:
                 try:
                     self._update_status_indicator("celebrating")
                 except Exception:
-                    pass
+                    logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
                 # BugFix #5-E：长任务完成带摘要汇报（tool_end details/summary
                 # 有实质摘要时显示摘要气泡+TTS；否则维持原庆祝动画）
                 summary = self._get_celebration_summary()
@@ -257,14 +257,14 @@ class BubbleMixin:
         try:
             self._update_status_indicator(state)
         except Exception:
-            pass
+            logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # P2: 触发情绪状态机
         if emotion and emotion != "neutral":
             try:
                 self._perception.trigger_emotion(emotion)
             except Exception:
-                pass
+                logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 1. 消息气泡
         show_text = message.strip()
@@ -313,7 +313,7 @@ class BubbleMixin:
                     self._current_anim = anim_name
                     self._set_anim_seq(anim_name, emotion=emotion, style=get_transition_style(emotion))
         except Exception:
-            pass
+            logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # A2: 情绪过期 — thinking 类情绪"延长而非重置"。
         # hanako_monitor 的 mood 节流是 1s，而 _emotion_expiry_timer 是 3s：
@@ -333,7 +333,7 @@ class BubbleMixin:
             try:
                 self._action_linker.check()
             except Exception:
-                pass
+                logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 4. 重置状态(当收到 Agent 回复时)
         if state == "speaking" and message and self._pending_chat:
@@ -395,18 +395,18 @@ class BubbleMixin:
             if mapper is not None and hasattr(self, "_renderer"):
                 mapper.render_for("celebrating", self._renderer)
         except Exception:
-            pass
+            logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         # 2. 情绪/表情脸（3s 过期，复用现有机制）
         try:
             self._set_surface_emotion("happy", duration_ms=3000, source="celebrating")
         except Exception:
-            pass
+            logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         # 3. 气泡（完工反馈；BugFix #5-E：有摘要显示摘要）
         try:
             bubble_text = (summary or "").strip() or "完成啦！"
             self._show_bubble(bubble_text, emotion="happy", priority=1)
         except Exception:
-            pass
+            logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         # 4. TTS 完工音：走现有 tts provider 管道，非阻塞（后台合成 → 信号回主线程）
         try:
             celeb_cfg = self.config.get("celebrating", {}) or {}
@@ -418,13 +418,13 @@ class BubbleMixin:
                     daemon=True,
                 ).start()
         except Exception:
-            pass
+            logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         # 5. 3s 后回 idle（复用 _pet_revert_timer，现有防御已覆盖 Live2D 手势超时）
         try:
             self._pet_revert_timer.stop()
             self._pet_revert_timer.start(3000)
         except Exception:
-            pass
+            logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _synth_celebration_tts(self, text: str = "完成啦！"):
         """后台线程：合成完工音/摘要 → 信号回主线程播放（绝不直接碰 Qt/渲染）。

@@ -202,7 +202,7 @@ class HanakoWSClient:
             try:
                 sock.close()
             except Exception:
-                pass
+                logger.debug("hanako_ws_client: 非致命异常(已静默吞掉)", exc_info=True)
 
         deadline = time.monotonic() + max(0.0, timeout)
         io_thread = self._io_thread

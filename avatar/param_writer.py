@@ -16,6 +16,9 @@ from __future__ import annotations
 from typing import Optional, Protocol, Sequence
 
 from avatar.model_profile import ModelProfile, ParamChannel, ParamGroup
+import logging
+logger = logging.getLogger(__name__)
+
 
 
 class _ParamModel(Protocol):
@@ -180,7 +183,7 @@ class ParamWriter:
             try:
                 self._model.SetParameterValue(pid, value, weight)
             except (AttributeError, RuntimeError):
-                pass
+                logger.debug("param_writer: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _lookup_semantic_value(
         self, group_name: str, ch: ParamChannel, values: dict[str, float]

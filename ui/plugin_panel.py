@@ -206,7 +206,7 @@ class PluginPanel(PanelWindow):
                                 if "export const description" in line:
                                     tool_desc = line.split("=")[-1].strip().strip("';\"")[:60]
                         except Exception:
-                            pass
+                            logger.debug("plugin_panel: 非致命异常(已静默吞掉)", exc_info=True)
                     tools.append({"name": tool_name, "desc": tool_desc, "source": src})
 
                 plugins.append({

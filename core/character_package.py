@@ -194,7 +194,7 @@ class CharacterPackageManager:
                 try:
                     output_path.unlink()
                 except OSError:
-                    pass
+                    logger.debug("character_package: 非致命异常(已静默吞掉)", exc_info=True)
             raise PackageCreateError(f"打包失败: {e}") from e
 
         return output_path
@@ -367,7 +367,7 @@ class CharacterPackageManager:
                     try:
                         os.unlink(tmp_file_to_cleanup)
                     except OSError:
-                        pass
+                        logger.debug("character_package: 非致命异常(已静默吞掉)", exc_info=True)
                 
                 return str(install_target)
 
@@ -379,13 +379,13 @@ class CharacterPackageManager:
                 try:
                     shutil.rmtree(install_target)
                 except OSError:
-                    pass
+                    logger.debug("character_package: 非致命异常(已静默吞掉)", exc_info=True)
             # 清理临时 zip 文件
             if tmp_file_to_cleanup and tmp_file_to_cleanup.exists():
                 try:
                     os.unlink(tmp_file_to_cleanup)
                 except OSError:
-                    pass
+                    logger.debug("character_package: 非致命异常(已静默吞掉)", exc_info=True)
             if isinstance(e, PackageError):
                 raise
             raise PackageInstallError(f"安装失败: {e}") from e

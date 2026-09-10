@@ -486,7 +486,7 @@ class EmbeddingService:
         try:
             sess_opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
         except Exception:  # noqa: BLE001 — 老版本 ORT 无此键，保持默认 spin
-            pass
+            logger.debug("memory_embedding: 非致命异常(已静默吞掉)", exc_info=True)
         self._session = ort.InferenceSession(
             model_file, sess_options=sess_opts, providers=["CPUExecutionProvider"],
         )

@@ -119,12 +119,12 @@ def _load_config(mc_config: Optional[dict] = None) -> dict:
             try:
                 cfg["task_timeout"] = float(mc_config["timeout"])
             except (TypeError, ValueError):
-                pass
+                logger.debug("mc_bridge: 非致命异常(已静默吞掉)", exc_info=True)
         if "http_timeout_ms" in mc_config:
             try:
                 cfg["http_timeout_ms"] = int(mc_config["http_timeout_ms"])
             except (TypeError, ValueError):
-                pass
+                logger.debug("mc_bridge: 非致命异常(已静默吞掉)", exc_info=True)
         g = mc_config.get("guardrails") or {}
         if "allow_remote" in g:
             cfg["http_allow_remote"] = bool(g["allow_remote"])

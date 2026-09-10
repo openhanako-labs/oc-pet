@@ -150,7 +150,7 @@ class VoiceProviderMixin:
             try:
                 p.cleanup()
             except Exception:
-                pass
+                logger.debug("voice_provider_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         def _rebuild():
             provider = None

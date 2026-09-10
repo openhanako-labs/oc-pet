@@ -90,7 +90,7 @@ class VRMRenderer(AvatarRenderer):
             try:
                 self.play_anim(gesture)
             except Exception:
-                pass
+                logger.debug("vrm_renderer: 非致命异常(已静默吞掉)", exc_info=True)
 
     def look_at(self, x: int, y: int) -> None:
         pass

@@ -3,6 +3,9 @@ import json
 import os
 import threading
 import time
+import logging
+logger = logging.getLogger(__name__)
+
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
@@ -448,7 +451,7 @@ def save_config(cfg):
         try:
             os.unlink(tmp_path)
         except OSError:
-            pass
+            logger.debug("config: 非致命异常(已静默吞掉)", exc_info=True)
         raise
 
 
@@ -506,7 +509,7 @@ class _AsyncConfigSaver:
             try:
                 save_config(cfg)
             except Exception:
-                pass
+                logger.debug("config: 非致命异常(已静默吞掉)", exc_info=True)
             # 若调度期间又有新值，继续循环；否则退出
             with self._lock:
                 if self._pending is None:
@@ -522,7 +525,7 @@ class _AsyncConfigSaver:
             try:
                 save_config(cfg)
             except Exception:
-                pass
+                logger.debug("config: 非致命异常(已静默吞掉)", exc_info=True)
 
 
 # 进程级共享实例：桌宠位置这类高频写入都走它，合并落盘。

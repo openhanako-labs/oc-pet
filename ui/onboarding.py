@@ -17,6 +17,9 @@ from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QFrame,
     QGraphicsOpacityEffect
 )
+import logging
+logger = logging.getLogger(__name__)
+
 
 
 # 引导条目：手势提示 + 说明（沿用项目已有的 emoji 手势风格，非装饰性 icon）
@@ -49,10 +52,10 @@ class OnboardingOverlay(QWidget):
                 from ui.theme import get_default
                 mgr = get_default()
             except Exception:
-                pass
+                logger.debug("onboarding: 非致命异常(已静默吞掉)", exc_info=True)
             apply_glass_shadow(self._card, theme=(mgr.current if mgr else "dark"))
         except Exception:
-            pass
+            logger.debug("onboarding: 非致命异常(已静默吞掉)", exc_info=True)
 
         layout = QVBoxLayout(self._card)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -138,7 +141,7 @@ class OnboardingOverlay(QWidget):
             self._fade_in_anim.setEndValue(1.0)
             self._fade_in_anim.start()
         except Exception:
-            pass
+            logger.debug("onboarding: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _dismiss(self):
         # 先淡出再关闭
@@ -161,6 +164,6 @@ class OnboardingOverlay(QWidget):
             if self._on_close is not None:
                 self._on_close()
         except Exception:
-            pass
+            logger.debug("onboarding: 非致命异常(已静默吞掉)", exc_info=True)
         self.hide()
         self.deleteLater()

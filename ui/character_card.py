@@ -242,7 +242,7 @@ def read_memory_stats(agent_id: str,
             if isinstance(fdata, list):
                 facts = len(fdata)
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        pass
+        logger.debug("character_card: 非致命异常(已静默吞掉)", exc_info=True)
     if facts == 0:
         facts_md = hanako_dir / "agents" / agent_id / "memory" / "facts.md"
         try:

@@ -161,7 +161,7 @@ class InteractionMixin:
                         pos = event.globalPos() - self.char_label.mapToGlobal(QPoint(0, 0))
                         hit_area = self._renderer.hit_detect(pos.x(), pos.y())
                     except Exception:
-                        pass
+                        logger.debug("interaction_mixin: 非致命异常(已静默吞掉)", exc_info=True)
                 self._on_pet_pat(hit_area=hit_area)
                 return True
 
@@ -258,7 +258,7 @@ class InteractionMixin:
             try:
                 self._renderer._show_frame()
             except Exception:
-                pass
+                logger.debug("interaction_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         logger.info("Stopped sitting")
 
@@ -395,7 +395,7 @@ class InteractionMixin:
             if hasattr(self._renderer, "play_anim"):
                 self._renderer.play_anim(anim)
         except Exception:
-            pass
+            logger.debug("interaction_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         self._pet_play_happy(big=big)
         head = self._head_local_point()
         self._heart_overlay.burst(count=6 if big else 2, x=head.x(), y=head.y())

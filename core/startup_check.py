@@ -170,7 +170,7 @@ def check_tts_import() -> CheckResult:
         import edge_tts
         return CheckResult("TTS 可用？", True, "edge-tts 已安装（免费引擎可用）")
     except ImportError:
-        pass
+        log.debug("startup_check: 非致命异常(已静默吞掉)", exc_info=True)
     # 检查 CosyVoice（本地引擎）
     try:
         import sys
@@ -178,7 +178,7 @@ def check_tts_import() -> CheckResult:
         from cosyvoice_provider import CosyVoiceProvider
         return CheckResult("TTS 可用？", True, "CosyVoice 本地引擎可用")
     except Exception:
-        pass
+        log.debug("startup_check: 非致命异常(已静默吞掉)", exc_info=True)
     return CheckResult(
         "TTS 可用？",
         False,

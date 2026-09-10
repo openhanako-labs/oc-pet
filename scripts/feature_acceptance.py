@@ -30,6 +30,9 @@ def check(name: str, fn) -> None:
 
 print("=== 构造真实 PetWindow（Live2D GL）===")
 from pet import PetWindow  # noqa: E402
+import logging
+logger = logging.getLogger(__name__)
+
 
 w = PetWindow(agent_id="miku")
 w.show()
@@ -100,7 +103,7 @@ def t_proactive() -> None:
     try:
         w._proactive_grace = 0
     except Exception:
-        pass
+        logger.debug("feature_acceptance: 非致命异常(已静默吞掉)", exc_info=True)
     result = p.tick()
     print(f"   tick() 返回: {str(result)[:60]!r}（None=未到触发条件也正常）")
 
@@ -117,7 +120,7 @@ def t_chat() -> None:
         try:
             original(reply, emotion, anim, audio_path)
         except Exception:
-            pass
+            logger.debug("feature_acceptance: 非致命异常(已静默吞掉)", exc_info=True)
 
     w._engine.on_reply = _capture
     w._engine.send("回复两个字：收到", character="miku", source="user")
@@ -143,5 +146,5 @@ try:
     w.close()
     app.processEvents()
 except Exception:
-    pass
+    logger.debug("feature_acceptance: 非致命异常(已静默吞掉)", exc_info=True)
 sys.exit(1 if failed else 0)

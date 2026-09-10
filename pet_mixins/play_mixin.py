@@ -51,7 +51,7 @@ class PlayMixin:
                 if home_music.exists():
                     self._music_dir = str(home_music)
             except Exception:
-                pass
+                logger.debug("play_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
             # 桌宠旁浮动互动卡（可点气泡卡）
             theme = getattr(self, "_ui_theme", "dark") or "dark"
@@ -79,7 +79,7 @@ class PlayMixin:
                 try:
                     panel.card_action.connect(self._on_interaction_card_action)
                 except Exception:
-                    pass
+                    logger.debug("play_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
             logger.info(
                 "P2 interaction layer ready | work_reminder enabled=%s",
@@ -162,7 +162,7 @@ class PlayMixin:
             import datetime
             ctx["hour"] = datetime.datetime.now().hour
         except Exception:
-            pass
+            logger.debug("play_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         try:
             category = ""
             fw = getattr(self, "_foreground_watcher", None)
@@ -175,13 +175,13 @@ class PlayMixin:
             elif category == "entertainment":
                 ctx["scene"] = "entertainment"
         except Exception:
-            pass
+            logger.debug("play_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         try:
             emo = getattr(self, "_current_emotion", "") or ""
             if emo and emo != "neutral":
                 ctx["emotion"] = emo
         except Exception:
-            pass
+            logger.debug("play_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         return ctx
 
     def _offer_rest(self, source: str = "timer",
@@ -244,7 +244,7 @@ class PlayMixin:
             if focus is not None and getattr(focus, "active", False):
                 return True
         except Exception:
-            pass
+            logger.debug("play_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         try:
             from core.play.break_reminder import WORK_CATEGORIES
             fw = getattr(self, "_foreground_watcher", None)
@@ -297,7 +297,7 @@ class PlayMixin:
                     x = max(ag.left() + 8, min(x, ag.right() - card.width() - 8))
                     y = max(ag.top() + 8, min(y, ag.bottom() - card.height() - 8))
             except Exception:
-                pass
+                logger.debug("play_mixin: 非致命异常(已静默吞掉)", exc_info=True)
             card.move(x, y)
             card.show()
             card.raise_()
@@ -322,7 +322,7 @@ class PlayMixin:
             try:
                 card.hide()
             except Exception:
-                pass
+                logger.debug("play_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     # ── 小游戏 ──
 

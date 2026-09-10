@@ -97,7 +97,7 @@ def _make_handler(on_trigger: Callable[[str, str, str], None], auth_token: str):
                 from core.event_bus import EventBus
                 EventBus.emit("external_trigger", action=action, text=text, emotion=emotion, source="http")
             except Exception:
-                pass
+                logger.debug("external_trigger_receiver: 非致命异常(已静默吞掉)", exc_info=True)
             self._send_json(200, {'ok': True, 'received': True})
 
         def log_message(self, *args):  # 静默标准库访问日志
@@ -147,5 +147,5 @@ class ExternalTriggerReceiver:
                 self._httpd.shutdown()
                 self._httpd.server_close()
             except Exception:
-                pass
+                logger.debug("external_trigger_receiver: 非致命异常(已静默吞掉)", exc_info=True)
             self._httpd = None

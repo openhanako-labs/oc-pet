@@ -565,7 +565,7 @@ class HanakoSessionManager:
                         try:
                             self._recover_from_history(turn, finish_on_missing=False)
                         except Exception:
-                            pass
+                            logger.debug("hanako_session_manager: 非致命异常(已静默吞掉)", exc_info=True)
                         if turn.done:
                             return future.result(timeout=1.0)
                 if received_any_event and (now - last) < self.activity_timeout:
@@ -588,7 +588,7 @@ class HanakoSessionManager:
                     try:
                         self._recover_from_history(turn, finish_on_missing=False)
                     except Exception:
-                        pass
+                        logger.debug("hanako_session_manager: 非致命异常(已静默吞掉)", exc_info=True)
                     if turn.done:
                         return future.result(timeout=1.0)
                 # deadline 墙已到：先尝试从历史恢复最终回复，失败才判死
@@ -596,7 +596,7 @@ class HanakoSessionManager:
                     try:
                         self._recover_from_history(turn)
                     except Exception:
-                        pass
+                        logger.debug("hanako_session_manager: 非致命异常(已静默吞掉)", exc_info=True)
                     if turn.done:
                         return future.result(timeout=1.0)
                     self._finish_with_error(turn, f"Hanako reply timed out after {timeout:g}s")
@@ -617,7 +617,7 @@ class HanakoSessionManager:
                         try:
                             self._recover_from_history(turn)
                         except Exception:
-                            pass
+                            logger.debug("hanako_session_manager: 非致命异常(已静默吞掉)", exc_info=True)
                         if turn.done:
                             return future.result(timeout=1.0)
                         self._finish_with_error(
@@ -1120,7 +1120,7 @@ class HanakoSessionManager:
         try:
             self._recover_from_history(turn)
         except Exception:
-            pass
+            logger.debug("hanako_session_manager: 非致命异常(已静默吞掉)", exc_info=True)
         if turn.done:
             return
         self._finish_with_error(
@@ -1158,7 +1158,7 @@ class HanakoSessionManager:
                 try:
                     self._callbacks[kind].remove(callback)
                 except ValueError:
-                    pass
+                    logger.debug("hanako_session_manager: 非致命异常(已静默吞掉)", exc_info=True)
 
         return remove
 

@@ -10,6 +10,9 @@ import random
 
 from PySide6.QtCore import Qt, QPropertyAnimation, QPoint
 from PySide6.QtWidgets import QWidget, QLabel
+import logging
+logger = logging.getLogger(__name__)
+
 
 
 HEART_GLYPHS = ["💗", "💖", "💕", "♥", "🐾"]
@@ -76,4 +79,4 @@ class HeartBurst(QWidget):
             op_anim.start()
         except Exception:
             # 单颗失败不影响整体
-            pass
+            logger.debug("heart_particles: 非致命异常(已静默吞掉)", exc_info=True)

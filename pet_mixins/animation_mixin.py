@@ -89,7 +89,7 @@ class AnimationMixin:
             try:
                 self._renderer.play_anim(seq_name, emotion=emotion)
             except Exception:
-                pass
+                logger.debug("animation_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     # ── 帧推进 / 渲染委托 ──
 

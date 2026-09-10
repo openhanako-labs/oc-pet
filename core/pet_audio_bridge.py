@@ -133,7 +133,7 @@ class AudioTypeDetector:
             try:
                 return AudioType(event.audio_type)
             except ValueError:
-                pass
+                logger.debug("pet_audio_bridge: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 2. 从 track_name 或 payload 推断
         name = (event.track_name or "").lower()
@@ -196,7 +196,7 @@ class PetAudioBridge:
             try:
                 unsub()
             except Exception:
-                pass
+                logger.debug("pet_audio_bridge: 非致命异常(已静默吞掉)", exc_info=True)
         self._subscriptions.clear()
         self._reset_state()
         logger.info("PetAudioBridge: disconnected")

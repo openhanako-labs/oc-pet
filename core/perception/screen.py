@@ -328,7 +328,7 @@ class ScreenPerception:
             weekday = int(tctx.get("weekday", 0) or 0)
             is_weekend = bool(tctx.get("is_weekend", False))
         except Exception:
-            pass
+            logger.debug("screen: 非致命异常(已静默吞掉)", exc_info=True)
         try:
             return classify_screen_scene(
                 category=activity.category or "other",
@@ -575,7 +575,7 @@ class ScreenPerception:
                 from PIL import ImageFilter
                 img = img.filter(ImageFilter.GaussianBlur(radius=2))
             except Exception:
-                pass  # 模糊失败不影响正常流程
+                logger.debug("screen: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 变化检测：对比上一帧 hash
         frame_hash = _hashlib.md5(img.tobytes()).hexdigest()

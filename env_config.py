@@ -142,7 +142,7 @@ def get_hanako_config() -> dict:
                 import json as _json
                 api_token = _json.loads(_si.read_text("utf-8")).get("token", "")
         except Exception:
-            pass
+            logger.debug("env_config: 非致命异常(已静默吞掉)", exc_info=True)
     transport_mode = os.environ.get("HANAKO_TRANSPORT_MODE", "prefer_hanako").strip().lower()
     if transport_mode not in ("direct", "prefer_hanako", "hanako_only"):
         logger.warning("Unknown HANAKO_TRANSPORT_MODE=%s, fallback to prefer_hanako", transport_mode)
@@ -275,7 +275,7 @@ def update_env(updates: dict[str, str]) -> None:
             try:
                 os.unlink(tmp_path)
             except OSError:
-                pass
+                logger.debug("env_config: 非致命异常(已静默吞掉)", exc_info=True)
             raise
         logger.info("Saved .env config (%d keys updated)", len(updates))
         # 重新加载

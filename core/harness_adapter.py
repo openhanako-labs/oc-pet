@@ -476,7 +476,7 @@ class HanakoPetAdapter:
                 try:
                     action_intent = _json.loads(m.group(1))
                 except Exception:
-                    pass
+                    logger.debug("harness_adapter: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 模拟流式：把完整回复切成小段 yield
         chunks = []
@@ -579,7 +579,7 @@ class HanakoPetAdapter:
             try:
                 return _json.loads(m.group(1))
             except Exception:
-                pass
+                logger.debug("harness_adapter: 非致命异常(已静默吞掉)", exc_info=True)
         return None
 
     def chat_via_hanako(
@@ -661,7 +661,7 @@ class HanakoPetAdapter:
                         try:
                             self._session_manager.abort(self._current_session, "busy_reset")
                         except Exception:
-                            pass
+                            logger.debug("harness_adapter: 非致命异常(已静默吞掉)", exc_info=True)
                     _time.sleep(retry_delay)
                     retry_delay *= 1.5  # 递增等待
                     continue
@@ -718,7 +718,7 @@ class HanakoPetAdapter:
             self._history.append({"role": "user", "content": message.strip()})
             self._history.append({"role": "assistant", "content": cleaned})
         except Exception:
-            pass
+            logger.debug("harness_adapter: 非致命异常(已静默吞掉)", exc_info=True)
 
         return cleaned, emotion
 

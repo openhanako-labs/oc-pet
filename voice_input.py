@@ -24,7 +24,7 @@ try:
     if _ffmpeg_dir not in os.environ.get('PATH', ''):
         os.environ['PATH'] = _ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
 except Exception:
-    pass
+    logger.debug("voice_input: 非致命异常(已静默吞掉)", exc_info=True)
 import threading
 import time
 import wave
@@ -82,7 +82,7 @@ def _get_whisper_model():
             from config import load_config
             backend = (load_config().get("asr", {}).get("backend") or "whisper").lower()
         except Exception:
-            pass
+            logger.debug("voice_input: 非致命异常(已静默吞掉)", exc_info=True)
         logger.info("Whisper 模型加载中... (%s, backend=%s)", size, backend)
         if backend == "faster_whisper":
             try:
@@ -214,7 +214,7 @@ class VoiceInput:
                 self._stream.stop()
                 self._stream.close()
             except Exception:
-                pass
+                logger.debug("voice_input: 非致命异常(已静默吞掉)", exc_info=True)
             self._stream = None
 
         if not self._audio_data:
@@ -300,7 +300,7 @@ class VoiceInput:
                 self._stream.stop()
                 self._stream.close()
             except Exception:
-                pass
+                logger.debug("voice_input: 非致命异常(已静默吞掉)", exc_info=True)
             self._stream = None
         self._audio_data = []
         self._on_status("")
@@ -340,4 +340,4 @@ class VoiceInput:
             if os.path.exists(path):
                 os.remove(path)
         except Exception:
-            pass
+            logger.debug("voice_input: 非致命异常(已静默吞掉)", exc_info=True)

@@ -88,7 +88,7 @@ class BehaviorMixin:
             try:
                 presence.mark_interaction()
             except Exception:
-                pass
+                logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     # ── 空闲自言自语 ──
 
@@ -171,7 +171,7 @@ class BehaviorMixin:
             try:
                 return json.loads(m.group(1))
             except Exception:
-                pass
+                logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         return None
 
     # ── 闲置检测 + 关怀提醒 ──
@@ -210,13 +210,13 @@ class BehaviorMixin:
                     else:
                         self._proactive.tick()
             except Exception:
-                pass
+                logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 感知系统 tick(情绪衰减 + 主动对话 + 日程刷新)
         try:
             self._perception.tick()
         except Exception:
-            pass
+            logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # P2-5 休息提醒（联动专注模式）：连续工作计时 + 深夜降频（防御式）
         try:
@@ -224,7 +224,7 @@ class BehaviorMixin:
             if tick is not None:
                 tick()
         except Exception:
-            pass
+            logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     # ── 前台窗口 ──
 
@@ -241,7 +241,7 @@ class BehaviorMixin:
             try:
                 tracker.tick()
             except Exception:
-                pass
+                logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _on_foreground_change(self, app_name: str, app_category: str, title: str):
         """前台窗口变化 → 重置 idle 计时器 + 窗口互动 + 事件触发截图"""
@@ -308,7 +308,7 @@ class BehaviorMixin:
                 if proactive is not None:
                     proactive.mark_conversation(user_reply=False)
         except Exception:
-            pass
+            logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 触发动画：主动动作是用户的明确意图（proactive 调度器判定后触发），
         # 必须【无视 emotion 冷却】强制播放挥手/比心——否则屏幕感知反复推 happy
@@ -381,7 +381,7 @@ class BehaviorMixin:
             ]
             self._show_bubble(_random.choice(lines), emotion="thinking")
         except Exception:
-            pass
+            logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         self._set_anim_seq("idle", emotion="thinking", style=get_transition_style("thinking"))
 
     def _on_mouse_chase(self, target_x: int):
@@ -496,7 +496,7 @@ class BehaviorMixin:
                 if self._tts_player.is_playing():
                     return
             except Exception:
-                pass
+                logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         if getattr(self, 'bubble', None) and self.bubble.isVisible():
             return
 
@@ -517,7 +517,7 @@ class BehaviorMixin:
                 self._pet_revert_timer.start(2200)
                 logger.debug("Live2D 微动作: %s", act)
             except Exception:
-                pass
+                logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _do_look_around(self):
         """张望：先左后右再回正（复用视线平滑）"""
@@ -544,7 +544,7 @@ class BehaviorMixin:
             try:
                 renderer.reset_gaze()
             except Exception:
-                pass
+                logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _do_stretch(self):
         """伸懒腰：临时增强呼吸 bob 幅度"""
@@ -593,7 +593,7 @@ class BehaviorMixin:
             self.bubble.raise_()
             self._bubble_timer.start(6000)
         except Exception:
-            pass
+            logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _on_mouse_startled(self, speed: float):
         """鼠标快速掠过 - 只切动画"""
@@ -654,7 +654,7 @@ class BehaviorMixin:
                     self._set_anim_seq(anim, emotion=emotion, style=get_transition_style(emotion))
                     self._set_surface_emotion(emotion, duration_ms=3000, source="screen")
         except Exception:
-            pass
+            logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _do_screen_proactive(self, prompt: str):
         """在主线程处理屏幕内容主动对话

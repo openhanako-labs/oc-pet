@@ -18,6 +18,9 @@ from PySide6.QtWidgets import QWidget
 
 from ui.crt_effects import glass_panel, phosphor_glow_text, phosphor_glow_ellipse
 from ui.theme.neko_palette import NEKO_LAYOUT, neko_qcolor
+import logging
+logger = logging.getLogger(__name__)
+
 
 
 class AmadeusHUD(QWidget):
@@ -68,7 +71,7 @@ class AmadeusHUD(QWidget):
                 self._theme = mgr.current
                 mgr.theme_changed.connect(self._on_theme)
         except Exception:
-            pass
+            logger.debug("amadeus_hud: 非致命异常(已静默吞掉)", exc_info=True)
 
     def set_counts(self, running: int, need_you: int, active: int) -> None:
         self._running = max(0, int(running))

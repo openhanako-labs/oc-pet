@@ -340,7 +340,7 @@ class FactStore:
                 if threshold:
                     dedup_threshold = float(threshold)
             except Exception:
-                pass
+                logger.debug("memory_facts: 非致命异常(已静默吞掉)", exc_info=True)
         self._dedup_jaccard = float(dedup_threshold) if dedup_threshold else DEDUP_JACCARD_THRESHOLD
         self._lock = threading.Lock()
         self._facts: list[dict] = []

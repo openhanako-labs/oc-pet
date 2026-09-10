@@ -487,7 +487,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 _ginfo = CHARACTER_INFO.get(self._current_char, {}) or {}
                 _gname = _ginfo.get("name") or self._current_char
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             _marker = default_marker_path(self._agent_id)
             _greet = maybe_greet(self.config, _marker, _gname)
             if _greet:
@@ -835,7 +835,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 if hasattr(screen, "set_enrich_cooldown"):
                     screen.set_enrich_cooldown(int(screen_cfg.get("llm_enrich_cooldown", 300) or 300))
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             adapter = getattr(getattr(self, "_engine", None), "_adapter", None)
             if llm_enrich and adapter is not None:
                 def _screen_enrich_provider(prompt: str):
@@ -883,7 +883,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             if added:
                 logger.info("[FactStore] added=%d facts", added)
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _record_conversation_facts(self, text: str) -> None:
         """对话记忆写入点：engine.send 后把用户文本交给 FactStore 抽取事实。
@@ -933,7 +933,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             if added:
                 logger.info("[Reflection] added=%d insights", added)
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _maybe_reflect(self):
         """主线程慢 tick（60s）：按周期触发反思。
@@ -976,7 +976,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         try:
             self.focus_ui_signal.emit(active, charge, signals)
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _on_focus_ui_changed(self, active: bool, charge: float, signals: dict):
         """主线程处理专注状态变化：更新 ChatPanel 辉光强度。"""
@@ -1017,12 +1017,12 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         try:
             self._perception.reset_emotion()
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         # 记录话题 + 打断旧回复 + 发送
         try:
             self._record_topic(text)
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         if self._engine:
             # P1: 用户输入即时反应 — 分析内容，立刻触发动作（不等 AI 回复）
             try:
@@ -1036,13 +1036,13 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self._engine.interrupt(reason="new_message")
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             self._engine.send(text, character=self._current_char)
         # P1-2：对话事实写入点（engine.send 成功后记录事实；后台 LLM 抽取）
         try:
             self._record_conversation_facts(text)
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         # 聊天面板：用户消息回显 + 思考点
         if self._chat_panel is not None:
             self._chat_panel.append_user(text)
@@ -1053,7 +1053,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         try:
             self._dispatch_chat_interaction(text)
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _toggle_chat_panel(self):
         """打开/关闭聊天面板（右键菜单入口）。"""
@@ -1087,7 +1087,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             else:
                 self._memory_panel.reload()
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         pet_geo = self.geometry()
         self._memory_panel.move(pet_geo.right() + 16, max(8, pet_geo.top() - 8))
         self._memory_panel.show()
@@ -1107,7 +1107,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             else:
                 self._character_card.reload()
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         pet_geo = self.geometry()
         self._character_card.move(pet_geo.right() + 16, max(8, pet_geo.top() - 8))
         self._character_card.show()
@@ -1156,7 +1156,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 from PySide6.QtCore import QTimer as _QT
                 _QT.singleShot(0, lambda t=text: self._show_bubble(t, emotion="happy"))
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             # 挥手动作（Live2D: waving motion；sprite: waving 序列）
             try:
                 if hasattr(self, "_set_anim_seq"):
@@ -1164,7 +1164,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                     self._set_anim_seq("waving", emotion="happy",
                                        style=get_transition_style("happy"))
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             logger.info("P3 多宠打招呼 → %s", text[:40])
         except Exception as e:
             logger.warning("P3 多宠打招呼处理失败: %s", e)
@@ -1270,11 +1270,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                                  start_ts=start_ts, end_ts=now, source="foreground")
             self._last_fg_start_ts = time.time()
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         try:
             self._on_foreground_change(app_name, app_category, title)
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _on_activity_event(self, event=None):
         """A 活动事件订阅：视觉活动 → 事件流（source="vision"）。
@@ -1428,7 +1428,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         try:
             self.pet_set_mode_signal.emit(str(mode or ""))
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _do_pet_set_mode(self, mode: str):
         """主线程槽：登记状态 + 经状态语义层下发（只走统一接口）。"""
@@ -1530,13 +1530,13 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self.config = cfg
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             # 应用到引擎
             try:
                 if hasattr(self._engine, 'switch_agent'):
                     self._engine.switch_agent(tid)
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             logger.info("F5: 首次启动自动绑定对话 assistant=%s (角色=%s)", tid, self._current_char)
         except Exception as e:
             logger.warning("F5: 引导失败: %s", e)
@@ -1552,12 +1552,12 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         try:
             self._set_anim_seq(action, emotion="neutral", style="fade")
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         if bubble:
             try:
                 self._show_bubble(bubble, emotion="neutral", priority=0)
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _presence_tick(self):
         """QTimer 每 60s 驱动一次存在感检查（主线程，无需跨线程处理）。
@@ -1569,11 +1569,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             if self._presence:
                 self._presence.tick()
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         try:
             self._maybe_reflect()
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     # ── 多宠总览 ──
 
@@ -1642,7 +1642,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             tx = max(sg.left(), min(tx, sg.right() - tw + 1))
             ty = max(sg.top(), min(ty, sg.bottom() - th + 1))
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         self.move(tx, ty)
 
     def _apply_penetration(self):
@@ -1791,7 +1791,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 try:
                     save_config(self.config)
                 except Exception:
-                    pass
+                    logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
             ov = OnboardingOverlay(self, on_close=_mark_done)
             ov.show_relative()
@@ -1976,7 +1976,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                     from config import save_config, async_config_saver
                     async_config_saver.schedule(self.config)
                 except Exception:
-                    pass
+                    logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
                 # 缩放反馈：立即更新气泡（缩放是用户主动行为，优先级 ≥ 已显示的对对话气泡）。
                 # 旧逻辑：仅当 bubble 不可见才弹 → 10 秒对话气泡存在期间任何缩放都不会更新。
                 # 用户反馈"滚轮缩放一直显示 65%"就是这个 bug。
@@ -2004,7 +2004,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 from config import async_config_saver
                 async_config_saver.schedule(self.config)
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         return self._pet_scale
 
     def _rescale_current_frame(self):
@@ -2152,7 +2152,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                     try:
                         self._renderer.set_emotion_expression_only("neutral")
                     except Exception:
-                        pass
+                        logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
                 self._last_body_emotion = body_emo
         # 6. 待机微动作（约每秒一次）
         if self._bob_frame % 33 == 0:
@@ -2206,7 +2206,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                     top_y, bh,
                 )
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         self.bubble.move(max(bx, 0), max(by, 0))
         self._reposition_overlays()
@@ -2414,7 +2414,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 from config import async_config_saver
                 async_config_saver.schedule(self.config)
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             logger.info("配置已保存")
             # 应用即时生效的设置
             self._apply_settings()
@@ -2444,7 +2444,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self._show_bubble("插件面板打开失败", emotion="sad")
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _send_plugin_command(self, text: str):
         """从插件面板发送指令到对话引擎"""
@@ -2455,7 +2455,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self._record_conversation_facts(text)
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             self._tts_player.stop()
             self.bubble.set_text("⏳ 思考中...")
             self._reposition_bubble()
@@ -2614,7 +2614,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self.bubble.hide_bubble()
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _on_think_timeout(self):
         """LLM 超时：自动恢复 idle 状态"""
@@ -2634,7 +2634,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self.bubble.hide_bubble()
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             self._bubble_message = ""
             self._bubble_priority = 0
             # 弹出最早排队的通知
@@ -2658,7 +2658,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self._set_anim_seq("idle", emotion="neutral", style=get_transition_style("neutral"))
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             # P2-6：过期回 neutral 也同步程序化表情层（面部参数平滑回归）
             self._sync_renderer_master_emotion("neutral")
             # E4: 复位 _last_body_emotion，避免下一轮 set_emotion 判断错误
@@ -2680,7 +2680,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 setter(emotion or "neutral")
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     # 情绪来源优先级（缺陷①）：数值越大越高优，低优先不能覆盖高优先。
     # neutral 视为最低（0），任何来源都可覆盖回 neutral。
@@ -2803,7 +2803,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self.bubble.hide_bubble()
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 播放音频（和文字一起）
         if audio_path and os.path.exists(audio_path):
@@ -2838,7 +2838,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             if r is not None and hasattr(r, "set_emotion_expression_only"):
                 r.set_emotion_expression_only(emotion or "neutral")
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         # A2: 情绪过期 — 3秒无新情绪自动回 idle
         # 对话情绪是最高优先级（缺陷①），直接写入并标记来源，屏幕/定时情绪此后不得覆盖
@@ -2857,7 +2857,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self._perception.trigger_emotion(emotion)
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 重置状态
         if self._pending_chat:
@@ -2894,7 +2894,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self.bubble.hide_bubble()
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _do_tts_stop(self):
         """主线程槽：截停 TTS 播放（由 tts_stop_signal 从后台线程绕回主线程）。
@@ -3016,7 +3016,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             if home.exists():
                 return [{"id": d.name, "name": d.name} for d in home.iterdir() if d.is_dir()]
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         return []
 
     def _build_agent_submenu(self):
@@ -3103,38 +3103,38 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 try:
                     t.stop()
                 except Exception:
-                    pass
+                    logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         if hasattr(self, '_idle_chatter'):
             try:
                 self._idle_chatter.disable()
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         if hasattr(self, '_foreground_watcher'):
             try:
                 self._foreground_watcher.stop()
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         if hasattr(self, '_tts_player'):
             try:
                 self._tts_player.stop()
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         # ── AUDIO-07: 断开桥接器 ──
         if hasattr(self, '_audio_bridge'):
             try:
                 self._audio_bridge.disconnect()
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         if hasattr(self, '_tray'):
             try:
                 self._tray.hide()
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         if hasattr(self, '_engine'):
             try:
@@ -3143,7 +3143,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 if self._engine._thread and self._engine._thread.is_alive():
                     self._engine._thread.join(timeout=3)
             except Exception:
-                pass
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         # ── P2 关系：关电脑离别语 + 存档陪伴记忆 ──
         try:
@@ -3182,7 +3182,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 EventBus.off("pet_set_mode", self._on_pet_set_mode)
                 self._pet_set_mode_subscribed = False
         except Exception:
-            pass
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
         # ── F 本地状态口停止（默认未启动则空操作）──
         try:
@@ -3193,6 +3193,5 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             logger.warning("F 状态口停止失败（非致命）: %s", e)
 
         super().closeEvent(event)
-
 
 

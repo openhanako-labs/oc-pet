@@ -9,6 +9,9 @@ import time
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Property, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath
 from PySide6.QtWidgets import QWidget
+import logging
+logger = logging.getLogger(__name__)
+
 
 
 EMOTION_EMOJI = {
@@ -67,7 +70,7 @@ class EmotionFace(QWidget):
                 self._theme = mgr.current
                 mgr.theme_changed.connect(self._on_theme)
         except Exception:
-            pass
+            logger.debug("emotion_face: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _on_theme(self, theme: str):
         self._theme = theme
@@ -154,7 +157,7 @@ class EmotionFace(QWidget):
             self._pop_anim.setEndValue(1.0)
             self._pop_anim.start()
         except Exception:
-            pass
+            logger.debug("emotion_face: 非致命异常(已静默吞掉)", exc_info=True)
 
     def paintEvent(self, event):
         p = QPainter(self)

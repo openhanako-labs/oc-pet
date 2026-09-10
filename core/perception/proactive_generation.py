@@ -69,7 +69,7 @@ def build_proactive_prompt(context: dict) -> str:
         if time_label:
             lines.append(f"真实时间参考：{time_label}")
     except Exception:
-        pass
+        logger.debug("proactive_generation: 非致命异常(已静默吞掉)", exc_info=True)
     if fallback:
         lines.append(f"参考方向（可自由发挥，不要照抄）：{fallback}")
     lines.append("要求：一句话，不超过 20 字，口语化，贴合场景，不要重复最近说过的话。")

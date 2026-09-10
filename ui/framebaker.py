@@ -102,7 +102,7 @@ def stop_framebaker() -> bool:
                 try:
                     proc.kill()
                 except Exception:
-                    pass
+                    logger.debug("framebaker: 非致命异常(已静默吞掉)", exc_info=True)
             logger.info("FrameBaker 已停止 (pid=%s)", proc.pid)
             _framebaker_proc = None
             return True

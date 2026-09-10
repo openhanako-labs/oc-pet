@@ -47,7 +47,7 @@ class ChatMixin:
                 try:
                     self._engine.interrupt(reason="voice_start")
                 except Exception:
-                    pass
+                    logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
             self._tts_player.stop()
             if self._voice_input.start():
                 self._voice_recording = True
@@ -204,7 +204,7 @@ class ChatMixin:
             try:
                 self.bubble.hide_bubble()
             except Exception:
-                pass
+                logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
     # ── 聊天切换 / 发送 ──
 
@@ -231,7 +231,7 @@ class ChatMixin:
         try:
             self._perception.reset_emotion()
         except Exception:
-            pass
+            logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 标记对话时间（主动对话用）——用户真实回应：冷却减半奖励
         if self._perception.proactive:
@@ -247,7 +247,7 @@ class ChatMixin:
             try:
                 self._engine.interrupt(reason="new_message")
             except Exception:
-                pass
+                logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 通过对话引擎发送（异步）
         if self._engine:
@@ -259,7 +259,7 @@ class ChatMixin:
             if record is not None:
                 record(text)
         except Exception:
-            pass
+            logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # T05 P0-6：ChatPanel 同步——用户消息回显 + 思考点；专注打分（P0-5）
         try:
@@ -268,20 +268,20 @@ class ChatMixin:
                 chat_panel.append_user(text)
                 chat_panel.set_thinking(True)
         except Exception:
-            pass
+            logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         try:
             feed = getattr(self, "_feed_focus_score", None)
             if feed is not None:
                 feed(text)
         except Exception:
-            pass
+            logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         # P2 互动层：聊天关键词 → 小游戏/音乐/休息卡片（防御式，任一线失败不影响发送）
         try:
             dispatch = getattr(self, "_dispatch_chat_interaction", None)
             if dispatch is not None:
                 dispatch(text)
         except Exception:
-            pass
+            logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         self.bubble.set_text("⏳ 思考中...")
         self._reposition_bubble()
@@ -296,7 +296,7 @@ class ChatMixin:
         try:
             self._set_anim_seq("working", emotion="thinking", style=get_transition_style("thinking"))
         except Exception:
-            pass
+            logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 超时保护：30 秒无回复自动恢复
         if not hasattr(self, '_think_timeout'):
@@ -313,7 +313,7 @@ class ChatMixin:
                         getattr(self._engine._adapter, '_reply_timeout', 180) * 1000
                     )
         except Exception:
-            pass
+            logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         self._think_timeout.start(think_timeout_ms)
 
     # ── P2 关系：记录话题到陪伴记忆 ──
@@ -356,7 +356,7 @@ class ChatMixin:
             try:
                 self.bubble.hide_bubble()
             except Exception:
-                pass
+                logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
             self._show_bubble("🔄 新对话已创建", emotion="happy")
             logger.info("新 Session 创建成功: %s", getattr(session, 'session_id', '?'))
         else:

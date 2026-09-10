@@ -45,7 +45,7 @@ def _setup_file_logging():
                 elif level_str == "WARN" or level_str == "WARNING":
                     log_level = logging.WARNING
         except Exception:
-            pass  # 配置读取失败，用默认 INFO
+            logger.debug("main: 非致命异常(已静默吞掉)", exc_info=True)
         fh.setLevel(log_level)
         fh.setFormatter(logging.Formatter(
             '[%(asctime)s] [%(levelname)s] %(name)s: %(message)s',
@@ -133,13 +133,13 @@ def _install_excepthook():
             _root.critical("未捕获异常导致进程即将退出:\n%s",
                            "".join(_tb.format_exception(etype, exc, tb)))
         except Exception:
-            pass
+            logger.debug("main: 非致命异常(已静默吞掉)", exc_info=True)
         # 先调前一个钩子（crash_collector 收集 + 默认钩子保证 stderr/退出码），
         # 两个钩子都执行，崩溃现场仍能自动打包。
         try:
             _prev(etype, exc, tb)
         except Exception:
-            pass
+            logger.debug("main: 非致命异常(已静默吞掉)", exc_info=True)
     sys.excepthook = _hook
 _install_excepthook()
 
@@ -147,6 +147,8 @@ _install_excepthook()
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 from pet_manager import PetManager
+logger = logging.getLogger(__name__)
+
 
 
 def main():
@@ -179,7 +181,7 @@ def main():
             RESPONSE_FILE.unlink()
             logging.info("Cleared old response.json")
     except Exception:
-        pass
+        logger.debug("main: 非致命异常(已静默吞掉)", exc_info=True)
 
     manager = PetManager()
 
@@ -233,7 +235,7 @@ def main():
         from config import async_config_saver
         async_config_saver.shutdown()
     except Exception:
-        pass
+        logger.debug("main: 非致命异常(已静默吞掉)", exc_info=True)
     sys.exit(rc)
 
 

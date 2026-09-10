@@ -203,5 +203,5 @@ def resource_available(character_id: str) -> tuple[bool, str]:
             if data.get("frames") or data.get("atlas") or data.get("emotions"):
                 return True, ""
         except Exception:
-            pass
+            logger.debug("factory: 非致命异常(已静默吞掉)", exc_info=True)
     return False, "缺少精灵帧资源（frames/ 目录或 spritesheet.webp）"

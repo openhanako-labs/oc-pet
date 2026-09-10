@@ -29,6 +29,8 @@ from PySide6.QtGui import QFont
 from config import load_config, save_config
 from ui.theme.palette import rgb, rgba
 from ui.theme.theme_manager import get_default
+logger = logging.getLogger(__name__)
+
 
 
 class SettingsDialog(QDialog):
@@ -225,7 +227,7 @@ class SettingsDialog(QDialog):
                     d_idx = ag.findData(agent_dialog)
                     ag.setCurrentIndex(d_idx if d_idx >= 0 else 0)
                 except Exception:
-                    pass
+                    logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
 
                 row.addWidget(eng, 1)
                 row.addWidget(voice, 2)
@@ -347,7 +349,7 @@ class SettingsDialog(QDialog):
             try:
                 _default_in = sd.default.device[0]
             except Exception:
-                pass
+                logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
             self._asr_device_names = []  # (display, value)
             self.asr_device.addItem("系统默认设备", "")
             for _di, _d in enumerate(_devs):
@@ -960,11 +962,11 @@ class SettingsDialog(QDialog):
         try:
             self._load_env_to_ui()
         except Exception:
-            pass
+            logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
         try:
             self._refresh_package_list()
         except Exception:
-            pass
+            logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
 
     # ── M5: 角色包管理 ──
 
@@ -986,7 +988,7 @@ class SettingsDialog(QDialog):
                     if not _ok:
                         display_text += "（需下载模型）"
                 except Exception:
-                    pass
+                    logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
                 item = QListWidgetItem(display_text)
                 item.setData(Qt.UserRole, pkg.agent_id)  # 存储 agent_id
                 self._pkg_list.addItem(item)
@@ -1124,7 +1126,7 @@ class SettingsDialog(QDialog):
             async_config_saver.shutdown()  # 立即写盘 pending（若有）
             async_config_saver.schedule(self._config)  # 登记新配置
         except Exception:
-            pass
+            logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
         
         save_config(self._config)
         self._pkg_status_label.setText(f"已切换到: {agent_id}")
@@ -1184,7 +1186,7 @@ class SettingsDialog(QDialog):
                 if pkg_mgr is not None and (pkg_mgr.characters_dir / agent_id).exists():
                     is_builtin = True
             except Exception:
-                pass
+                logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
             agents.append({
                 "id": agent_id,
                 "enabled": True,
@@ -1239,7 +1241,7 @@ class SettingsDialog(QDialog):
                             llm_models.append(label)
                             provider_map[label] = prov_id
         except Exception:
-            pass
+            logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
         return {
             "llm": sorted(set(llm_models)),
             "providers": sorted(provider_configs.keys()),
@@ -1271,7 +1273,7 @@ class SettingsDialog(QDialog):
                 elif isinstance(m, str):
                     models.append(m)
         except Exception:
-            pass
+            logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
         self.llm_model.addItems([m for m in models if m])
 
     def _on_tts_provider_select(self, idx: int):
@@ -1306,7 +1308,7 @@ class SettingsDialog(QDialog):
                 elif isinstance(m, str):
                     models.append(m)
         except Exception:
-            pass
+            logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
         self.tts_model.addItems([m for m in models if m])
 
     def _on_asr_provider_select(self, idx: int):
@@ -1340,7 +1342,7 @@ class SettingsDialog(QDialog):
                 elif isinstance(m, str):
                     models.append(m)
         except Exception:
-            pass
+            logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
         self.asr_model.addItems([m for m in models if m])
 
     def _on_vision_provider_select(self, idx: int):
@@ -1371,7 +1373,7 @@ class SettingsDialog(QDialog):
                 if model_id and model_id not in current_models:
                     current_models.append(model_id)
         except Exception:
-            pass
+            logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
         self.vision_model.clear()
         self.vision_model.addItems(current_models)
 
@@ -1463,7 +1465,7 @@ class SettingsDialog(QDialog):
                     else:
                         self.vision_model.setEditText(val)
         except Exception:
-            pass
+            logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
 
     @staticmethod
     def _strip_provider_suffix(text: str) -> str:
@@ -1823,7 +1825,7 @@ class SettingsDialog(QDialog):
                     )
                     return
             except Exception:  # noqa: BLE001
-                pass
+                logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
 
         if self.mc_require_token.isChecked() and not token:
             QMessageBox.critical(self, "测试连接", "缺少令牌，而「必须配置令牌才允许调用」已勾选。")

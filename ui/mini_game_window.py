@@ -193,7 +193,7 @@ class MiniGameWindow(QWidget):
         try:
             self.set_result_text(result.detail)
         except Exception:
-            pass
+            logger.debug("mini_game_window: 非致命异常(已静默吞掉)", exc_info=True)
         try:
             self.game_finished.emit(result.to_dict())
         except Exception as exc:
@@ -208,7 +208,7 @@ class MiniGameWindow(QWidget):
                 self.move(geo.center().x() - self.width() // 2,
                           geo.center().y() - self.height() // 2)
         except Exception:
-            pass
+            logger.debug("mini_game_window: 非致命异常(已静默吞掉)", exc_info=True)
 
 
 # ── 猜数字 ───────────────────────────────────────────────

@@ -91,12 +91,12 @@ class TTSTtsPlayer:
                 self._player.stop()
                 self._player.deleteLater()
             except Exception:
-                pass
+                logger.debug("tts_player: 非致命异常(已静默吞掉)", exc_info=True)
         if self._audio_output:
             try:
                 self._audio_output.deleteLater()
             except Exception:
-                pass
+                logger.debug("tts_player: 非致命异常(已静默吞掉)", exc_info=True)
         self._player = None
         self._audio_output = None
 

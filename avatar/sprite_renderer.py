@@ -555,7 +555,7 @@ class SpriteRenderer(AvatarRenderer):
         try:
             self.play_anim(gesture)
         except Exception:
-            pass
+            logger.debug("sprite_renderer: 非致命异常(已静默吞掉)", exc_info=True)
 
     def play_emote_sequence(self, preset_name: str) -> bool:
         """T09: 播放 emote 预设（精灵图：预设名 → 动画序列映射）。
@@ -830,4 +830,4 @@ EXPRESSION_MAP = {}
 try:
     from config import EXPRESSION_MAP
 except ImportError:
-    pass
+    logger.debug("sprite_renderer: 非致命异常(已静默吞掉)", exc_info=True)

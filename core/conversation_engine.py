@@ -61,7 +61,7 @@ def map_emotion_to_anim(emotion: str) -> str:
         if mapped:
             return mapped[0] or 'idle'
     except Exception:
-        pass
+        logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
     return 'idle'
 
 
@@ -293,7 +293,7 @@ class ConversationEngine:
                 try:
                     self._mc_window.hide()
                 except Exception:  # noqa: BLE001
-                    pass
+                    logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
             logger.info("mc_bridge 未启用（在设置「🎮 Minecraft」页打开开关即可）")
             return None
 
@@ -352,7 +352,7 @@ class ConversationEngine:
             try:
                 old.stop()
             except Exception:  # noqa: BLE001
-                pass
+                logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
             self._hanako_watcher = None
         try:
             from core.hanako_bridge import init_hanako_bridge
@@ -547,7 +547,7 @@ class ConversationEngine:
             try:
                 self._dispatcher.deleteLater()
             except Exception:
-                pass
+                logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
             self._dispatcher = None
         self._perception.stop_screen()
         with self._lock:
@@ -558,7 +558,7 @@ class ConversationEngine:
         try:
             self._tts_executor.shutdown(wait=False)
         except Exception:
-            pass
+            logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 释放 TTS 资源：CosyVoice 在子进程里挂着 4.6GB 模型，不回收就是内存泄漏
         tts = getattr(self, "_tts", None)
@@ -566,7 +566,7 @@ class ConversationEngine:
             try:
                 tts.cleanup()
             except Exception:
-                pass
+                logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _get_builtin_help_text(self) -> str:
         """返回桌宠内置的使用说明"""
@@ -929,7 +929,7 @@ class ConversationEngine:
                             try:
                                 self.on_llm_chunk(chunk_text, accumulated, emotion, gen)
                             except Exception:
-                                pass
+                                logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
                     
                     # P2: 边生成边触发情绪（如果已解析到标签）
                     if action_intent and not self._is_stale(gen):
@@ -951,7 +951,7 @@ class ConversationEngine:
                     emotion = parsed_emotion
                     accumulated = parsed_text or accumulated
             except Exception:
-                pass
+                logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
         
         return accumulated, emotion
 
@@ -1020,7 +1020,7 @@ class ConversationEngine:
                 try:
                     self.on_progress("还在想...")
                 except Exception:
-                    pass
+                    logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
 
         _heartbeat = threading.Thread(
             target=_progress_heartbeat, daemon=True, name="llm-progress-heartbeat"
@@ -1170,7 +1170,7 @@ class ConversationEngine:
                 reply = _ai_text
                 action_intent = _ai_intent
         except Exception:
-            pass
+            logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 2. 动画映射
         anim = map_emotion_to_anim(emotion)
@@ -1184,7 +1184,7 @@ class ConversationEngine:
                 reply = _act_re
                 anim = _act_anim or anim
         except Exception:
-            pass
+            logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
 
         # P2: 桌宠输出分析 — AI 回复内容自动匹配动作（不用显式标签）
         # 规则：有 [emotion:xxx] 或 [action:{...}] 标签时，不再做语义分析（有标记就不猜）
@@ -1199,7 +1199,7 @@ class ConversationEngine:
                         anim = _semantic_action.get("anim", anim)
                         logger.debug("语义分析触发动作: %s", _semantic_action)
                 except Exception:
-                    pass
+                    logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
 
         # P1-6: 文字先行——LLM 回复立即上气泡，不等 TTS 合成
         # （本地 CosyVoice 合成需数秒；若等音频做好才回调，用户看到的是
@@ -1212,7 +1212,7 @@ class ConversationEngine:
             clean_reply = re.sub(r'\s*\[\s*emotion\s*:\s*\w+\s*\]\s*', ' ', reply, flags=re.IGNORECASE).strip()
             _call_reply_cb(self.on_reply, clean_reply, emotion, anim, "", action_intent)
         except Exception:
-            pass
+            logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 3. TTS 合成 + 回调：提交到专用线程池，避免同步合成卡住消息队列（P1-4）
         # 把合成与回传从 _run 主循环解耦，_run 可立即处理下一条消息。
@@ -1448,7 +1448,7 @@ class ConversationEngine:
                         value = float(value.strip())
                         expr_params[key] = value
                     except ValueError:
-                        pass
+                        logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
         # 剥离 [expression:...] 标签
         cleaned = _re.sub(r'\s*\[expression:[^\]]*\]\s*', ' ', reply, flags=_re.IGNORECASE)
 
@@ -1458,7 +1458,7 @@ class ConversationEngine:
             try:
                 duration = float(dur_match.group(1))
             except ValueError:
-                pass
+                logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
         # 剥离 [duration:...] 标签
         cleaned = _re.sub(r'\s*\[duration:[^\]]*\]\s*', ' ', cleaned, flags=_re.IGNORECASE)
 
@@ -1647,7 +1647,7 @@ class ConversationEngine:
                         try:
                             voice = resolver(character, emotion) or ""
                         except Exception:
-                            pass
+                            logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
                     # 移除 emotion 标签
                     tts_text = reply
                     if reply:
@@ -1753,7 +1753,7 @@ class ConversationEngine:
                     try:
                         self.on_status("")
                     except Exception:
-                        pass
+                        logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
         finally:
             with self._lock:
                 if self._tts_in_use > 0:
@@ -1895,7 +1895,7 @@ class ConversationEngine:
             try:
                 unsubscribe()
             except Exception:
-                pass
+                logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
         self._session_unsubscribers.clear()
 
     def set_session(self, session_ref) -> None:
@@ -2019,7 +2019,7 @@ class ConversationEngine:
                 _tl[key] = now
                 self._tool_progress_throttle = _tl
             except Exception:
-                pass
+                logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
             self.on_tool_progress(tool_name, phase, display, success)
         except Exception as e:
             logger.warning("_handle_session_tool_progress 错误: %s", e)

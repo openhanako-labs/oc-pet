@@ -91,7 +91,7 @@ def _make_handler(perception: 'PhoneActivityPerception', auth_token: str):
                         source="phone",
                     )
                 except Exception:
-                    pass
+                    logger.debug("phone_receiver: 非致命异常(已静默吞掉)", exc_info=True)
                 self._send_json(200, {'ok': True, 'app': app_name, 'event': event})
             except Exception as e:
                 logger.warning("Phone activity error: %s", e)

@@ -93,7 +93,7 @@ class ToolExecutor:
                 try:
                     os.unlink(tmp_path)
                 except Exception:
-                    pass
+                    logger.debug("tool_executor: 非致命异常(已静默吞掉)", exc_info=True)
 
     def _build_runner_script(self, source_path: Path, plugin_id: str, arguments: dict) -> str:
         """生成 Node.js 执行脚本"""

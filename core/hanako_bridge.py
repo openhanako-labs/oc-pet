@@ -204,13 +204,13 @@ def load_config(hb_config: Optional[dict] = None) -> dict:
                 try:
                     cfg[k] = int(hb_config[k])
                 except (TypeError, ValueError):
-                    pass
+                    logger.debug("hanako_bridge: 非致命异常(已静默吞掉)", exc_info=True)
         for k in ("poll_interval", "timeout"):
             if k in hb_config:
                 try:
                     cfg[k] = float(hb_config[k])
                 except (TypeError, ValueError):
-                    pass
+                    logger.debug("hanako_bridge: 非致命异常(已静默吞掉)", exc_info=True)
     return cfg
 
 

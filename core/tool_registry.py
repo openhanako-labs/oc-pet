@@ -365,7 +365,7 @@ class ToolRegistry:
                 # 安全路径优先：值已是双引号/纯数字的 JS（多数工具文件），直接可解析。
                 return json.loads(raw)
             except json.JSONDecodeError:
-                pass
+                logger.debug("tool_registry: 非致命异常(已静默吞掉)", exc_info=True)
             # 兜底：JS 单引号字符串 → JSON 双引号字符串（部分工具文件用单引号）。
             # 注意：仅当安全路径失败才做——双引号字符串里嵌单引号（如
             # search-stickers 的 "如 '加班,累'"，转换会破坏嵌套引号）。

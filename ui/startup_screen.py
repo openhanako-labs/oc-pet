@@ -34,7 +34,7 @@ def _extract_lore(skill_md_path: Path) -> str:
             try:
                 front = yaml.safe_load(rest[:end])
             except Exception:
-                pass
+                logger.debug("startup_screen: 非致命异常(已静默吞掉)", exc_info=True)
 
     name = front.get("name", "").title()
     desc = front.get("description", "")

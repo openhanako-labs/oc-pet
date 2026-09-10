@@ -257,7 +257,7 @@ class ActionLinker:
                 try:
                     os.unlink(tmp_path)
                 except OSError:
-                    pass
+                    logger.debug("action_linker: 非致命异常(已静默吞掉)", exc_info=True)
                 raise
 
     def trigger_action(self, outbox_dir: Path, action_id: str) -> dict | None:

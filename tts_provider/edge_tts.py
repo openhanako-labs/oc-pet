@@ -182,11 +182,11 @@ class EdgeTtsProvider(TTSProvider):
                         f.unlink()
                         removed += 1
                 except FileNotFoundError:
-                    pass  # 已被并发/别处删除
+                    logger.debug("edge_tts: 非致命异常(已静默吞掉)", exc_info=True)
             if removed:
                 logger.info("Edge TTS 缓存清理: 删除 %d 个过期 mp3", removed)
         except Exception:
-            pass  # 清理失败不影响合成
+            logger.debug("edge_tts: 非致命异常(已静默吞掉)", exc_info=True)
 
     def get_speaker_info(self, character_id: str) -> dict:
         return {"voice": self._voice, "provider": "edge-tts", "free": True}

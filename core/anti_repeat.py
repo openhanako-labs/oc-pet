@@ -313,7 +313,7 @@ class AntiRepeatCorpus:
                 try:
                     os.unlink(tmp_path)
                 except OSError:
-                    pass
+                    logger.debug("anti_repeat: 非致命异常(已静默吞掉)", exc_info=True)
                 raise
         except Exception as exc:
             logger.warning("[AntiRepeat] save failed: %s", exc)

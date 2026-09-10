@@ -59,7 +59,7 @@ def _remove_ready_flag(pid: int) -> None:
         if flag.exists():
             flag.unlink()
     except Exception:
-        pass
+        log.debug("launcher: 非致命异常(已静默吞掉)", exc_info=True)
 
 
 def _latest_crash_dump() -> "Path | None":
@@ -119,7 +119,7 @@ def main() -> int:
             try:
                 _remove_ready_flag(child.pid)
             except Exception:
-                pass
+                log.debug("launcher: 非致命异常(已静默吞掉)", exc_info=True)
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _on_signal)

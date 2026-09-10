@@ -212,7 +212,7 @@ class ReflectionEngine:
                 if retry_minutes is None:
                     retry_minutes = refl_cfg.get("retry_minutes") or DEFAULT_RETRY_MINUTES
             except Exception:
-                pass
+                logger.debug("memory_reflection: 非致命异常(已静默吞掉)", exc_info=True)
         self._interval_hours = float(interval_hours) if interval_hours else DEFAULT_INTERVAL_HOURS
         self._min_events = int(min_events) if min_events else DEFAULT_MIN_EVENTS
         self._max_events = int(max_events) if max_events else DEFAULT_MAX_EVENTS
@@ -393,7 +393,7 @@ class ReflectionEngine:
                     if (now - last).total_seconds() < self._interval_hours * 3600:
                         return {"triggered": False, "added": 0, "reason": "not_due"}
                 except (ValueError, TypeError):
-                    pass
+                    logger.debug("memory_reflection: 非致命异常(已静默吞掉)", exc_info=True)
             attempt_at = self._meta.get("last_attempt_at")
             if attempt_at:
                 try:
@@ -403,7 +403,7 @@ class ReflectionEngine:
                     if (now - attempt).total_seconds() < self._retry_minutes * 60:
                         return {"triggered": False, "added": 0, "reason": "retry_backoff"}
                 except (ValueError, TypeError):
-                    pass
+                    logger.debug("memory_reflection: 非致命异常(已静默吞掉)", exc_info=True)
         return self._run_reflection(now, force)
 
     def trigger_reflection(self) -> dict:
