@@ -143,6 +143,32 @@ def _latest_crash_dump() -> "Path | None":
     return zips[0] if zips else None
 
 
+# 启动自检只打印一次（每次 launcher 进程），避免自动复活时刷屏
+_startup_check_reported = [False]
+
+
+def _report_startup_env() -> None:
+    """启动失败时追加环境自检。
+
+    2026-09-10 接线 core/startup_check.py（此前零调用方）。
+    crash_dump 回答「怎么挂的」，自检回答「缺什么」——互补，不重复。
+    任何失败都不影响监督循环（诊断不能把监督器搞挂）。
+    """
+    try:
+        from core.startup_check import run_startup_check
+        report = run_startup_check()
+    except Exception as e:
+        log.warning("启动自检不可用（跳过）: %s", e)
+        return
+    try:
+        report.print()
+        if not report.all_ok:
+            failed = [r.name for r in report.results if not r.ok]
+            log.warning("启动环境缺失项: %s", "、".join(failed))
+    except Exception as e:
+        log.warning("启动自检报告输出失败: %s", e)
+
+
 def _resolve_python() -> str:
     """优先用与 launcher 相同的解释器；否则回退到 start_pet.bat 的逻辑。"""
     # 若在 .venv 内运行则直接用当前解释器
@@ -278,6 +304,11 @@ def main() -> int:
                 "崩溃现场已打包: %s（含线程堆栈/C扩展列表/日志尾部，可直接解压查看）",
                 latest_zip,
             )
+        # 启动期崩溃时追加环境自检（父子同一环境，等价）。
+        # 仅在未发出就绪哨兵（=启动失败）时跑，且每次 launcher 进程只跑一次。
+        if ready_time is None and not _startup_check_reported[0]:
+            _startup_check_reported[0] = True
+            _report_startup_env()
         time.sleep(RESTART_DELAY)
 
     return 0

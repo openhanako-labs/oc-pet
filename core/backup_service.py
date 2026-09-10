@@ -18,7 +18,7 @@ import logging
 import shutil
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BACKUP_DIR = Path.home() / ".oc-pet" / "backups"
 DEFAULT_DATA_DIR = Path.home() / ".oc-pet"
+
+# 备份内清单文件名（verify_backup / restore 依赖；不得当普通文件解压）
+_MANIFEST_NAME = "_manifest.json"
 
 
 @dataclass
@@ -69,6 +72,16 @@ class BackupService:
         
         # 加载账本
         self._load_ledger()
+
+    @property
+    def data_dir(self) -> Path:
+        """受备份保护的数据目录（供 CLI / UI 展示，不暴露私有字段）。"""
+        return self._data_dir
+
+    @property
+    def backup_dir(self) -> Path:
+        """备份存放目录。"""
+        return self._backup_dir
     
     def _load_ledger(self):
         """加载迁移账本"""
@@ -156,8 +169,13 @@ class BackupService:
                 total_size = 0
                 for src_dir, file_path, rel_path in all_files:
                     try:
-                        # 添加到 zip（保持相对路径）
-                        arcname = str(src_dir.name / rel_path)
+                        # 归档路径 = 相对备份根的路径。
+                        # 2026-09-10 修：原为 str(src_dir.name / rel_path)，带源目录名前缀，
+                        # 而 manifest 里存的是裸 rel_path，两者对不上 → verify 永远失败；
+                        # 且 restore 会把文件解到 target/<源目录名>/ 而非原位（不是真还原）。
+                        # ponytail: 假定单源目录（当前唯一用法）。多源目录需加前缀区分，
+                        #           但那样 restore 的目标语义要重新定义，暂不做。
+                        arcname = rel_path.as_posix()
                         zf.write(file_path, arcname)
                         
                         # 计算 SHA-256
@@ -166,7 +184,7 @@ class BackupService:
                         total_size += file_size
                         
                         manifest.files.append({
-                            "path": str(rel_path),
+                            "path": arcname,   # 与 zip 内条目名一致，verify 靠它对账
                             "size": file_size,
                             "sha256": sha256,
                         })
@@ -175,8 +193,18 @@ class BackupService:
             
             manifest.file_count = len(manifest.files)
             manifest.total_size = total_size
-            
-            # 计算备份文件 SHA-256
+            manifest.backup_path = str(backup_path)
+
+            # 写入清单（2026-09-10 修：此前从未写入）。
+            # 后果链：无清单 → verify_backup 永远 False → restore(verify=True) 永远失败。
+            # 即备份看似成功却永远无法恢复——比没有备份更危险。
+            with zipfile.ZipFile(backup_path, "a", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr(
+                    _MANIFEST_NAME,
+                    json.dumps(asdict(manifest), ensure_ascii=False, indent=2),
+                )
+
+            # 计算备份文件 SHA-256（zip 已关闭，此处为最终文件的哈希）
             backup_sha256 = self._sha256(backup_path)
             
             # 记录到账本
@@ -226,11 +254,11 @@ class BackupService:
             # 读取备份文件内的清单
             with zipfile.ZipFile(backup_path, "r") as zf:
                 # 查找清单文件
-                if "_manifest.json" not in zf.namelist():
+                if _MANIFEST_NAME not in zf.namelist():
                     logger.warning("No manifest in backup: %s", backup_path)
                     return False
                 
-                manifest_data = json.loads(zf.read("_manifest.json"))
+                manifest_data = json.loads(zf.read(_MANIFEST_NAME))
                 
                 # 验证每个文件
                 for file_info in manifest_data.get("files", []):
@@ -293,6 +321,9 @@ class BackupService:
             # 解压备份
             with zipfile.ZipFile(backup_path, "r") as zf:
                 for member in zf.namelist():
+                    # 清单是元数据，不是用户数据——不得解压到数据目录
+                    if member == _MANIFEST_NAME:
+                        continue
                     # 安全检查：防止 zip slip 攻击
                     if member.startswith("/") or ".." in member:
                         logger.warning("Skipping unsafe path: %s", member)
@@ -365,3 +396,140 @@ __all__ = [
     "BackupService",
     "get_backup_service",
 ]
+
+
+# ════════════════════════════════════════════════════════════
+#  CLI（2026-09-10 接线）
+#  本模块此前零调用方。CLI 是它的人类入口——备份/恢复是运维动作，
+#  不走运行时，所以不需要设置面板按钮。
+#
+#  用法：
+#      python -m core.backup_service list
+#      python -m core.backup_service backup [标签]
+#      python -m core.backup_service verify <备份ID|zip路径>
+#      python -m core.backup_service restore <备份ID|zip路径> --yes
+#      python -m core.backup_service delete <备份ID>
+# ════════════════════════════════════════════════════════════
+
+
+def _human_size(n: int) -> str:
+    size = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f}{unit}" if unit != "B" else f"{int(size)}B"
+        size /= 1024
+    return f"{size:.1f}GB"
+
+
+def _resolve_backup(svc: BackupService, ref: str) -> Optional[Path]:
+    """把「备份ID」或「zip 路径」解成真实存在的 zip 路径。"""
+    p = Path(ref)
+    if p.exists() and p.is_file():
+        return p
+    for entry in svc.list_backups():
+        if entry.get("backup_id") == ref:
+            cand = Path(entry.get("backup_path", ""))
+            return cand if cand.exists() else None
+    return None
+
+
+def _cmd_list(svc: BackupService) -> int:
+    entries = svc.list_backups()
+    if not entries:
+        print(f"还没有任何备份。\n备份目录：{svc.backup_dir}")
+        print(f"创建一份：python -m core.backup_service backup")
+        return 0
+    print(f"备份目录：{svc.backup_dir}\n")
+    print(f"{'备份ID':<34} {'时间':<20} {'文件':>6} {'大小':>9}  状态")
+    for e in reversed(entries):
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.get("timestamp", 0)))
+        ok = "OK" if e.get("success", True) else f"失败: {e.get('error', '')[:24]}"
+        print(f"{e.get('backup_id', '?'):<34} {ts:<20} "
+              f"{e.get('file_count', 0):>6} {_human_size(e.get('total_size', 0)):>9}  {ok}")
+    return 0
+
+
+def _cmd_backup(svc: BackupService, label: str) -> int:
+    print(f"正在备份 {svc.data_dir} …")
+    manifest = svc.backup(label=label)
+    if manifest is None:
+        print("备份失败。目录不存在或无可写权限。")
+        return 1
+    print(f"完成：{manifest.file_count} 个文件，{_human_size(manifest.total_size)}")
+    print(f"位置：{manifest.backup_path}")
+    return 0
+
+
+def _cmd_verify(svc: BackupService, ref: str) -> int:
+    path = _resolve_backup(svc, ref)
+    if path is None:
+        print(f"找不到备份：{ref}")
+        return 1
+    ok = svc.verify_backup(path)
+    print(f"{'校验通过' if ok else '校验失败'}：{path}")
+    return 0 if ok else 1
+
+
+def _cmd_restore(svc: BackupService, ref: str, confirmed: bool) -> int:
+    path = _resolve_backup(svc, ref)
+    if path is None:
+        print(f"找不到备份：{ref}")
+        return 1
+    # 恢复会覆盖用户数据（记忆 / 配置）——必须显式确认，不静默执行
+    if not confirmed:
+        print(f"恢复将覆盖：{svc.data_dir}")
+        print(f"用备份：{path}\n")
+        print("这是不可逆操作。确认后再执行：")
+        print(f"    python -m core.backup_service restore {ref} --yes")
+        return 2
+    ok = svc.restore(path, target_dir=svc.data_dir)
+    print(f"{'恢复完成' if ok else '恢复失败'}：{svc.data_dir}")
+    return 0 if ok else 1
+
+
+def _cmd_delete(svc: BackupService, backup_id: str) -> int:
+    ok = svc.delete_backup(backup_id)
+    print(f"{'已删除' if ok else '未找到'}：{backup_id}")
+    return 0 if ok else 1
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m core.backup_service",
+        description="oc-pet 备份 / 恢复（数据目录 ~/.oc-pet）",
+    )
+    sub = parser.add_subparsers(dest="cmd")
+    sub.add_parser("list", help="列出所有备份（默认）")
+    p_b = sub.add_parser("backup", help="创建备份")
+    p_b.add_argument("label", nargs="?", default="", help="可选标签")
+    for name, helptext in (("verify", "校验备份完整性"), ("delete", "删除备份")):
+        sp = sub.add_parser(name, help=helptext)
+        sp.add_argument("ref", help="备份ID 或 zip 路径")
+    p_r = sub.add_parser("restore", help="从备份恢复（覆盖 ~/.oc-pet，需 --yes）")
+    p_r.add_argument("ref", help="备份ID 或 zip 路径")
+    p_r.add_argument("--yes", action="store_true", dest="confirmed",
+                     help="确认覆盖目标目录（不可逆）")
+
+    args = parser.parse_args(argv)
+    svc = get_backup_service()
+
+    if args.cmd in (None, "list"):
+        return _cmd_list(svc)
+    if args.cmd == "backup":
+        return _cmd_backup(svc, args.label)
+    if args.cmd == "verify":
+        return _cmd_verify(svc, args.ref)
+    if args.cmd == "restore":
+        return _cmd_restore(svc, args.ref, args.confirmed)
+    if args.cmd == "delete":
+        return _cmd_delete(svc, args.ref)
+    parser.print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.WARNING, format="[%(levelname)s] %(message)s")
+    sys.exit(main())

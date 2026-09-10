@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
 import logging
 from pathlib import Path
@@ -142,6 +143,47 @@ def check_characters_dir() -> CheckResult:
     return CheckResult("角色目录存在？", True, f"找到 {len(packages)} 个角色包: {', '.join(p.name for p in packages)}")
 
 
+def check_configured_character() -> CheckResult:
+    """检查 config.json 里配置的角色是否真实存在。
+
+    2026-09-10 新增：原自检只验证「至少有一个角色包」，但实际最常见的
+    启动失败是「配置指向的角色不存在」——此时 pet_manager 会把所有 agent
+    自动禁用并刷「0 enabled agents」，而自检会误报全部通过。
+    两者是不同的同题，不重复（本项面向配置，check_characters_dir 面向仓库）。
+    """
+    name = "配置的角色存在？"
+    root = _project_root()
+    cfg_path = root / "config.json"
+    if not cfg_path.exists():
+        return CheckResult(name, True, "无 config.json（首次启动，由引导选择角色）", "")
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return CheckResult(name, False, f"config.json 解析失败：{e}", "修正 config.json 的 JSON 格式")
+
+    # character / character_package 都可能被使用，任一缺失即为问题
+    wanted = [v for k in ("character", "character_package")
+              if (v := cfg.get(k)) and isinstance(v, str)]
+    if not wanted:
+        return CheckResult(name, True, "未配置角色（由引导流程选择）", "")
+
+    missing = []
+    for cid in dict.fromkeys(wanted):
+        if not (root / "characters" / cid / "pet.json").exists():
+            missing.append(cid)
+
+    if missing:
+        avail = [p.name for p in (root / "characters").iterdir()
+                 if p.is_dir() and (p / "pet.json").exists()] if (root / "characters").is_dir() else []
+        return CheckResult(
+            name, False,
+            f"配置指向的角色不存在：{', '.join(missing)}"
+            f"（可用：{', '.join(avail) if avail else '无'}）",
+            "改 config.json 的 character / character_package，或放入对应角色包",
+        )
+    return CheckResult(name, True, f"配置角色可用：{', '.join(dict.fromkeys(wanted))}")
+
+
 def check_live2d_import() -> CheckResult:
     """检查 live2d-py 是否可导入"""
     try:
@@ -211,6 +253,7 @@ def run_startup_check(model_path: Optional[str] = None) -> StartupReport:
     report = StartupReport()
     report.add(check_hanako_home())
     report.add(check_characters_dir())
+    report.add(check_configured_character())
     report.add(check_live2d_import())
     report.add(check_tts_import())
     report.add(check_model_path(model_path))
