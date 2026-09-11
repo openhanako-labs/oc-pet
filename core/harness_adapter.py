@@ -988,37 +988,28 @@ class HanakoPetAdapter:
             return ""
     
     def _build_action_prompt(self) -> str:
-        """构建可选动作/表情提示（注入输出规则）。
+        """构建可选表情/动作提示（注入输出规则）。
 
-        只列**名字**——模型报名字即可（`[do:waving]` / `[do:blush_shy]`）。
+        2026-09-11 收敛：原来把 53 个预设名 + 13 个 motion 名（共 66 个）
+        挤成一行给模型，**实测 `[do:]` 全历史 0 次使用**——选项太多、无说明、
+        无分类，模型根本无法选择。
 
-        2026-09-11：原来只列 motion 名，而 emote_presets 里的 53 个步骤序列预设
-        （wink/blush_shy/pout/…）AI 完全够不到——它们只能被随机挑中。
-        现在两类都列出：预设更细且不依赖模型有对应 motion 文件。
+        改为只暴露少量语义标签（中文），内部归一到具体预设/motion
+        （见 Live2DRenderer._AI_DO_ALIASES，参照 Amadeus 的 TRIGGER_ALIASES）。
         """
         try:
             renderer = getattr(self, '_renderer', None) or getattr(self, '_pet_renderer', None)
             if not renderer:
                 return ""
-            parts = []
-
-            presets = getattr(renderer, 'available_presets', None) or []
-            if presets:
-                parts.append(
-                    "表情（细腻的微动作，优先用它）：" + "/".join(presets)
-                )
-
-            actions = getattr(renderer, 'available_actions', None) or []
-            if actions:
-                names = "/".join(a['name'] for a in actions)
-                parts.append("动作（肢体）：" + names)
-
-            if not parts:
+            options = getattr(type(renderer), "_AI_DO_PROMPT", "") or \
+                getattr(renderer, "_AI_DO_PROMPT", "")
+            if not options:
                 return ""
             return (
-                "3. 可选：想做一个具体表情/动作时加 [do:名字]。可用："
-                + "；".join(parts)
-                + "。例：[feel:0.7,0.6] [do:waving]、[feel:0.3,0.2] [do:blush_shy]"
+                "3. 可选：想配合一个表情或小动作时加 [do:名字]，可用："
+                + options
+                + "。例：[feel:0.8,0.6] [do:开心]，[feel:-0.3,-0.2] [do:叹气]"
+                "。不确定就不加——不加也自然。"
             )
         except Exception:
             return ""

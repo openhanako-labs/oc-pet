@@ -101,20 +101,23 @@ def test_preset_failure_still_tries_other_paths():
 
 
 # ══════════════════════════════════════════════════════════════
-#  prompt 必须把预设告诉 AI
+#  prompt 必须把「能点什么」告诉 AI
 # ══════════════════════════════════════════════════════════════
 
 class _StubRenderer:
-    """最小 renderer stub（只提供 prompt 所需的两个属性）。"""
+    """最小 renderer stub（只提供 prompt 所需的常量）。"""
 
-    available_presets = ["wink", "blush_shy", "pout"]
-    available_actions = [
-        {"name": "waving", "label": "挥手", "motion": "waving", "intensity": 0.8},
-    ]
+    from avatar.live2d_renderer import Live2DRenderer as _L
+    _AI_DO_PROMPT = _L._AI_DO_PROMPT
 
 
-def test_action_prompt_lists_presets():
-    """只接线不改 prompt 等于没接——AI 不知道能点什么。"""
+def test_action_prompt_mentions_do_tag():
+    """只接线不改 prompt 等于没接——AI 不知道能点什么。
+
+    2026-09-11 变更：prompt 不再列 53 个预设名（实测那样 `[do:]` 全历史
+    0 次使用），改为少量语义标签。本测试只锁「必须提到 [do:] 且给出选项」，
+    具体选项集与别名映射由 test_do_aliases.py 覆盖。
+    """
     from core.harness_adapter import HanakoPetAdapter
 
     a = HanakoPetAdapter.__new__(HanakoPetAdapter)
@@ -123,9 +126,8 @@ def test_action_prompt_lists_presets():
     prompt = a._build_action_prompt()
 
     assert "[do:" in prompt
-    assert "wink" in prompt, "预设名必须出现在 prompt 里"
-    assert "blush_shy" in prompt
-    assert "waving" in prompt, "motion 名也要保留"
+    assert "害羞" in prompt, "语义选项必须出现在 prompt 里"
+    assert "[feel:" in prompt, "示例应体现 [do:] 与 [feel:] 搭配"
 
 
 def test_action_prompt_survives_missing_renderer():

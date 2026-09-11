@@ -228,6 +228,47 @@ class Live2DRenderer(AvatarRenderer):
     # T09: 预设已外置到 avatar/emote_presets.py
     _EMOTE_PRESETS: dict[str, list[dict]] = LIVE2D_PRESETS
 
+    # ── AI 面向的语义动作别名（2026-09-11）──
+    #
+    # 为什么不直接把预设名给 AI：实测 `[do:]` **全历史 0 次使用**。
+    # 原因：prompt 里把 53 个预设名 + 13 个 motion 名（共 66 个）挤成一行，
+    # 无说明、无分类——模型无法从“angry_glare/arm_wave/blink3/...”里选择。
+    #
+    # 参考 Amadeus 的 TRIGGER_ALIASES：**只给少量带语义的标签**，
+    # 内部再归一到具体预设/motion。值与中文相近，模型用母语选更稳。
+    _AI_DO_ALIASES: dict[str, str] = {
+        # 表情（走预设路径）
+        "害羞": "blush_shy",
+        "脸红": "blush_shy",
+        "微笑": "smile_soft",
+        "开心": "smile_bright",
+        "大笑": "grin",
+        "惊讶": "surprise_gasp",
+        "思考": "think_look",
+        "疑惑": "doubt",
+        "点头": "nod",
+        "摇头": "head_shake",
+        "叹气": "sigh",
+        "眨眼": "wink",
+        "俏皮": "wink",
+        "得意": "proud",
+        "失落": "sad_droop",
+        "生气": "angry_glare",
+        "困": "stretch_yawn",
+        "伸懒腰": "stretch_yawn",
+        # 肢体（走 motion 路径）
+        "挥手": "waving",
+        "打招呼": "waving",
+        "摸头": "touch",
+        "开心跳": "happy",
+    }
+
+    # 注入 prompt 的选项文案（只列 key + 极简说明；别再把 66 个名字堆上去）
+    _AI_DO_PROMPT: str = (
+        "害羞(脸红别开眼)/微笑/开心/大笑/惊讶/思考/疑惑/点头/摇头/"
+        "叹气/眨眼/得意/失落/生气/困/挥手/摸头"
+    )
+
     # 参数名映射：emote_presets.py 用下划线小写命名，StandardParams 用大写驼峰。
     # 2026-09-06 新增：修复“身体动作”预设（stretch/dance/body_sway/arm_wave）因参数名
     # 不匹配而无效的问题——之前 getattr(P, "body_angle_y") 找不到，SDK 收到字符串而非 ID。
@@ -2728,6 +2769,13 @@ class Live2DRenderer(AvatarRenderer):
         g = gesture.strip().lower()
         if not g:
             return False
+
+        # ── 0. 语义别名归一（2026-09-11）──
+        # AI 输出的是「害羞/挥手」这类语义词；这里归一到具体预设/motion 名，
+        # 后续三类查找逻辑不变。
+        # 为何需要这层：直接把 66 个预设/motion 名给模型，实测 `[do:]`
+        # 全历史 0 次使用（见 _AI_DO_ALIASES 注释）。
+        g = self._AI_DO_ALIASES.get(g, g)
 
         # ── 1. 表情预设（2026-09-11 接线）──
         # avatar/emote_presets.py 里有 53 个带步骤序列的预设（wink / blush_shy /
