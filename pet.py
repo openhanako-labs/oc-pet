@@ -130,6 +130,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._pet_manager = pet_manager  # 多桌宠管理器引用
         self._init_position = position  # 初始位置（供 _setup_window 使用）
         self._pet_scale = scale
+        # 屏幕对尺寸的钳制比例（1.0 = 未被限制）。
+        # 滚轮气泡靠它报出**实际生效**的百分比，而不是屏幕上做不到的那个。
+        self._screen_clamp = 1.0
         self._current_char = agent_id
 
         # ── 接线初始化（按语义分块，顺序与原 __init__ 完全一致，行为零变化）──
@@ -1944,14 +1947,26 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         if aw <= 0 or ah <= 0:
             return w, h
         if w <= aw and h <= ah:
+            self._screen_clamp = 1.0
             return w, h
         k = min(aw / w, ah / h)
         cw, ch = max(60, int(w * k)), max(60, int(h * k))
+        # 记下被压的比例：滚轮气泡靠它说实话
+        # （否则窗口已被压到 1112 高，用户继续上滚时气泡还报 165%，而桌宠一像素不变）
+        self._screen_clamp = k
         logger.info(
             "PetWindow: 窗口 %dx%d 超出屏幕 %dx%d，等比压到 %dx%d（缩放被屏幕限制）",
             w, h, aw, ah, cw, ch,
         )
         return cw, ch
+
+    def _zoom_label(self, requested: float) -> str:
+        """缩放气泡的文案。屏幕装不下时报**实际生效**的百分比。"""
+        k = float(getattr(self, "_screen_clamp", 1.0) or 1.0)
+        eff = requested * k
+        if eff < requested - 0.005:
+            return f"🔍 {int(eff * 100)}%（屏幕上限）"
+        return f"🔍 {int(requested * 100)}%"
 
     def _resize_keeping_visible(self, w: int, h: int) -> None:
         """setFixedSize + 重新定位，保证窗口不被挤出屏幕。
@@ -2093,7 +2108,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 _now = time.time()
                 if (_now - getattr(self, "_last_zoom_bubble_ts", 0) > 1.2
                         and not getattr(self, "_is_thinking", False)):
-                    self._show_bubble(f"🔍 {int(new_scale*100)}%", emotion="neutral", priority=0, duration_ms=1500)
+                    self._show_bubble(self._zoom_label(new_scale), emotion="neutral", priority=0, duration_ms=1500)
                     self._last_zoom_bubble_ts = _now
             event.accept()
         except Exception as e:

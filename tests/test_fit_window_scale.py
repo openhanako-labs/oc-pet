@@ -317,6 +317,33 @@ def test_clamp_never_returns_degenerate():
     assert w >= 60 and h >= 60
 
 
+def test_zoom_label_reports_effective_percent():
+    """屏幕装不下时，气泡不能报一个屏幕上做不到的百分比。
+
+    实测：窗口已被屏幕压到 1112 高，用户继续上滚，气泡还在报 165%，
+    而桌宠一像素不变 —— 一个明摆着的谎。
+    """
+    p = _FakePet(1.0, screen=_Screen(2048, 1104))
+    pet_mod.PetWindow._clamp_size_to_screen(p, 810, 1499)
+
+    label = pet_mod.PetWindow._zoom_label(p, 1.8)
+
+    assert "%" in label
+    assert "屏幕上限" in label, f"未如实反映被屏幕限制: {label}"
+    assert "165" not in label and "180" not in label, (
+        f"报出了屏幕上做不到的百分比: {label}"
+    )
+
+
+def test_zoom_label_is_plain_when_not_clamped():
+    p = _FakePet(1.0, screen=_Screen(10000, 10000))
+    pet_mod.PetWindow._clamp_size_to_screen(p, 810, 833)
+
+    label = pet_mod.PetWindow._zoom_label(p, 1.8)
+
+    assert label == "🔍 180%", f"未被限制时不该加说明: {label}"
+
+
 def test_small_window_stays_within_screen():
     """窗口变小且原本贴底时，不该被留到屏幕外面。"""
     p = _FakePet(1.0, geo=_Rect(700, 900, 450, 200),
