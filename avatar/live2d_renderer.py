@@ -68,6 +68,9 @@ class Live2DRenderer(AvatarRenderer):
     # 卡手势防御：非 idle motion 播满此秒数强制回 idle（模型 motion 全 Loop=true，
     # waving/touch 等手势 mp3.json 都是 2.667s 循环，播 1.5 圈后回位）
     GESTURE_TIMEOUT = 5.0  # 2026-09-07: 从 3.0 提到 5.0，避免 LLM 生成期间表情被重置
+    # idle 重播最小间隔（秒）：IdleLoopProcessor 每帧都会试，本值防止异常快速重播。
+    # 正常 idle motion 长度 2-4s 远大于此值，不受影响。实测修复前 idle 一秒播 3 次。
+    IDLE_RESTART_MIN_INTERVAL: float = 0.5
     # 动作过渡（easing）：表情（SetExpression）从上一个状态淡入到新状态的默认时长。
     # Live2D motion 文件本身的跨 blend 目前受限于 live2d-py wrapper 未暴露
     # motion weight API，无法在同一 motion 内部做淡入（仍为硬切）；但表情层
@@ -427,6 +430,21 @@ class Live2DRenderer(AvatarRenderer):
         self._expression_transition_w: float = 0.0
         self._expression_active: bool = False
         self._last_expression: str = ""
+
+    @property
+    def available_presets(self) -> list[str]:
+        """返回可点名的表情预设名（供 LLM prompt 注入）。
+
+        2026-09-11：emote_presets 里的 53 个预设原本只能被随机挑中，
+        AI 点不了名。[do:预设名] 现在能直接播它们。
+
+        这些是**纯参数驱动**的表情序列（缺参数会按白名单跳过），
+        不依赖模型是否有对应 motion 文件，所以比动作更可靠。
+        """
+        try:
+            return sorted(self._EMOTE_PRESETS.keys())
+        except Exception:
+            return []
 
     @property
     def available_actions(self) -> list[dict]:
@@ -2064,6 +2082,20 @@ class Live2DRenderer(AvatarRenderer):
         return self._mixer.is_idle()
 
     def _start_idle(self) -> None:
+        # ── idle 重播节流（2026-09-11）──
+        # IdleLoopProcessor 每帧检查 IsMotionFinished()，为真就调本方法。
+        # 而本方法原本**无条件 StartMotion** —— 没有去重（对比
+        # _start_motion_at 是有去重的）。
+        #
+        # 后果：若 idle motion 播完得异常快（或 IsMotionFinished 在某状态下
+        # 持续为真），就会逐帧重播。实测日志：idle 一秒播 3 次、一晚 38 次，
+        # 任何动作都活不过一秒——**桌宠在不停地打断自己**。
+        #
+        # 不变量：idle 重播至少间隔 IDLE_RESTART_MIN_INTERVAL 秒。
+        # 正常 idle 长度（2-4s）远大于此值，不受影响；只在异常快速重播时生效。
+        now = time.monotonic()
+        if now - getattr(self, "_last_idle_start_at", 0.0) < self.IDLE_RESTART_MIN_INTERVAL:
+            return
         if not self._model:
             return
         try:
@@ -2085,6 +2117,7 @@ class Live2DRenderer(AvatarRenderer):
                              if isinstance(motion_list[idx], dict) else "")
                     self._model.StartMotion(group, idx, self._live2d.MotionPriority.IDLE)
                     self._note_motion_started(fname, is_idle=True)
+                    self._last_idle_start_at = now
                     return
             # fallback：StartRandomMotion（组名非空时有效）
             if self._motion_groups:
@@ -2094,6 +2127,7 @@ class Live2DRenderer(AvatarRenderer):
                 self._model.StartRandomMotion(self._live2d.MotionGroup.IDLE,
                                               self._live2d.MotionPriority.IDLE)
             self._note_motion_started("idle", is_idle=True)  # fallback 视为 idle，不受超时限制
+            self._last_idle_start_at = now
         except Exception as e:
             # 忽略 "motion priority is too low" 警告（正常行为，idle 被更高优先级 motion 打断）
             if "priority is too low" not in str(e):
@@ -2671,6 +2705,22 @@ class Live2DRenderer(AvatarRenderer):
         g = gesture.strip().lower()
         if not g:
             return False
+
+        # ── 1. 表情预设（2026-09-11 接线）──
+        # avatar/emote_presets.py 里有 53 个带步骤序列的预设（wink / blush_shy /
+        # pout / head_tilt / gaze_shift…），比裸参数（smile=80）表现力强得多。
+        # 但它们原本**只能被 _pick_emote_preset() 随机挑中**，AI 点不了名。
+        #
+        # 预设优先于 motion：它粒度更细，且不依赖模型是否有对应 motion 文件
+        # （纯参数驱动，缺参数会被 ParamWriter 按白名单跳过）。
+        if g in self._EMOTE_PRESETS:
+            try:
+                if self.play_emote_sequence(g):
+                    logger.info("已播放表情预设: %s", g)
+                    return True
+            except Exception as e:
+                self._note_frame_failure("EmotePreset", e)
+
         try:
             from config import EXPRESSION_MAP
             if g in EXPRESSION_MAP:
