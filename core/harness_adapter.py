@@ -779,7 +779,13 @@ class HanakoPetAdapter:
             elif isinstance(details, str) and details.strip():
                 return details.strip()[:120]
             if name:
-                return f"已为你完成「{name}」"
+                # 2026-09-11：不再把工具名说给用户。
+                # 原为 f"已为你完成「{name}」" —— 实测用户看到的是
+                # “已为你完成「search_memory」”，把内部工具名泄到了气泡里。
+                # 工具名只进日志（排障用）；用户侧返回空，调用方自会略过气泡，
+                # 宁可不说，也不说一句工程黑话。
+                logger.info("[synthesize] 工具轮无最终文本，工具=%s（不上气泡）", name)
+                return ""
         return ""
 
     @staticmethod
@@ -801,9 +807,14 @@ class HanakoPetAdapter:
         # 剥离 [duration:xxx] 标签（持续时间，不显示给用户）
         cleaned = re.sub(r"\s*\[duration:[^\]]*\]\s*", " ", cleaned, flags=re.IGNORECASE)
         # 剥离 [feel:v,a] / [do:name]（2026-09-10 新增标签）。
-        # 这里是第二道闸：无论哪条路径先剥，气泡/TTS 都不得漏出原始标签。
-        cleaned = re.sub(r"\s*\[feel:[^\]]*\]\s*", " ", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"\s*\[do:[^\]]*\]\s*", " ", cleaned, flags=re.IGNORECASE)
+        #
+        # 2026-09-11 修正：这三行曾把 [feel:]/[do:]/[message:] 在这里就剥掉，
+        # 导致后续 parse_action_intent 看不到它们——**标签被删了，值也丢了**。
+        # 实测：模型真的输出了 [feel:0.6,0.3]，parse_emotion 先把它剔了，
+        # 意图解析拿到的是空文本，VA 永远不生效。
+        #
+        # 现在这里**不剥**，改由 parse_action_intent（两条路径都会调）负责；
+        # 它能同时完成「提取值 + 清显示文本」两件事。
         # BugFix #4：整段剥离 <mood>...</mood> 内省块（Vibe/Reflections/Will/
         # Sparks 字段是给服务端/记忆用的元数据，不是给用户的回复）——必须在
         # HTML 剥离之前做，否则 <mood> 标签被剥掉后只剩 Vibe 文本。

@@ -151,13 +151,95 @@ def test_machine_source_via_hanako_has_no_rules():
 # ══════════════════════════════════════════════════════════════
 
 def test_reply_with_tags_survives_parsing():
-    """模型给出标签时，emotion 应被解析出来（而不是落到 neutral）。"""
+    """模型给出 [emotion:] 时，emotion 应被解析出来。"""
     a = _adapter(
-        reply="好呀！[emotion:happy][feel:0.8,0.7]"
+        reply="好呀！[emotion:happy]"
               "[action:{\"gesture\":\"waving\",\"intensity\":0.8}]"
     )
     cleaned, emotion = a.chat_via_hanako("举个手?")
 
     assert emotion == "happy", "带 emotion 标签的回复必须解析出真情绪"
     assert "[emotion:" not in cleaned, "标签须从展示文本中剥离"
-    assert "[feel:" not in cleaned, "[feel:] 也不得漏给用户"
+
+
+def test_parse_emotion_does_not_eat_feel_tag():
+    """[feel:] / [do:] / [message:] 不得在 parse_emotion 里被剥。
+
+    2026-09-11 实测 bug：parse_emotion 先把 [feel:0.6,0.3] 剔了，
+    等 parse_action_intent 来看时已经没了 —— **标签被删了，值也丢了**，
+    VA 永远不生效。
+
+    职责划分：parse_emotion 只管 [emotion:] 与展示卫生；
+    parse_action_intent 负责“提取值 + 清显示文本”。
+    """
+    from core.harness_adapter import HanakoPetAdapter
+
+    for tag in ("[feel:0.6,0.3]", "[do:waving]", '[message:{"action":"wave"}]'):
+        cleaned, _ = HanakoPetAdapter.parse_emotion(f"话 {tag}")
+        assert tag in cleaned, (
+            f"parse_emotion 不得剥 {tag}——剥了 parse_action_intent 就读不到值"
+        )
+
+
+def test_engine_parses_intent_on_both_paths():
+    """推送路径必须真的把意图传出来（功能验证，不靠源码文本顺序）。
+
+    本地路径 _process_message 与推送路径 _handle_session_reply 走不同代码；
+    实测推送路径原本只 parse_emotion → [feel:] 死在那里。
+    """
+    import threading
+    import types
+
+    from core.conversation_engine import ConversationEngine
+    from core.harness_adapter import HanakoPetAdapter
+
+    e = ConversationEngine.__new__(ConversationEngine)
+    e._adapter = types.SimpleNamespace(parse_emotion=HanakoPetAdapter.parse_emotion)
+    e._is_current_session = lambda s: True
+    e._lock = threading.RLock()
+    e._queue = []
+    got = []
+    e.on_reply = lambda *a, **k: got.append(a)
+
+    result = types.SimpleNamespace(
+        text="<mood>\nVibe: x\n</mood>\n\n在。不用举手，我看得见你。[feel:0.6,0.3]",
+        origin="external",
+        session=None,
+    )
+    e._handle_session_reply(result)
+
+    assert got, "推送路径必须有回调"
+    args = got[0]
+    text, emotion, anim, _audio, intent = args[0], args[1], args[2], args[3], args[4]
+
+    assert intent == {"va": [0.6, 0.3]}, "推送路径必须把 [feel:] 提取成 va 意图"
+    assert "[feel:" not in text, "标签不得漏进展示文本"
+    assert "<mood>" not in text, "mood 块不得漏进展示文本"
+
+
+def test_push_path_handles_invented_message_tag():
+    """[message:{"action":"wave"}] 这种模型自创变体也要能吃下。"""
+    import threading
+    import types
+
+    from core.conversation_engine import ConversationEngine
+    from core.harness_adapter import HanakoPetAdapter
+
+    e = ConversationEngine.__new__(ConversationEngine)
+    e._adapter = types.SimpleNamespace(parse_emotion=HanakoPetAdapter.parse_emotion)
+    e._is_current_session = lambda s: True
+    e._lock = threading.RLock()
+    e._queue = []
+    got = []
+    e.on_reply = lambda *a, **k: got.append(a)
+
+    result = types.SimpleNamespace(
+        text='嗯，看到了。在看曹操呢。\n[message:{"action":"wave","intensity":0.3}]',
+        origin="external",
+        session=None,
+    )
+    e._handle_session_reply(result)
+
+    args = got[0]
+    assert args[4] and args[4].get("gesture") == "wave", "自创标签应被归一成 gesture"
+    assert "[message:" not in args[0], "自创标签不得漏进气泡（否则 TTS 会合成失败）"

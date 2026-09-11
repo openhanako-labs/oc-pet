@@ -1503,12 +1503,17 @@ class ConversationEngine:
         cleaned = _re.sub(r'\s*\[do:[^\]]*\]\s*', ' ', cleaned, flags=_re.IGNORECASE)
 
         # ── 解析 [action:{...}]（如果存在）──
+        # 2026-09-11：模型会自创 [message:{"action":"wave",...}] 这种变体
+        # （实测于 11:27:22，全仓原本零处理 → 直接漏进气泡，还连带让 TTS
+        # 合成失败：“No audio was received”）。先归一成 [action:] 再走同一套解析。
+        reply = _re.sub(r'\[\s*message\s*:', '[action:', reply, flags=_re.IGNORECASE)
+        cleaned = _re.sub(r'\[\s*message\s*:', '[action:', cleaned, flags=_re.IGNORECASE)
         # 逐个扫描 [action:{...}]：按大括号配平定位闭合 }，再要求其后紧跟 ]。
         # 不用正则贪婪（``\{.*\}`` 配 DOTALL 会在一条回复含多个标签时把所有
         # 标签吞成一个非法 JSON，导致 intent=None、动态参数被静默丢弃并退化 emotion
         # 路径）。配平扫描可正确处理嵌套 params 与多标签（取最后一个合法标签）。
         intent = None
-        if "[action:" in cleaned:
+        if "[action:" in reply:
             i = 0
             n = len(reply)
             while True:
@@ -1541,7 +1546,10 @@ class ConversationEngine:
                     obj = _json.loads(raw)
                 except Exception:
                     obj = None
-                if isinstance(obj, dict) and (obj.get("gesture") or obj.get("params")):
+                if isinstance(obj, dict) and (obj.get("gesture") or obj.get("action") or obj.get("params")):
+                    # 键名兼容：模型可能用 action 而非 gesture（见上方 [message:] 说明）
+                    if not obj.get("gesture") and obj.get("action"):
+                        obj["gesture"] = obj.pop("action")
                     intent = obj
                 # 无论 JSON 是否合法，都剥掉该标签
                 cleaned = cleaned.replace(full, " ")
@@ -2037,8 +2045,43 @@ class ConversationEngine:
         if pending_user:
             logger.debug("镜像回复让位（本地有 pending 用户消息）")
             return
-        text, emotion = self._adapter.parse_emotion(getattr(result, "text", "") or "")
-        _call_reply_cb(self.on_reply, text or "…", emotion, map_emotion_to_anim(emotion), "", None)
+        # ── 2026-09-11 修：推送路径也要解析意图，且必须在 parse_emotion 之前 ──
+        #
+        # 原本这里只 parse_emotion 就回调了。后果：模型真的输出了
+        # `[feel:0.6,0.3]`（已在 session 里验证），而**没人提取它** → VA 从未生效。
+        #
+        # 本地路径（_process_message）有三步：parse_action_intent /
+        # _parse_action_directive / 语义分析。推送路径一步都没有，
+        # 于是「走 WS 推回来的真实回复」永远是裸文本。
+        #
+        # 顺序很关键：parse_emotion 会剥 [expression:]/[duration:]，
+        # 若它先跑，意图解析就看不到这些标签了（今天撞见的就是这一类：
+        # **剥得比读得早，标签被删了、值也丢了**）。所以先解析意图，再解情绪。
+        raw = getattr(result, "text", "") or ""
+        action_intent = None
+        anim = None
+        text = raw
+        try:
+            _ai_text, _ai_intent = self.parse_action_intent(text)
+            if _ai_intent is not None:
+                text = _ai_text
+                action_intent = _ai_intent
+                anim = _ai_intent.get("anim") or None
+        except Exception:
+            logger.debug("conversation_engine: 推送路径意图解析失败", exc_info=True)
+        try:
+            _act_re, _act_anim = self._parse_action_directive(text)
+            if _act_re is not None:
+                text = _act_re
+                anim = _act_anim or anim
+        except Exception:
+            logger.debug("conversation_engine: 推送路径动作指令解析失败", exc_info=True)
+
+        text, emotion = self._adapter.parse_emotion(text)
+        if not anim:
+            anim = map_emotion_to_anim(emotion)
+
+        _call_reply_cb(self.on_reply, text or "…", emotion, anim, "", action_intent)
 
     def _handle_session_tool_progress(self, progress: "object") -> None:
         """接收 SessionManager 的 ToolProgress 事件，转发给 UI
