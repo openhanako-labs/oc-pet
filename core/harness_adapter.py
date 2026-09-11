@@ -636,20 +636,24 @@ class HanakoPetAdapter:
                 # F3: 优先复用该 agent 已 pin 的 session（切回续聊）
                 pinned = self._agent_pinned.get(aid)
                 if pinned:
-                    # 有钉住的 session，复用
                     self._current_session = sm.ensure_session(
                         agent_id=aid,
-                        preferred_session_id=pinned
+                        preferred_session_id=pinned,
                     )
                 elif aid in self._agent_sessions:
-                    # 内存里已有该 agent 的 session 引用，直接复用
                     self._current_session = self._agent_sessions[aid]
                 else:
                     # 首次：为每个桌宠/agent 创建专属 session
                     self._current_session = sm.create_session(agent_id=aid)
                 self._agent_sessions[aid] = self._current_session
-                self._agent_pinned[aid] = getattr(self._current_session, 'session_id', None)
-                self._pinned_session_id = self._agent_pinned.get(aid)
+                new_sid = getattr(self._current_session, "session_id", None)
+                self._agent_pinned[aid] = new_sid
+                self._pinned_session_id = new_sid
+                # 2026-09-11：把会话 id 记进日志。
+                # 排查「桌宠到底在哪个会话里说话」时这是唯一的直接凭据——
+                # 我刚为此查了一整轮（文件取证、API 取证、被我自己的输出
+                # 循环引用骗了四次）。一条日志能省下这些。
+                logger.info("[session] agent=%s session=%s", aid, new_sid)
             except Exception as e:
                 raise HanakoUnavailableBeforeSend("无法准备 Hanako Session") from e
 
