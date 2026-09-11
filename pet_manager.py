@@ -268,23 +268,36 @@ class PetManager:
 
         return discovered
 
+    @staticmethod
+    def _dir_has_payload(path) -> bool:
+        """目录存在**且有内容**（非空）。
+
+        2026-09-11：原判断只看 `path.exists()`，于是空目录也当有资源。
+        实测：`characters/sample_live2d/live2d/` 是个空目录，却通过了
+        `_has_sprites` → 被当作有效角色启用 → 启动时无模型可加载。
+        """
+        try:
+            return path.is_dir() and any(path.iterdir())
+        except Exception:
+            return False
+
     def _has_sprites(self, agent_id: str) -> bool:
         """检查 agent 是否有精灵资源（包括 Live2D 模型）"""
         # 1. 检查 agent 自带的 pet/ 目录
         agent_pet = AGENTS_DIR / agent_id / "pet"
         if agent_pet.exists():
-            # 检查是否有 frames/ 或 live2d/
-            if (agent_pet / "frames").exists() and any((agent_pet / "frames").iterdir()):
+            # 检查是否有 frames/ 或 live2d/（要求非空）
+            if self._dir_has_payload(agent_pet / "frames"):
                 return True
-            if (agent_pet / "live2d").exists():
+            if self._dir_has_payload(agent_pet / "live2d"):
                 return True
         # 2. 检查项目内置的 characters/ 目录
         char_dir = CHARACTERS_DIR / agent_id
         if char_dir.exists():
-            # 检查是否有 frames/ 或 live2d/
-            if (char_dir / "frames").exists() and any((char_dir / "frames").iterdir()):
+            # 检查是否有 frames/ 或 live2d/（要求非空）
+            if self._dir_has_payload(char_dir / "frames"):
                 return True
-            if (char_dir / "live2d").exists():
+            if self._dir_has_payload(char_dir / "live2d"):
                 return True
             # 2026-09-08: 支持直接检查 char_dir 下的 .model3.json（live2d zip 导入）
             # 注意：f.suffix 只返回最后一个扩展名（.json），需要用 f.name.endswith 检查

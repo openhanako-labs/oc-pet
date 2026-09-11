@@ -101,3 +101,66 @@ def test_validation_result_is_not_saved_in_launch_all():
         "launch_all 不得把「本次无资源」写回用户配置——"
         "模型暂时不可用不该变成永久关闭"
     )
+
+
+# ══════════════════════════════════════════════════════════════
+#  反向守卫：测试不得写真实的 config.json
+# ══════════════════════════════════════════════════════════════
+
+def test_conftest_guard_blocks_real_config_write():
+    """2026-09-11 事故：测试把用户的 config.json 写成了别的角色。
+
+    `ui/settings_dialog.py` 有两种导入方式：
+      :29   模块级 `from config import save_config`
+      :1202 函数内 `from config import save_config`
+    两者都会绕过 `monkeypatch.setattr(sd, "save_config", ...)`。
+    tests/conftest.py 的 autouse 守卫在**源头 + 已加载模块**双覆盖。
+
+    本测试功能性验证：调用后被记录，且不留盘痕迹。
+    """
+    import config as config_mod
+
+    assert type(config_mod.save_config).__name__ == "_ConfigWriteSpy", (
+        f"conftest 守卫未生效，当前是 {type(config_mod.save_config).__name__}"
+    )
+
+    config_mod.save_config({"agents": [{"id": "__guard_probe__", "enabled": True}]})
+
+    assert config_mod.save_config.calls, "守卫应记录到这次调用"
+    assert config_mod.save_config.last["agents"][0]["id"] == "__guard_probe__"
+
+
+def test_conftest_guard_also_covers_module_level_imports():
+    """模块级导入（如 settings_dialog）拿到的也应是 spy，不是原函数。"""
+    import config as config_mod
+
+    from ui import settings_dialog as sd
+
+    if not hasattr(sd, "save_config"):
+        pytest.skip("settings_dialog 未导入 save_config")
+
+    assert sd.save_config is config_mod.save_config, (
+        "settings_dialog 里绑的 save_config 未被守卫替换——"
+        "它会在测试中写真实 config.json"
+    )
+
+
+def test_real_config_file_is_untouched_by_this_test():
+    """确认本测试不会改动 workspace 下的 config.json。"""
+    import json
+    from pathlib import Path
+
+    cfg = Path(__file__).resolve().parent.parent / "config.json"
+    if not cfg.exists():
+        pytest.skip("无 config.json")
+
+    before = tuple((a["id"], a["enabled"])
+                   for a in json.loads(cfg.read_text(encoding="utf-8")).get("agents", []))
+
+    # 模拟一次「切换角色包」的写入调用
+    import config as config_mod
+    config_mod.save_config({"agents": [{"id": "__probe__", "enabled": True}]})
+
+    after = tuple((a["id"], a["enabled"])
+                  for a in json.loads(cfg.read_text(encoding="utf-8")).get("agents", []))
+    assert before == after, "测试写到了真实 config.json"
