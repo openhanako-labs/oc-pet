@@ -1006,10 +1006,11 @@ class HanakoPetAdapter:
             if not options:
                 return ""
             return (
-                "3. 可选：想配合一个表情或小动作时加 [do:名字]，可用："
+                "3. 可选：想配合一个表情或小动作时加 [do:名字]，"
+                "**只能从这些里选**："
                 + options
-                + "。例：[feel:0.8,0.6] [do:开心]，[feel:-0.3,-0.2] [do:叹气]"
-                "。不确定就不加——不加也自然。"
+                + "。例：[feel:0.8,0.6] [do:开心]，[feel:-0.3,-0.2] [do:叹气]。"
+                "没有合适的就不加——不加也自然。"
             )
         except Exception:
             return ""

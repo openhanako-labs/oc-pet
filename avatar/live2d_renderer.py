@@ -2088,6 +2088,16 @@ class Live2DRenderer(AvatarRenderer):
         if req.motion_group:
             # from_arbiter=True：这是 mixer 刚批准的动作本人，不受仲裁保护拦截
             played = self._play_motion_kw(req.motion_group, from_arbiter=True)
+            if not played:
+                # 2026-09-11：motion 未找到但 params 可能生效——**必须可见**。
+                # 原实现因为下面 `if req.params: played = True` 而把整条请求当成功，
+                # 日志只说“已提交 MotionRequest”，而动作实际没播。
+                # 实测：模型常自造 gesture（如 concern），既不是别名/预设也不是 motion 名。
+                logger.info(
+                    "MotionRequest 的动作 %r 未匹配到 motion，仅面部参数生效"
+                    "（可用动作见 prompt 的 [do:] 选项）",
+                    req.motion_group,
+                )
             if not played and fallback_motion:
                 played = self._play_motion_kw(fallback_motion, from_arbiter=True)
         if req.expression_name:

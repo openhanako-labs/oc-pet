@@ -126,6 +126,55 @@ def test_unknown_word_is_safe():
     assert r._preset_calls == []
 
 
+def test_unmatched_gesture_in_request_is_visible(caplog):
+    """motion 未找到但 params 生效时，必须留痕。
+
+    2026-09-11 实测：模型常自造 gesture（如 concern）。原实现因为
+    `if req.params: played = True` 把整条请求当成功，日志只说
+    “已提交 MotionRequest”，而动作部分实际没播——又一例静默部分失败。
+    """
+    import logging
+
+    from avatar.motion_mixer import Layer, MotionMixer, MotionRequest
+
+    r = _renderer()
+    r._mixer = MotionMixer()
+    r._param_intent = {}
+
+    with caplog.at_level(logging.INFO, logger="avatar.live2d_renderer"):
+        r.submit_motion_request(MotionRequest(
+            layer=Layer.DIALOG, motion_group="concern",
+            params={"ParamAngleX": 6}, duration=3.0, name="t",
+        ))
+
+    msgs = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "concern" in msgs, "未匹配的 gesture 名应出现在日志里"
+    assert "未匹配到 motion" in msgs
+
+
+def test_matched_gesture_does_not_log_warning(caplog):
+    """能找到 motion 时不应误报。"""
+    import logging
+
+    from avatar.motion_mixer import Layer, MotionMixer, MotionRequest
+
+    r = _renderer(motions=["motions/waving.motion3.json"])
+    r._mixer = MotionMixer()
+    r._param_intent = {}
+    r._model = types.SimpleNamespace(
+        StartMotion=lambda *a: None, StopAllMotions=lambda: None,
+        ResetExpressions=lambda: None,
+    )
+
+    with caplog.at_level(logging.INFO, logger="avatar.live2d_renderer"):
+        r.submit_motion_request(MotionRequest(
+            layer=Layer.DIALOG, motion_group="waving", duration=3.0, name="t",
+        ))
+
+    msgs = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "未匹配到 motion" not in msgs, "找得到时不得误报"
+
+
 def test_direct_preset_name_still_works():
     """别名是**新增**的一层，不是替换——直接给预设名仍应可用。"""
     r = _renderer()
@@ -153,7 +202,8 @@ def test_prompt_mentions_do_tag_and_examples():
     assert "[do:" in p
     assert "害羞" in p
     assert "[feel:" in p, "示例里应同时出现 [feel:]，暗示两者搭配"
-    assert "不确定就不加" in p, "应允许模型不加——否则会硬凑"
+    assert "就不加" in p, "应允许模型不加——否则会硬凑"
+    assert "只能从这些里选" in p, "应给出约束，否则模型会自造名字"
 
 
 def test_prompt_is_short():
