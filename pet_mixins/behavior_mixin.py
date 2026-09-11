@@ -322,11 +322,16 @@ class BehaviorMixin:
                 # 替代旧版「清空冷却表 + 伪造时间戳」的私有状态越界 bypass。
                 if hasattr(renderer, "submit_motion_request"):
                     from avatar.motion_mixer import MotionRequest, Layer
+                    # 2026-09-11：必须给 duration。原先缺省 0.0 = “永不过期”，
+                    # mixer 会永久认为本动作在播（层=USER_INITIATED=4），
+                    # 使 is_idle() 永远为 False、并让后续重播判定失真。
+                    # 取值与帧管线的卡手势超时一致：非 idle motion 最多播这么久。
                     renderer.submit_motion_request(
                         MotionRequest(
                             layer=Layer.USER_INITIATED,
                             motion_group="waving",
                             can_interrupt=True,
+                            duration=float(getattr(renderer, "GESTURE_TIMEOUT", 5.0)),
                             name="proactive_waving",
                         ),
                         fallback_motion="happy",
@@ -693,11 +698,14 @@ class BehaviorMixin:
                 if renderer is not None:
                     if hasattr(renderer, "submit_motion_request"):
                         from avatar.motion_mixer import MotionRequest, Layer
+                        # 2026-09-11：同 _trigger_proactive_waving，必须给 duration
+                        # 否则 mixer 永久 stale（见那里的注释）。
                         renderer.submit_motion_request(
                             MotionRequest(
                                 layer=Layer.USER_INITIATED,
                                 motion_group="waving",
                                 can_interrupt=True,
+                                duration=float(getattr(renderer, "GESTURE_TIMEOUT", 5.0)),
                                 name="screen_proactive_waving",
                             ),
                             fallback_motion="happy",

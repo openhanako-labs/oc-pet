@@ -2227,23 +2227,22 @@ class Live2DRenderer(AvatarRenderer):
                     logger.debug("Live2DRenderer: 同一 motion 已在播(idx=%d)，去重跳过", idx)
                 return True  # 继续播（Loop），不计时不受影响
 
-            # ── 仲裁保护（2026-09-10 选项 A）──
-            # AI 明确点名的动作（[action:] → Layer.DIALOG，带 duration）在它自己
-            # 声明的时长内，不被情绪/状态驱动的重播顶掉。
+            # ── 仲裁保护（2026-09-10 选项 A；2026-09-11 修正判据）──
+            # AI 点名的动作在它自己声明的时长内，不被情绪/状态驱动的重播顶掉。
             #
-            # 为什么需要：play_anim / _start_motion_at **不经过 mixer**，而
-            # exclusive=True 会无条件 StopAllMotions()。实测一次挥手在 :56 播出，
-            # :57 被情绪 happy 顶掉、:58 被 idle 顶掉——用户看到的是闪一下。
-            # 混流层是真的建好了，只是这条通道没问过它。
+            # ★ 判据用「有无时长」而不是「层≥DIALOG」。用层的写法会造成死锁：
+            # behavior_mixin 提交主动挥手用的是 Layer.USER_INITIATED（=4）且
+            # duration=0（永不过期），一旦触发就把 mixer 永久锁在层 4，
+            # 之后所有 play_anim / 自动动作全被拦下。
+            # 实测：15 分钟内 25 次随机动作只播了 2 次，且没有任何报错。
             #
             # from_arbiter=True 是动作本人（mixer 刚批准），放行；
             # force_restart=True 是用户手动点菜单，用户意图优先，也放行。
             if (exclusive and not force_restart and not from_arbiter
-                    and self._mixer.get_active_layer() >= Layer.DIALOG):
+                    and self._mixer.has_bounded_active()):
                 if getattr(self, "_debug", False):
                     logger.debug(
-                        "Live2DRenderer: AI 动作活跃中（层=%s），跳过低优先级重播 idx=%d",
-                        self._mixer.get_active_layer(), idx,
+                        "Live2DRenderer: AI 有时长受限的动作在播，跳过重播 idx=%d", idx,
                     )
                 return False
             prio = priority if priority is not None else self._live2d.MotionPriority.NORMAL
@@ -2682,11 +2681,11 @@ class Live2DRenderer(AvatarRenderer):
             played = self._trigger_gesture(gesture, intensity)
             if played:
                 logger.info("已触发动作: %s (intensity=%.1f)", gesture, intensity)
-            elif self._mixer.get_active_layer() >= Layer.DIALOG:
-                # 被仲裁保护拦下：动作层正被占用，属正常情况（不是“没找到动作”）
+            elif self._mixer.has_bounded_active():
+                # 被仲裁保护拦下：有时长受限的动作正在场，属正常情况（不是“没找到动作”）
                 logger.info(
-                    "动作 %s 未执行：当前有层=%s 的动作在场（仲裁保护，待其到期后生效）",
-                    gesture, self._mixer.get_active_layer(),
+                    "动作 %s 未执行：当前有时长受限的动作在场（仲裁保护，待其到期后生效）",
+                    gesture,
                 )
             else:
                 # 2026-09-10：原实现无条件打「已触发动作」，即使什么都没播。

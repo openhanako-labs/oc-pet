@@ -245,6 +245,29 @@ class MotionMixer:
         """是否处于 idle 层（无高优先级动作在播）。"""
         return self.get_active_layer() == Layer.IDLE
 
+    def has_bounded_active(self) -> bool:
+        """是否存在「声明了时长且尚未到期」的活跃请求。
+
+        2026-09-11 新增。用途：让「AI 点名的动作在它自己声明的时长内不被
+        顶掉」这条保护有一个精确判据。
+
+        **为什么不能用「层」当判据**（这是上一版的 bug）：
+        `duration <= 0` 的语义是「直到被更高优先级替换」（见 MotionRequest
+        字段注释），它永远不会过期。而 `behavior_mixin` 提交主动挥手时用的是
+        `Layer.USER_INITIATED`（=4，最高）且未给 duration——于是**一次主动挥手
+        就把 mixer 永久锁在层 4**。任何用「层 >= DIALOG」当保护条件的写法，
+        都会在那之后拦下所有动作（实测：15 分钟内 25 次随机动作只播了 2 次）。
+
+        真正值得保护的是**时间受限**的请求：它承载 AI 明确声明的 duration。
+        无时长的请求本意就是「随时可被替换」，拦它反而造成本 bug。
+        """
+        if not self._has_active():
+            return False
+        active = self._active()
+        if active.duration <= 0:
+            return False
+        return (_time.monotonic() - self._active_since) < active.duration
+
     def active_name(self) -> str:
         """当前活跃请求的名称（日志用）。"""
         state = self.get_active()

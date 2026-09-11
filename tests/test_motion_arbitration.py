@@ -131,10 +131,29 @@ def test_no_ai_action_means_normal_behavior():
     assert r._start_motion_at(1, exclusive=True) is True, "无保护对象时不得拦"
 
 
-def test_lower_layers_do_not_trigger_protection():
-    """SCREEN 层（2）低于 DIALOG（3），不构成保护。"""
+def test_bounded_request_is_protected_regardless_of_layer():
+    """★ 语义变更（2026-09-11）：判据从「层≥DIALOG」改为「声明了时长」。
+
+    上一版用层当代理，结果是：behavior_mixin 的 USER_INITIATED（4）+ duration=0
+    会永久锁死 mixer（详见 test_arbitration_not_stuck.py）。
+
+    现在只问一件事：**这个请求自己声明了时长吗？**
+    声明了 = 它是一段有头有尾的表演，值得让它演完（无论来自哪一层）；
+    没声明 = “直到被替换”，那正是应当允许替换的情形。
+
+    注：SCREEN 层目前实际未被任何地方提交（全仓只有 DIALOG 与
+    USER_INITIATED 两处），本条覆盖的是判据本身的语义。
+    """
     r = _renderer()
     r._mixer.submit(MotionRequest(layer=Layer.SCREEN, duration=3.0, name="screen"))
+
+    assert r._start_motion_at(0, exclusive=True) is False, "声明了时长就应受保护"
+
+
+def test_unbounded_lower_layer_does_not_protect():
+    """反向：没声明时长的低层请求不构成保护。"""
+    r = _renderer()
+    r._mixer.submit(MotionRequest(layer=Layer.SCREEN, name="screen"))
 
     assert r._start_motion_at(0, exclusive=True) is True
 
