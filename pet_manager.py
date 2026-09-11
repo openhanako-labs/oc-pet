@@ -143,28 +143,31 @@ class PetManager:
         
         return False
     
-    def _validate_enabled_agents(self) -> bool:
-        """P2: 验证启用的角色是否有精灵资源，没有就自动禁用
-        
+    def _validate_enabled_agents(self) -> list[str]:
+        """P2: 找出「已启用但没有模型资源」的角色，本次运行跳过它们。
+
         Returns:
-            True 如果配置有变更（禁用了无模型的角色）
+            被跳过的 agent_id 列表（空列表 = 无需跳过）。
+
+        注意：本方法**只改内存视图**，调用方**不得**把它写回 config.json。
+        理由见 launch_all 里的注释：模型暂时不可用不等于永久关闭。
         """
-        changed = False
+        skipped: list[str] = []
         for agent in self._config.get("agents", []):
             if not agent.get("enabled", True):
                 continue  # 已禁用的跳过
-            
+
             agent_id = agent.get("id")
             if not agent_id:
                 continue
-            
+
             # 检查是否有精灵资源
             if not self._has_sprites(agent_id):
-                logger.warning("Agent %s is enabled but has no sprites, disabling", agent_id)
-                agent["enabled"] = False
-                changed = True
-        
-        return changed
+                logger.warning("Agent %s is enabled but has no sprites, skipping this run", agent_id)
+                agent["enabled"] = False   # 仅改内存：让 enabled_agents 本次不返回它
+                skipped.append(agent_id)
+
+        return skipped
     
     def _has_any_characters(self) -> bool:
         """P2: 检查是否有可用的角色模型（characters/ 目录非空）"""
@@ -437,11 +440,24 @@ class PetManager:
             logger.warning("Please install a character package before launching pets")
             return
         
-        # P2: 验证启用的角色是否有精灵资源，没有就自动禁用
-        changed = self._validate_enabled_agents()
-        if changed:
-            self._save_config()
-            logger.info("Config updated: disabled agents without sprites")
+        # P2: 验证启用的角色是否有精灵资源，本次不启动无资源的
+        #
+        # 2026-09-11 修：原先这里会 `self._save_config()` 把 enabled=false
+        # **持久化回 config.json**。后果：模型暂时不可用（换盘、下载中、目录
+        # 被移动）会被记成「以后都不用」，而且一旦所有 agent 都被写回禁用，
+        # 桌宠就静默不启动（实测：shizuku 目录不存在→写回禁用；而 miku 已是
+        # false，于是 0 enabled agents，界面什么都不显示）。
+        #
+        # 不变量：**运行时启发式不得修改用户的持久配置。**
+        # 本次在内存里跳过即可，下次启动重新判定——代价是重新扫一遍目录，
+        # 比“把暂时不可用写成永久关闭”便宜得多。
+        skipped = self._validate_enabled_agents()
+        if skipped:
+            logger.warning(
+                "launch_all: 本次跳过 %d 个无模型资源的 agent（%s）——"
+                "仅影响本次运行，不写回配置；补上模型后重启即可恢复",
+                len(skipped), ", ".join(skipped),
+            )
         
         # 记录要启动的 agents
         enabled = self.enabled_agents

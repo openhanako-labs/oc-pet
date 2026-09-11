@@ -167,12 +167,14 @@ def test_throttle_should_skip_after_half_life():
     """超过硬窗口 + 多个半衰期后不再跳过（p_skip 趋近 0）。"""
     throttle = ProactiveThrottle()
     now = time.time()
-    half_life = PROACTIVE_SOURCE_HALF_LIFE_DEFAULT
     throttle.record_used("web_topic", kind="web", now=now)
-    # 20 天后 p_skip ≈ 0.5^( (20d-5h)/3d ) 极小 → 随机基本不跳过
-    far_future = now + 20 * 86400
+    # 2026-09-11 修：原来用 20 天，p_skip = 0.5^((20d-5h)/3d) ≈ 1.03e-2 ——
+    # 也就意味着**每次全量跑有约 1% 概率假失败**（实测确实偶挂）。
+    # 断言 should_skip 为 False 是概率性断言，必须把概率压到实际为零。
+    # 200 天 → p_skip ≈ 9e-21。
+    far_future = now + 200 * 86400
     skip = throttle.should_skip("web_topic", kind="web", now=far_future)
-    assert skip is False
+    assert skip is False, "200 天后 p_skip≈9e-21，不该再跳过"
 
 
 def test_throttle_dedup_recent_chat():
