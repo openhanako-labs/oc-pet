@@ -2069,7 +2069,31 @@ class Live2DRenderer(AvatarRenderer):
 
         先调 mixer.force_reset() 清除所有层 + 进入 3 秒冷却，
         再调 _force_idle() 做底层清场（三重 ResetExpressions + 双重 StopAllMotions）。
+
+        ── 重复调用保护（2026-09-11）──
+        `bubble_mixin` 在**每个** `state == "idle"` 事件都会调本方法，而 Hanako
+        会在数秒内推多次 → 实测 3 秒内 4 次 force_idle，每次三重 ResetExpressions
+        + 双重 StopAllMotions（很贵，且会打断正在演的东西）。
+
+        不变量：**已经在目标状态时，force_idle 无事可做。**
+
+        “目标状态” = 已 idle + 无活跃表情 + mixer 无活跃请求。
+        此时 force_idle 唯一的效果是把正在loop的 idle 从头重播——
+        一次可见的抽动，而这正是要避免的。
+
+        不用时间窗：时间窗过了一定秒数又会放开，反而让 idle 每秒重播一次；
+        而纯语义判断没有这个漏洞，也不需要霫数。
+
+        保留强制能力：真有卡住的表情时 `_expression_active` 为真，本保护不拦。
+        （但 idle motion 自身的循环由 IdleLoopProcessor 负责，不走这条路。）
         """
+        already_idle = (
+            getattr(self, "_motion_is_idle", False)
+            and not getattr(self, "_expression_active", False)
+            and self._mixer.is_idle()
+        )
+        if already_idle:
+            return
         self._mixer.force_reset()
         self._force_idle()
 
