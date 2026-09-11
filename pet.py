@@ -1920,6 +1920,76 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         except Exception as e:
             logger.debug("即时反应失败: %s", e)
 
+    def _clamp_size_to_screen(self, w: int, h: int) -> tuple:
+        """把窗口尺寸压进当前屏幕可用区域（等比，不裁切角色）。
+
+        为何必须做：Live2D 的 SetScale 是「**相对窗口**」的语义——
+        窗口多大，角色就多大。所以窗口一旦超过屏幕，角色必然有一部分
+        落在屏幕外。
+
+        实测（2026-09-11，用户 scale=1.8）：
+            窗口 810x1499，而可用区只有 2048x1104 → 脚被推到屏幕下方
+            （Win32 报回 rect=(2568,0)-(3581,1874)，屏幕只有 1600 高）
+
+        为何等比缩而不是裁切：SetScale 是把画布压进窗口的，
+        窗口宽高比一变，角色就会被拉变形。
+
+        代价：屏幕装不下时，桌宠实际显示会小于用户设定的 scale。
+        但「完整可见」比「够大但缺脚」重要；想要更大只能换更大的屏或降低缩放。
+        这里只记日志，**不把新尺寸写回配置**——用户的 scale 是他的意图，
+        屏幕装不下是当前环境的事实，两者不该互相污染。
+        """
+        sg = self._current_screen_geometry()
+        aw, ah = sg.width(), sg.height()
+        if aw <= 0 or ah <= 0:
+            return w, h
+        if w <= aw and h <= ah:
+            return w, h
+        k = min(aw / w, ah / h)
+        cw, ch = max(60, int(w * k)), max(60, int(h * k))
+        logger.info(
+            "PetWindow: 窗口 %dx%d 超出屏幕 %dx%d，等比压到 %dx%d（缩放被屏幕限制）",
+            w, h, aw, ah, cw, ch,
+        )
+        return cw, ch
+
+    def _resize_keeping_visible(self, w: int, h: int) -> None:
+        """setFixedSize + 重新定位，保证窗口不被挤出屏幕。
+
+        桌宠在屏幕上是「站在那里」的，所以贴边/缩放时：
+          · 水平：中心不动（左右摆动幅度小，居中观感稳定）
+          · 垂直：**底边不动**（脚踩在同一条线上）
+
+        旧实现在两处都保持中心，于是窗口变高时会向上顶出屏幕：
+        实测 scale=1.8 时窗口从 833 长到 1499，上移 333px，
+        Win32 报回的真实矩形是 (1470,-325)-(2483,1549) ——
+        屏幕只有 1152 高，桌宠顶部被推出了屏幕。
+
+        位置属于「运行时可调、用户可改」的状态，所以这里只做钳制，
+        不把新位置当配置写回（与 launch_all 的「运行时启发式不得修改
+        持久配置」同一原则）。
+        """
+        geo = self.frameGeometry()
+        x_center = geo.center().x()
+        bottom = geo.bottom()
+        # 唯一的 resize 咽喉：尺寸与定位的约束都在这里生效，
+        # 避免 fit / 滚轮两条路各自漏一个约束（本项目反复踩过的坑）。
+        w, h = self._clamp_size_to_screen(w, h)
+        self.setFixedSize(w, h)
+        if not self.isVisible():
+            return
+
+        x = x_center - w // 2
+        y = bottom - h + 1
+        sg = self._current_screen_geometry()
+        # 比屏幕还高时，优先保证「顶部可见」（头不能被裁）
+        if h >= sg.height():
+            y = sg.top()
+        else:
+            y = max(sg.top(), min(y, sg.bottom() - h + 1))
+        x = max(sg.left(), min(x, sg.right() - w + 1))
+        self.move(x, y)
+
     def fit_window_to_model(self, w: int, h: int):
         """窗口贴合到模型实际大小（Live2D 渲染器测量后回调）。
 
@@ -1927,18 +1997,35 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         保留用户缩放（_pet_scale）语义：贴合后仍可滚轮缩放。
         """
         try:
-            self._base_w = max(40, int(w))
-            self._base_h = max(40, int(h))
+            # ── 2026-09-11 修：缩放被乘了两次 ──
+            #
+            # 渲染器传进来的 w/h 是在**当前 _pet_scale 的视口里**量的，也就是
+            # 已经是「窗口像素」。而 _base_w/_base_h 是「未缩放基准」，
+            # 实际窗口 = 基准 × _pet_scale。
+            #
+            # 旧代码直接 基准 = 测量值 → 窗口 = 测量值 × S = 真实大小 × S。
+            # 于是窗口尺寸与 scale 成**平方**关系：
+            #   S=1.0 → 451x833      （看不出来，所以一直没人发现）
+            #   S=1.8 → 1458x2698    （屏幕只有 2048x1152，窗口高出 2.3 倍）
+            # 代价不只是“太大”：那张比屏幕还高的透明窗口会吞掉鼠标滚轮，
+            # 实测因此把用户的 scale 从 1.8 误滚到 0.45。
+            #
+            # 除回去之后 窗口 = 测量值 = 模型实际大小，与 docstring 一致，
+            # 且尺寸与 scale 恢复线性（与滚轮路径 _recalc_geometry 同义）。
+            _s = max(0.05, float(getattr(self, "_pet_scale", 1.0) or 1.0))
+            self._base_w = max(40, int(round(w / _s)))
+            self._base_h = max(40, int(round(h / _s)))
             base_w = self._base_w
             base_h = self._base_h
-            w_final = max(base_w, int(base_w * self._pet_scale))
-            h_final = max(base_h, int(base_h * self._pet_scale))
+            # 下限用 60（与 _recalc_geometry 一致）。
+            # 旧式 max(base_w, ...) 在 _pet_scale < 1 时会把窗口钉在基准上，
+            # 于是「缩小」在启动路径上完全无效——又一处两条路语义不一致。
+            w_final = max(60, int(base_w * self._pet_scale))
+            h_final = max(60, int(base_h * self._pet_scale))
             # setFixedSize 默认左上角不动、向右下扩展——贴合后模型会跟着往右/往下漂
-            # （用户反馈“更右了”）。先记当前窗口中心，resize 后把中心对齐回原位置。
-            _center = self.frameGeometry().center()
-            self.setFixedSize(w_final, h_final)
-            if self.isVisible():
-                self.move(_center.x() - w_final // 2, _center.y() - h_final // 2)
+            # （用户反馈“更右了”）。_resize_keeping_visible 保持水平中心 + 底边，
+            # 并把窗口钳制在屏幕内。
+            self._resize_keeping_visible(w_final, h_final)
             # P0-2: 一次性调用 recalc_geometry，避免 set_scale 和 recalc_geometry 分别触发 _recompute_fit
             if hasattr(self._renderer, "recalc_geometry"):
                 self._renderer.recalc_geometry(w_final, h_final)
@@ -1959,10 +2046,10 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             base_w, base_h = self._base_w, self._base_h
         w = max(60, int(base_w * self._pet_scale))
         h = max(60, int(base_h * self._pet_scale))
-        _center = self.frameGeometry().center()
-        self.setFixedSize(w, h)
-        if self.isVisible():
-            self.move(_center.x() - w // 2, _center.y() - h // 2)
+        # 与 fit_window_to_model 走同一个定位规则（保持底边 + 钳制屏幕内），
+        # 否则「滚轮放大」会把桌宠顶出屏幕，而「重启后贴合」不会——
+        # 又一处两条路语义不一致。
+        self._resize_keeping_visible(w, h)
         # 委托给 SpriteRenderer 处理角色尺寸
         self._renderer.set_scale(self._pet_scale)
         self._renderer.recalc_geometry(w, h)

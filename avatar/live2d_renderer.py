@@ -29,6 +29,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, QPoint
 
+from avatar import fit_cache
 from avatar.base import AvatarRenderer
 from avatar.gl_char_widget import GLCharWidget
 from avatar.emote_presets import LIVE2D_PRESETS, get_live2d_preset as _get_live2d_preset, get_preset_names as _get_preset_names
@@ -944,19 +945,46 @@ class Live2DRenderer(AvatarRenderer):
                 logger.debug("Live2DRenderer: fit 跳过（视口无效 %dx%d）", gl_w, gl_h)
                 return
             logger.info("Live2DRenderer: fit 开始 gl=%dx%d", gl_w, gl_h)
-            t0 = time.time()
-            bbox = self._scan_bbox_adaptive(frames=3, coarse_step=32, fine_step=6)
-            t1 = time.time()
-            if bbox is None:
-                logger.info("Live2DRenderer: 未命中角色像素，跳过窗口贴合")
-                return
-            min_x, min_y, max_x, max_y = bbox
-            bw = max_x - min_x + 1
-            bh = max_y - min_y + 1
-            logger.info(
-                "Live2DRenderer: fit 耗时 %.2fs (bbox=%dx%d)",
-                t1 - t0, bw, bh,
+            # 2026-09-11: 扫描结果缓存。
+            #
+            # 扫描（HitDrawable 网格命中检测）实测耗时 21.8s，但输入完全确定：
+            #   模型文件 + 缩放系数 + 视口尺寸 → bbox
+            # 桌宠每次启动的视口尺寸都相同（config.window 不随贴合写回），
+            # 于是每次都在重算同一个结果。
+            #
+            # 键里放的是**决定扫描结果的每一项**：少放一项就会拿旧值去套新模型，
+            # 那比慢 20 秒更糟。
+            _ck = fit_cache.make_key(
+                self._model_path, self._fit_scale,
+                getattr(self, "_fit_scale_x", 1.0), gl_w, gl_h,
             )
+            bbox = fit_cache.load(_ck, gl_w, gl_h)
+            if bbox is not None:
+                logger.info("Live2DRenderer: [fit-cache] 贴合命中缓存，跳过扫描")
+                min_x, min_y, max_x, max_y = bbox
+                bw = max_x - min_x + 1
+                bh = max_y - min_y + 1
+            else:
+                t0 = time.time()
+                bbox = self._scan_bbox_adaptive(
+                    frames=3, coarse_step=32, fine_step=6)
+                elapsed = time.time() - t0
+                if bbox is None:
+                    logger.info(
+                        "Live2DRenderer: 未命中角色像素（扫描 %.2fs），跳过窗口贴合",
+                        elapsed,
+                    )
+                    return
+                min_x, min_y, max_x, max_y = bbox
+                bw = max_x - min_x + 1
+                bh = max_y - min_y + 1
+                logger.info(
+                    "Live2DRenderer: [fit] 扫描耗时 %.2fs (bbox=%dx%d)，已缓存",
+                    elapsed, bw, bh,
+                )
+                # 只在扫描成功时写缓存：扫不到角色像素那一刻的"结果"
+                # （其实是没结果）一旦固化，下次启动会直接跳过贴合。
+                fit_cache.save(_ck, bbox)
             # 居中补偿：模型在画布里固位偏右（moc3 留白），用 SetOffsetX 平移居中。
             # 不在这里直接设——_fit_window_to_model 之后窗口贴合成新视口会触发 SetScale，
             # 与 offset 的时序交互在真实多并发环境有过闪退。改为缓存 offx，统一由

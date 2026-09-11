@@ -46,6 +46,9 @@ class PetManager:
             logger.debug("pet_manager: 非致命异常(已静默吞掉)", exc_info=True)
         # ── launch 失败兜底：每个 agent 只记一次 ERROR，避免日志刷屏 ──
         self._launch_error_logged: set[str] = set()
+        # ── 自己的托盘图标（仅在「一个窗口都没有」时用来弹提示）──
+        self._own_tray = None
+        self._own_tray_menu = None
         # ── M4: MultiPetBridge ──
         self._bridge = None
         self._bridge_enabled = True  # 可通过配置开关
@@ -439,6 +442,92 @@ class PetManager:
     def session_manager(self):
         return self._session_manager
 
+    # ── 用户可见提示（系统托盘气泡）──
+
+    def _fallback_tray_icon(self):
+        """自绘一个占位托盘图标（借不到角色首帧时的兜底）。"""
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+
+        px = QPixmap(64, 64)
+        px.fill(QColor(0, 0, 0, 0))
+        p = QPainter(px)
+        try:
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.setBrush(QColor(46, 52, 64))
+            p.setPen(Qt.NoPen)
+            p.drawRoundedRect(4, 4, 56, 56, 14, 14)
+            p.setPen(QColor(232, 180, 90))
+            f = p.font()
+            f.setPointSize(30)
+            f.setBold(True)
+            p.setFont(f)
+            p.drawText(px.rect(), Qt.AlignCenter, "!")
+        finally:
+            p.end()
+        return QIcon(px)
+
+    def tray_icon(self):
+        """拿一个能弹气泡的托盘图标，没有则返回 None。
+
+        优先借已有桌宠窗口的托盘（那是角色首帧，好看）；一个窗口都没有时
+        自建一个 —— 而那**恰好就是需要提示的时候**。
+        """
+        try:
+            from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+        except Exception:
+            return None
+        if QApplication.instance() is None:
+            return None
+
+        for w in self._windows.values():
+            t = getattr(w, "_tray", None)
+            if isinstance(t, QSystemTrayIcon):
+                return t
+
+        if self._own_tray is None:
+            from PySide6.QtWidgets import QMenu
+
+            tray = QSystemTrayIcon(self._fallback_tray_icon())
+            tray.setToolTip("OC Desktop Pet")
+            # 常驻图标若没有菜单，用户就只能等程序退出才看得到它消失。
+            # 给一条「忽略提示」让用户能主动收起。
+            menu = QMenu()
+            act = menu.addAction("忽略提示")
+            act.triggered.connect(tray.hide)
+            tray.setContextMenu(menu)
+            tray.show()
+            # 持有引用：局部变量出作用域后 Qt 不保证菜单还活着
+            self._own_tray_menu = menu
+            self._own_tray = tray
+        return self._own_tray
+
+    def notify_user(self, title: str, body: str) -> None:
+        """把「桌宠为什么没起来」弹成系统托盘气泡。
+
+        2026-09-11 新增。为何必须走托盘：桌宠启动失败时**没有窗口**，
+        而没有窗口就没有托盘 —— 用户看到的是「点了启动，什么都没发生」。
+        （实测：为了查出「0 enabled agents」这件事，我让用户重启了三次桌宠。）
+
+        只在整个都没起来时才提示；部分失败会写日志但不弹，
+        否则一个长期配置了缺失模型的用户每次开机都会被弹一次。
+
+        提示失败绝不能反过来把启动搞崩，所以整段包起来。
+        """
+        try:
+            from PySide6.QtWidgets import QSystemTrayIcon
+
+            tray = self.tray_icon()
+            if tray is None:
+                logger.info("notify_user: 无托盘可用，仅日志 — %s: %s", title, body)
+                return
+            if not tray.supportsMessages():
+                logger.info("notify_user: 托盘不支持气泡 — %s: %s", title, body)
+                return
+            tray.showMessage(title, body, QSystemTrayIcon.Warning, 8000)
+        except Exception:
+            logger.debug("notify_user: 弹气泡失败（忽略）", exc_info=True)
+
     # ── 窗口管理 ──
 
     def launch_all(self):
@@ -451,6 +540,11 @@ class PetManager:
         if not self._has_any_characters():
             logger.warning("No character models found in %s, skipping pet launch", CHARACTERS_DIR)
             logger.warning("Please install a character package before launching pets")
+            # 没有窗口 → 没有托盘 → 只是写日志的话用户完全看不到。
+            self.notify_user(
+                "桌宠未启动",
+                f"没有找到任何角色目录，桌宠无法显示。\n请把角色包放到：{CHARACTERS_DIR}",
+            )
             return
         
         # P2: 验证启用的角色是否有精灵资源，本次不启动无资源的
@@ -478,6 +572,20 @@ class PetManager:
         if len(enabled) == 0:
             logger.warning("launch_all: 没有启用的 agent，桌面宠物不会显示！请检查 config.json 里 agents[].enabled")
             logger.warning("launch_all: 可能的原因：1) 所有 agent 都是 enabled=false  2) agent 没有 sprites/model 被自动禁用")
+            # 这里是「点了启动什么都没发生」的正脸：一个窗口都没建起来，
+            # 所以必须主动告诉用户，否则桌面上不会有任何变化。
+            if skipped:
+                self.notify_user(
+                    "桌宠未启动",
+                    "已启用的角色缺少模型文件，本次跳过：" + "、".join(skipped)
+                    + "。\n补上模型后重启即可（配置没有被改写）。",
+                )
+            else:
+                self.notify_user(
+                    "桌宠未启动",
+                    "没有已启用的角色。请在设置里启用一个角色，"
+                    "或确认 characters/ 下已放入角色包。",
+                )
         
         # 确保 bridge 已启动
         if self._bridge_enabled and not self._bridge:
@@ -492,28 +600,36 @@ class PetManager:
             logger.info("Window already exists for %s", agent_id)
             return
 
-        from pet import PetWindow
-
-        # 查找精灵目录
-        sprite_dir = self.get_sprite_dir(agent_id)
-
-        # 获取 agent 配置
-        agent_cfg = self._get_agent_cfg(agent_id)
-        # scale 优先级：顶层 config.scale（滚轮/设置面板写入的权威值）> agent 级 > 1.0
-        # （agents 列表里首次自动生成的 scale=1.0 是初始占位，滚轮缩放只写顶层；
-        #   若顶层缺失回退 agent 级，再回退 1.0）
-        _agent_scale = agent_cfg.get("scale")
-        _global_scale = None
+        # 2026-09-11: import 与配置查询一并搬进 try。
+        #
+        # 原实现在这里就 `from pet import PetWindow`，而它在 try **外面** ——
+        # pet.py 导入失败（PySide6 缺失、改文件后的语法错）会让异常直接穿过
+        # launch_window → launch_all → main，于是：
+        #   · 后面的 agent 一个都不会启动
+        #   · 用户什么都看不到（launcher 看门狗只会不断重启）
+        # 而下面的 except 本来是专门用来“把失败变成可见提示”的。
         try:
-            from config import load_config
-            _global_scale = load_config().get("scale")
-        except Exception:
+            from pet import PetWindow
+
+            # 查找精灵目录
+            sprite_dir = self.get_sprite_dir(agent_id)
+
+            # 获取 agent 配置
+            agent_cfg = self._get_agent_cfg(agent_id)
+            # scale 优先级：顶层 config.scale（滚轮/设置面板写入的权威值）> agent 级 > 1.0
+            # （agents 列表里首次自动生成的 scale=1.0 是初始占位，滚轮缩放只写顶层；
+            #   若顶层缺失回退 agent 级，再回退 1.0）
+            _agent_scale = agent_cfg.get("scale")
             _global_scale = None
-        _scale = _global_scale if _global_scale is not None else (_agent_scale if _agent_scale is not None else 1.0)
-        # 下限 0.3（与 pet.py 滚轮缩放一致），否则保存的 0.3 会在重启时被拉回 0.5
-        _scale = max(0.3, min(3.0, float(_scale)))
+            try:
+                from config import load_config
+                _global_scale = load_config().get("scale")
+            except Exception:
+                _global_scale = None
+            _scale = _global_scale if _global_scale is not None else (_agent_scale if _agent_scale is not None else 1.0)
+            # 下限 0.3（与 pet.py 滚轮缩放一致），否则保存的 0.3 会在重启时被拉回 0.5
+            _scale = max(0.3, min(3.0, float(_scale)))
 
-        try:
             window = PetWindow(
                 agent_id=agent_id,
                 sprite_dir=sprite_dir,
@@ -554,27 +670,10 @@ class PetManager:
                 self._launch_error_logged.add(agent_id)
                 # logger.exception 自动捕获当前 sys.exc_info() 堆栈
                 logger.exception("Failed to launch pet for %s", agent_id)
-                try:
-                    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
-                    app = QApplication.instance()
-                    if app is not None:
-                        # 找任意一个已存在的桌宠窗口，借它的 tray 弹气泡；都没有则跳过。
-                        tray = None
-                        for w in self._windows.values():
-                            t = getattr(w, "_tray", None)
-                            if isinstance(t, QSystemTrayIcon):
-                                tray = t
-                                break
-                        if tray is not None and tray.supportsMessages():
-                            tray.showMessage(
-                                "桌宠启动失败",
-                                f"{agent_id}: {e}",
-                                QSystemTrayIcon.Warning,
-                                5000,
-                            )
-                except Exception:
-                    # 气泡只是 UX 兜底，绝不能再炸
-                    logger.debug("pet_manager: 非致命异常(已静默吞掉)", exc_info=True)
+                # 2026-09-11: 统一走 notify_user —— 它自建托盘，所以
+                # 「第一个桌宠就起不来」（一个窗口都没有）时同样能提示。
+                # 原实现遍历 self._windows 借托盘，那个场景下必然借不到。
+                self.notify_user("桌宠启动失败", f"{agent_id}: {e}")
             # 标记失败 → 任何后续 retry / 自动恢复都跳过（避免定时器反复尝试）
             # 注：PetWindow 内的 QTimer 已随部分构造对象一起 GC，无需手动 stop。
 
