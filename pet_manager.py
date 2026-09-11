@@ -525,6 +525,9 @@ class PetManager:
                 logger.info("notify_user: 托盘不支持气泡 — %s: %s", title, body)
                 return
             tray.showMessage(title, body, QSystemTrayIcon.Warning, 8000)
+            # 记一条：出问题时「到底告诉用户了什么」应当可查，
+            # 否则只能看到 launch_all 的早退日志，猜不出界面有没有提示。
+            logger.info("notify_user: 已提示用户 — %s: %s", title, body)
         except Exception:
             logger.debug("notify_user: 弹气泡失败（忽略）", exc_info=True)
 
