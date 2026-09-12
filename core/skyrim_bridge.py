@@ -305,7 +305,7 @@ _TOOL_RE = re.compile(
 
 
 _TRIGGER_PREFIX_RE = re.compile(
-    r"^(?:\s*(?:天际|skyrim|老滚|上古卷轴|调用|方法|工具|查询|call|tool)\s*[:：]?\s*)+",
+    r"^(?:\s*(?:天际|skyrim|老滚|上古卷轴|sr|调用|方法|工具|查询|call|tool)\s*[:：]?\s*)+",
     re.IGNORECASE,
 )
 
@@ -323,7 +323,7 @@ def _route(text: str, bridge: SkyrimBridge, cfg: dict):
 
     t = text.strip()
     # 列出可用工具
-    if re.search(r"列出|有哪些工具|工具列表|list\s*tools|list_tools|list tool", t, re.IGNORECASE):
+    if re.search(r"列出|有哪些工具|工具列表|list\s*tools|list_tools|list tool|\blist\b", t, re.IGNORECASE):
         res = bridge.list_tools()
         if not res.ok:
             return RouteResult(capability="skyrim_tool", text=res.error, emotion="sad", anim="idle")
@@ -428,9 +428,20 @@ def init_skyrim_bridge(skyrim_config: Optional[dict] = None) -> Optional[SkyrimB
     register_capability(Capability(
         name="skyrim_tool",
         patterns=[
-            "天际调用", "skyrim调用", "老滚调用", "上古卷轴调用",
-            "天际方法", "skyrim方法", "天际工具", "skyrim tool",
-            "天际查询", "天际列出工具", "天际有哪些工具",
+            # ── 中文（全名）──
+            "天际", "老滚", "上古卷轴",
+            "天际调用", "天际方法", "天际工具", "天际查询", "天际指令",
+            "天际列出工具", "天际有哪些工具", "天际工具列表", "天际列工具",
+            "老滚调用", "老滚方法", "老滚工具", "老滚查询",
+            "老滚列出工具", "老滚有哪些工具",
+            "上古卷轴调用", "上古卷轴方法", "上古卷轴工具", "上古卷轴查询",
+            # ── 英文（全名）──
+            "skyrim", "skyrim调用", "skyrim call", "skyrim tool", "skyrim method", "skyrim query",
+            "调用skyrim", "skyrim列出工具", "skyrim list", "skyrim有哪些工具",
+            # ── 中文缩写（老滚 即 Skyrim 圈常用简称，已含于上方）──
+            # ── 英文缩写（sr）──
+            "sr", "sr调用", "sr call", "sr方法", "sr tool", "sr查询",
+            "sr列出工具", "sr list", "sr有哪些工具",
         ],
         handler="callable", callable=handler,
         description="调用 Skyrim MCP 工具（SkyLink AI / SkyrimNet）：查状态、改属性、列工具等",

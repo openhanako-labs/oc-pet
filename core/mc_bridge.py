@@ -415,7 +415,8 @@ _GOAL_RE = re.compile(
 _METHOD_RE = re.compile(
     # 方法名用 ASCII 字符类（MC 方法名如 getInventory 都是 ASCII），
     # 不能用 \w（Python 里会匹配中日韩字符，把 "mc方法" 整个吞成方法名）。
-    r"^(?:调用|调|执行)?\s*(?:mc|minecraft|我的世界)?\s*(?:方法|method)?\s*[:：]?\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(?:\((.*)\))?\s*$",
+    # 英文缩写动词 call 也纳入前缀，兼容 "call mc getInventory" 写法。
+    r"^(?:调用|调|执行|call)?\s*(?:mc|minecraft|我的世界|麦块)?\s*(?:方法|method)?\s*[:：]?\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(?:\((.*)\))?\s*$",
     re.IGNORECASE,
 )
 
@@ -425,7 +426,9 @@ def _extract_goal(text: str) -> str:
     # 去掉已知触发前缀（让bot / mc任务: / minecraft任务 等）
     for p in ("让bot", "让 bot", "派bot", "派 bot", "让机器人", "让桌宠的bot",
               "mc任务:", "mc任务", "minecraft任务:", "minecraft任务",
-              "我的世界任务:", "我的世界任务", "mc task", "minecraft task"):
+              "我的世界任务:", "我的世界任务", "我的世界派bot",
+              "麦块任务:", "麦块任务", "麦块派bot", "麦块",
+              "mc task", "minecraft task"):
         if t.lower().startswith(p.lower()):
             t = t[len(p):]
             break
@@ -485,15 +488,24 @@ def init_mc_bridge(mc_config: Optional[dict] = None) -> Optional[GameBridge]:
             )
         register_capability(Capability(
             name="mc_task",
-            patterns=["让bot", "让 bot", "派bot", "派 bot", "mc任务", "minecraft任务",
-                      "我的世界任务", "mc task", "minecraft task"],
+            patterns=[
+                # ── 中文（全名）──
+                "我的世界任务", "我的世界派bot",
+                # ── 中文缩写（麦块）──
+                "麦块任务", "麦块派bot", "麦块",
+                # ── 英文（全名）──
+                "minecraft任务", "minecraft task",
+                # ── 英文缩写（mc）──
+                "让bot", "让 bot", "派bot", "派 bot", "让机器人", "让桌宠的bot",
+                "mc任务", "mc task",
+            ],
             handler="callable", callable=task_handler,
             description="让 MC bot（mc-agent-neko）去执行一个任务",
             emotion="neutral", anim="idle",
         ))
 
     if cfg["transport"] == "http":
-        _NON_METHOD_TOKENS = {"mc", "minecraft", "方法", "method", "我的世界", "task"}
+        _NON_METHOD_TOKENS = {"mc", "minecraft", "方法", "method", "我的世界", "麦块", "task"}
         def method_handler(text: str) -> RouteResult:
             m = _METHOD_RE.match(text.strip())
             # 裸触发词（如「mc方法」「调用mc」）正则会把 "mc" 本身当方法名，
@@ -522,8 +534,16 @@ def init_mc_bridge(mc_config: Optional[dict] = None) -> Optional[GameBridge]:
             )
         register_capability(Capability(
             name="mc_method",
-            patterns=["调用mc", "调mc", "mc方法", "minecraft方法", "我的世界方法",
-                      "调用minecraft", "call mc", "mc method"],
+            patterns=[
+                # ── 中文（全名）──
+                "我的世界方法", "调用我的世界",
+                # ── 中文缩写（麦块）──
+                "麦块方法", "调用麦块",
+                # ── 英文（全名）──
+                "minecraft方法", "minecraft method", "调用minecraft",
+                # ── 英文缩写（mc）──
+                "调用mc", "调mc", "mc方法", "mc method",
+            ],
             handler="callable", callable=method_handler,
             description="调用 minecraft-mcp 桥的具体方法（读状态/建造/设块…）",
             emotion="happy", anim="extra",
