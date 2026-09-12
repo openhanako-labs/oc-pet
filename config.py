@@ -242,6 +242,18 @@ DEFAULT_CONFIG = {
             "allowed_methods": [],
         },
     },
+    # 需求⑤：Skyrim MCP 桥接（默认关；启用后注册 skyrim_tool 能力，桌宠当 MCP client 连
+    # SkyLink AI(stdio/dotnet) 或 SkyrimNet(HTTP@8889)）。配置由设置面板「⚔️ Skyrim」页读写。
+    "skyrim": {
+        "enabled": False,
+        "server_type": "skyrimnet",     # skylink | skyrimnet
+        "skylink_dll": "",              # SkyLinkAI 的 SkyrimMCP.dll 完整路径（需 .NET 10 Runtime）
+        "dotnet_path": "dotnet",        # dotnet 可执行（需 .NET 10 Runtime）
+        "skynet_url": "http://127.0.0.1:8889",
+        "skynet_transport": "sse",      # sse | streamable_http
+        "allow_remote": False,          # 仅本机；放宽前想清楚后果
+        "timeout": 30,                  # 单次调用/连接最长等待秒
+    },
     # 需求③：Hanako QQ/微信桥接（只读——收到消息时让桌宠提醒，刻意不提供发送能力。
     # 实测 server 对外没有第三方可用的纯文本发送口，回复仍由 Hanako 侧完成）。
     # agent_id 必须显式填，模块不会自动猜别人的 agent。

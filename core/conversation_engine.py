@@ -191,6 +191,16 @@ class ConversationEngine:
             _mc_cfg = None
         self.setup_mc_bridge(_mc_cfg)
 
+        # 需求⑤：Skyrim MCP 桥接能力（可选，依赖游戏内 SKSE 插件；未启用不致命）
+        self._skyrim_bridge = None
+        try:
+            from config import load_config as _load_config_sky
+            _sky_cfg = _load_config_sky().get("skyrim")
+        except Exception as _e:  # noqa: BLE001
+            logger.debug("读取 skyrim 配置失败：%s", _e)
+            _sky_cfg = None
+        self.setup_skyrim_bridge(_sky_cfg)
+
         # 需求③：Hanako QQ/微信只读桥接（未启用即零副作用）
         self._hanako_watcher = None
         try:
@@ -294,7 +304,7 @@ class ConversationEngine:
                     self._mc_window.hide()
                 except Exception:  # noqa: BLE001
                     logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
-            logger.info("mc_bridge 未启用（在设置「🎮 Minecraft」页打开开关即可）")
+            logger.info("mc_bridge 未启用（在设置「🔗 MCP」分类的 Minecraft 子标签打开开关即可）")
             return None
 
         self._mc_bridge = bridge
@@ -313,6 +323,30 @@ class ConversationEngine:
             logger.info("mc_bridge 迷你画面窗已就绪")
         except Exception as e:  # noqa: BLE001
             logger.warning("mc_bridge 画面窗创建失败（仅日志，能力仍可用）：%s", e)
+        return bridge
+
+    # ── 需求⑤：Skyrim MCP 桥接 ──
+    def setup_skyrim_bridge(self, skyrim_cfg=None):
+        """按给定的 skyrim 配置（重）建 Skyrim MCP 桥接能力。可重复调用。
+
+        设置面板改完开关/服务类型后由 pet._apply_settings() 再次调用，做到不用重启桌宠。
+        关闭时会摘掉能力。返回桥接实例或 None（未启用/不可用）。
+        """
+        try:
+            from core.skyrim_bridge import init_skyrim_bridge
+            bridge = init_skyrim_bridge(skyrim_cfg)
+        except Exception as e:  # noqa: BLE001
+            self._skyrim_bridge = None
+            logger.warning("skyrim_bridge 初始化跳过（不可用）：%s", e)
+            return None
+
+        if bridge is None:
+            self._skyrim_bridge = None
+            logger.info("skyrim_bridge 未启用（在设置「🔗 MCP」分类的 Skyrim 子标签打开开关即可）")
+            return None
+
+        self._skyrim_bridge = bridge
+        logger.info("skyrim_bridge 能力已注册（server_type=%s）", bridge.server_type)
         return bridge
 
     # ── 需求③：Hanako QQ/微信只读桥接 ──

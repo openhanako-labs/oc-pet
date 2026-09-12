@@ -929,8 +929,8 @@ class SettingsDialog(QDialog):
         api_layout.addStretch()
         self._main_tabs.addTab(api_tab, "🔌 API")
 
-        # ── Tab: Minecraft（需求② P4：开关 + transport + HTTP 护栏）──
-        self._main_tabs.addTab(self._build_mc_tab(), "🎮 Minecraft")
+        # ── Tab: MCP（游戏 MCP 桥接分类：Minecraft + Skyrim 两个子标签）──
+        self._main_tabs.addTab(self._build_mcp_tab(), "🔗 MCP")
 
         # ── Tab: QQ/微信（需求③：Hanako 只读桥接）──
         self._main_tabs.addTab(self._build_hb_tab(), "💬 QQ/微信")
@@ -1673,6 +1673,21 @@ class SettingsDialog(QDialog):
                 x.strip() for x in self.mc_allowed_methods.text().replace("，", ",").split(",") if x.strip()
             ]
 
+        # Skyrim（需求⑤：MCP 桥接）
+        if hasattr(self, "skyrim_enabled"):
+            sc = c.setdefault("skyrim", {})
+            sc["enabled"] = self.skyrim_enabled.isChecked()
+            sc["server_type"] = "skylink" if self.skyrim_type.currentIndex() == 0 else "skyrimnet"
+            sc["skylink_dll"] = self.skyrim_dll.text().strip()
+            sc["dotnet_path"] = self.skyrim_dotnet.text().strip() or "dotnet"
+            sc["skynet_url"] = self.skyrim_url.text().strip() or "http://127.0.0.1:8889"
+            sc["skynet_transport"] = "streamable_http" if self.skyrim_transport.currentIndex() == 1 else "sse"
+            sc["allow_remote"] = self.skyrim_allow_remote.isChecked()
+            try:
+                sc["timeout"] = int(self.skyrim_timeout.value())
+            except Exception:  # noqa: BLE001
+                sc["timeout"] = 30
+
         # QQ/微信（需求③：只读桥接）
         if hasattr(self, "hb_enabled"):
             hbc = c.setdefault("hanako_bridge", {})
@@ -1689,6 +1704,20 @@ class SettingsDialog(QDialog):
         save_config(self._config)
 
         self.accept()
+
+    # ── MCP 父分类标签页（Minecraft + Skyrim 两个 MCP 游戏桥接的子标签）──
+    def _build_mcp_tab(self) -> QWidget:
+        """🔗 MCP 页：把 Minecraft / Skyrim 两个 MCP 游戏桥接收进同一个分类下。"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 8, 0, 0)
+
+        self.mcp_sub_tabs = QTabWidget()
+        self.mcp_sub_tabs.setStyleSheet(self._tab_qss())
+        self.mcp_sub_tabs.addTab(self._build_mc_tab(), "🎮 Minecraft")
+        self.mcp_sub_tabs.addTab(self._build_skyrim_tab(), "⚔️ Skyrim")
+        layout.addWidget(self.mcp_sub_tabs)
+        return page
 
     # ── Minecraft 标签页（需求② P4：开关 / transport / HTTP 护栏）──
 
@@ -1843,6 +1872,142 @@ class SettingsDialog(QDialog):
                 self, "测试连接",
                 f"连接失败：{e}\n\n请先在游戏里运行 minecraft-mcp，再回来试。",
             )
+
+    # ── Skyrim 标签页（需求⑤：MCP 桥接整合 SkyLink AI / SkyrimNet）──
+
+    def _build_skyrim_tab(self) -> QWidget:
+        """⚔️ Skyrim 页：选服务类型（SkyLink AI / SkyrimNet）、连接参数、测试连接。"""
+        sky = self._config.get("skyrim") or {}
+        muted = "color: rgb(%s); font-size: 11px;" % rgb(self._ui_theme, "text_muted")
+
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(14)
+
+        hint = QLabel(
+            "接入 Skyrim 的 MCP server：SkyLink AI（74 工具，stdio）或 SkyrimNet（44+ 工具，HTTP@8889）。\n"
+            "启用后桌宠能「列出工具 / 调用工具」读写游戏状态。保存后立即生效。\n"
+            "前提：游戏里装好对应 SKSE 插件并运行（SkyLink 还需 .NET 10 Runtime，本机目前是 .NET 8）。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(muted)
+        lay.addWidget(hint)
+
+        # ── 连接 ──
+        conn = QGroupBox("连接")
+        form = QFormLayout(conn)
+
+        self.skyrim_enabled = QCheckBox("启用 Skyrim MCP 接入")
+        self.skyrim_enabled.setChecked(bool(sky.get("enabled", False)))
+        form.addRow(self.skyrim_enabled)
+
+        self.skyrim_type = QComboBox()
+        self.skyrim_type.addItems([
+            "SkyLink AI — stdio（dotnet SkyrimMCP.dll，需 .NET 10）",
+            "SkyrimNet — HTTP（游戏内 SKSE 插件 @ localhost:8889）",
+        ])
+        self.skyrim_type.setCurrentIndex(
+            0 if str(sky.get("server_type", "skyrimnet")).lower() == "skylink" else 1
+        )
+        form.addRow("服务类型", self.skyrim_type)
+
+        self.skyrim_dll = QLineEdit(str(sky.get("skylink_dll", "") or ""))
+        self.skyrim_dll.setPlaceholderText(r"D:\Games\Skyrim\Data\SKSE\Plugins\SkyLinkAI_Server\SkyrimMCP.dll")
+        form.addRow("SkyrimMCP.dll 路径", self.skyrim_dll)
+
+        self.skyrim_dotnet = QLineEdit(str(sky.get("dotnet_path", "dotnet") or "dotnet"))
+        self.skyrim_dotnet.setPlaceholderText("dotnet（需 .NET 10 Runtime）")
+        form.addRow("dotnet 路径", self.skyrim_dotnet)
+
+        self.skyrim_url = QLineEdit(
+            str(sky.get("skynet_url", "http://127.0.0.1:8889") or "http://127.0.0.1:8889")
+        )
+        self.skyrim_url.setPlaceholderText("http://127.0.0.1:8889")
+        form.addRow("SkyrimNet 地址", self.skyrim_url)
+
+        self.skyrim_transport = QComboBox()
+        self.skyrim_transport.addItems([
+            "sse — 旧式 SSE 传输（多数 MCP over HTTP 用这个）",
+            "streamable_http — 2024-11 新标准 Streamable HTTP",
+        ])
+        self.skyrim_transport.setCurrentIndex(
+            1 if str(sky.get("skynet_transport", "sse")).lower() == "streamable_http" else 0
+        )
+        form.addRow("传输方式", self.skyrim_transport)
+
+        self.skyrim_allow_remote = QCheckBox("允许连接非本机地址")
+        self.skyrim_allow_remote.setChecked(bool(sky.get("allow_remote", False)))
+        form.addRow(self.skyrim_allow_remote)
+
+        self.skyrim_timeout = QSpinBox()
+        self.skyrim_timeout.setRange(5, 300)
+        self.skyrim_timeout.setValue(int(sky.get("timeout", 30)))
+        self.skyrim_timeout.setSuffix(" 秒")
+        form.addRow("连接/调用超时", self.skyrim_timeout)
+
+        lay.addWidget(conn)
+
+        g_hint = QLabel(
+            "默认只连本机（防误连远程）。SkyLink 的 stdio 子进程由桌宠拉起；"
+            "SkyrimNet 的 8889 由游戏内插件提供，桌宠只连不启。"
+        )
+        g_hint.setWordWrap(True)
+        g_hint.setStyleSheet(muted)
+        lay.addWidget(g_hint)
+
+        # ── 自检 ──
+        test_row = QHBoxLayout()
+        test_row.addStretch()
+        self.skyrim_test_btn = QPushButton("测试连接")
+        self.skyrim_test_btn.clicked.connect(self._skyrim_test_connection)
+        test_row.addWidget(self.skyrim_test_btn)
+        lay.addLayout(test_row)
+        lay.addStretch()
+        return tab
+
+    def _skyrim_test_connection(self):
+        """就地探一下 MCP server 是否可达（用界面当前值，不落盘）。"""
+        try:
+            from core.skyrim_bridge import SkyrimBridge
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "测试连接", f"导入 skyrim_bridge 失败：{e}")
+            return
+
+        cfg = {
+            "server_type": "skylink" if self.skyrim_type.currentIndex() == 0 else "skyrimnet",
+            "skylink_dll": self.skyrim_dll.text().strip(),
+            "dotnet_path": self.skyrim_dotnet.text().strip() or "dotnet",
+            "skynet_url": self.skyrim_url.text().strip() or "http://127.0.0.1:8889",
+            "skynet_transport": "streamable_http" if self.skyrim_transport.currentIndex() == 1 else "sse",
+            "allow_remote": self.skyrim_allow_remote.isChecked(),
+            "timeout": 20,
+        }
+        # 护栏先本地校验，省得 spawn 子进程/连网
+        if cfg["server_type"] == "skyrimnet" and not cfg["allow_remote"]:
+            try:
+                from core.skyrim_bridge import _is_loopback_host
+                if not _is_loopback_host(cfg["skynet_url"]):
+                    QMessageBox.critical(
+                        self, "测试连接",
+                        "护栏拦截：地址不是本机，而「允许连接非本机地址」未勾选。\n"
+                        "这是默认行为，防止误连远程机器。",
+                    )
+                    return
+            except Exception:  # noqa: BLE001
+                logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
+
+        bridge = SkyrimBridge(cfg)
+        res = bridge.connect()
+        bridge.close()
+        if res.ok:
+            tools = (res.value or {}).get("tools", []) if isinstance(res.value, dict) else []
+            QMessageBox.information(
+                self, "测试连接",
+                f"已连通（{cfg['server_type']}）！\n可用工具 {len(tools)} 个。",
+            )
+        else:
+            QMessageBox.critical(self, "测试连接", f"连接失败：\n{res.error}")
 
     # ── QQ/微信标签页（需求③：Hanako 只读桥接）──
 
@@ -2006,7 +2171,8 @@ class SettingsDialog(QDialog):
             3: ["角色包", "package", "pkg", "m5"],
             4: ["主动对话", "proactive", "cooldown", "dnd"],
             5: ["api", "llm", "tts", "asr", "endpoint"],
-            6: ["minecraft", "mc", "我的世界", "bot", "bridge", "token", "护栏"],
+            6: ["mcp", "minecraft", "mc", "我的世界", "skyrim", "老滚", "天际",
+                "上古卷轴", "bot", "bridge", "token", "护栏", "skylink", "skyrimnet"],
             7: ["qq", "微信", "wechat", "消息提醒", "hanako", "桥接", "agent"],
         }
         
@@ -2039,6 +2205,8 @@ class SettingsDialog(QDialog):
             self._main_tabs.setStyleSheet(self._tab_qss(theme))
         if hasattr(self, "func_sub_tabs"):
             self.func_sub_tabs.setStyleSheet(self._tab_qss(theme))
+        if hasattr(self, "mcp_sub_tabs"):
+            self.mcp_sub_tabs.setStyleSheet(self._tab_qss(theme))
         if hasattr(self, "mem_hint"):
             self.mem_hint.setStyleSheet("color: rgb(%s); font-size: 10px;" % rgb(theme, "text_muted"))
         if hasattr(self, "_pkg_status_label"):

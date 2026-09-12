@@ -38,3 +38,4 @@ comtypes>=1.4.0       # Windows COM 接口（SMTC 媒体感知）
 
 # ── 其他依赖 ──
 openai-whisper~=20230918  # 本地语音识别（可选，较大）
+mcp~=1.27.0               # Skyrim MCP 桥接：桌宠当标准 MCP client 连 SkyLink AI / SkyrimNet

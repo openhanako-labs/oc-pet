@@ -2672,8 +2672,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             # 需求③：QQ/微信桥接同理即时生效
             if _engine is not None and hasattr(_engine, "setup_hanako_bridge"):
                 _engine.setup_hanako_bridge(self.config.get("hanako_bridge"))
+            # 需求⑤：Skyrim MCP 桥接同理即时生效
+            if _engine is not None and hasattr(_engine, "setup_skyrim_bridge"):
+                _engine.setup_skyrim_bridge(self.config.get("skyrim"))
         except Exception as e:
-            logger.warning("PetWindow: 应用 Minecraft/QQ微信 配置失败：%s", e)
+            logger.warning("PetWindow: 应用 Minecraft/QQ微信/Skyrim 配置失败：%s", e)
 
     # ── 角色加载 ──
 

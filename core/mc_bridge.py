@@ -454,7 +454,7 @@ def init_mc_bridge(mc_config: Optional[dict] = None) -> Optional[GameBridge]:
             or bool(os.environ.get("OC_MC_TRANSPORT"))
         ):
             logger.info(
-                "[mc_bridge] 未启用（在设置「🎮 Minecraft」页打开，或设 OC_MC_ENABLE=1）；跳过能力注册"
+                "[mc_bridge] 未启用（在设置「🔗 MCP」分类的 Minecraft 子标签打开，或设 OC_MC_ENABLE=1）；跳过能力注册"
             )
             return None
 
