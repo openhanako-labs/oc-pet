@@ -1680,7 +1680,7 @@ class SettingsDialog(QDialog):
             sc["server_type"] = "skylink" if self.skyrim_type.currentIndex() == 0 else "skyrimnet"
             sc["skylink_dll"] = self.skyrim_dll.text().strip()
             sc["dotnet_path"] = self.skyrim_dotnet.text().strip() or "dotnet"
-            sc["skynet_url"] = self.skyrim_url.text().strip() or "http://127.0.0.1:8889"
+            sc["skynet_url"] = self.skyrim_url.text().strip() or "http://localhost:8889/sse"
             sc["skynet_transport"] = "streamable_http" if self.skyrim_transport.currentIndex() == 1 else "sse"
             sc["allow_remote"] = self.skyrim_allow_remote.isChecked()
             try:
@@ -1886,9 +1886,11 @@ class SettingsDialog(QDialog):
         lay.setSpacing(14)
 
         hint = QLabel(
-            "接入 Skyrim 的 MCP server：SkyLink AI（74 工具，stdio）或 SkyrimNet（44+ 工具，HTTP@8889）。\n"
+            "接入 Skyrim 的 MCP server：SkyLink AI（74 工具，stdio）或 SkyrimNet（56 工具，HTTP@8889）。\n"
             "启用后桌宠能「列出工具 / 调用工具」读写游戏状态。保存后立即生效。\n"
-            "前提：游戏里装好对应 SKSE 插件并运行（SkyLink 还需 .NET 10 Runtime，本机目前是 .NET 8）。"
+            "前提：游戏里装好对应 SKSE 插件并运行（SkyLink 还需 .NET 10 Runtime）。\n"
+            "实测：SkyrimNet 的 MCP 走 SSE 传输，端点要用 http://localhost:8889/sse；\n"
+            "只填 host:port 也能连（桌宠会自动补 /sse，并在 localhost / 127.0.0.1 间自动重试）。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(muted)
@@ -1921,9 +1923,9 @@ class SettingsDialog(QDialog):
         form.addRow("dotnet 路径", self.skyrim_dotnet)
 
         self.skyrim_url = QLineEdit(
-            str(sky.get("skynet_url", "http://127.0.0.1:8889") or "http://127.0.0.1:8889")
+            str(sky.get("skynet_url", "http://localhost:8889/sse") or "http://localhost:8889/sse")
         )
-        self.skyrim_url.setPlaceholderText("http://127.0.0.1:8889")
+        self.skyrim_url.setPlaceholderText("http://localhost:8889/sse")
         form.addRow("SkyrimNet 地址", self.skyrim_url)
 
         self.skyrim_transport = QComboBox()
@@ -1978,10 +1980,10 @@ class SettingsDialog(QDialog):
             "server_type": "skylink" if self.skyrim_type.currentIndex() == 0 else "skyrimnet",
             "skylink_dll": self.skyrim_dll.text().strip(),
             "dotnet_path": self.skyrim_dotnet.text().strip() or "dotnet",
-            "skynet_url": self.skyrim_url.text().strip() or "http://127.0.0.1:8889",
+            "skynet_url": self.skyrim_url.text().strip() or "http://localhost:8889/sse",
             "skynet_transport": "streamable_http" if self.skyrim_transport.currentIndex() == 1 else "sse",
             "allow_remote": self.skyrim_allow_remote.isChecked(),
-            "timeout": 20,
+            "timeout": max(5, int(self.skyrim_timeout.value())),
         }
         # 护栏先本地校验，省得 spawn 子进程/连网
         if cfg["server_type"] == "skyrimnet" and not cfg["allow_remote"]:

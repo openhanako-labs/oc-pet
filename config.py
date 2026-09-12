@@ -249,7 +249,8 @@ DEFAULT_CONFIG = {
         "server_type": "skyrimnet",     # skylink | skyrimnet
         "skylink_dll": "",              # SkyLinkAI 的 SkyrimMCP.dll 完整路径（需 .NET 10 Runtime）
         "dotnet_path": "dotnet",        # dotnet 可执行（需 .NET 10 Runtime）
-        "skynet_url": "http://127.0.0.1:8889",
+        "skynet_url": "http://localhost:8889/sse",  # 实测：SkyrimNet MCP 只认 SSE 的 /sse 端点；
+                                                    # 且它 host=localhost 常只绑 IPv6 ::1，故用 localhost
         "skynet_transport": "sse",      # sse | streamable_http
         "allow_remote": False,          # 仅本机；放宽前想清楚后果
         "timeout": 30,                  # 单次调用/连接最长等待秒

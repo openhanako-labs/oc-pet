@@ -4,8 +4,11 @@
 - 两个 server 类型（用户在设置「⚔️ Skyrim」页选择）：
   * skylink   (SkyLink AI)：stdio MCP server，由 `dotnet SkyrimMCP.dll` 启动，
               通过命名管道连游戏内 SKSE 插件。需 .NET 10 Runtime（注意：本机目前是 .NET 8）。
-  * skyrimnet (SkyrimNet)：HTTP(SSE 或 Streamable HTTP) MCP server，游戏内 SKSE 插件
-              监听 localhost:8889。需在游戏里装好 SkyrimNet 并运行，桌宠才能连上。
+  * skyrimnet (SkyrimNet)：HTTP(SSE) MCP server，游戏内 SKSE 插件监听 localhost:8889。
+              需在游戏里装好 SkyrimNet 并运行，桌宠才能连上。
+              **实测要点（beta24）**：只实现了 SSE 传输入口 `/sse`（Streamable HTTP 与
+              根路径都 404）；且 host=localhost 在 Windows 上常只绑 IPv6 `[::1]:8889`，
+              故 URL 用 `localhost` 比 `127.0.0.1` 稳，桥接内还会自动换写法重试。
 - 桌宠作为标准 MCP client（mcp SDK 1.27）。每个 server 一条长连，后台 asyncio 线程托管。
 - 零阻塞主循环：call_tool / list_tools 经 run_coroutine_threadsafe 调度到后台 loop，带超时。
 - 护栏（默认收紧）：skyrimnet 仅本机（allow_remote=False 拒绝非 loopback 地址）；
@@ -21,7 +24,7 @@
       OC_SKYRIM_SERVER_TYPE   skylink|skyrimnet（默认 skyrimnet，最稳）
       OC_SKYRIM_SKYLINK_DLL   SkyrimMCP.dll 完整路径
       OC_SKYRIM_DOTNET        dotnet 可执行路径（默认 dotnet，需在 PATH 或绝对路径）
-      OC_SKYRIM_URL           http://127.0.0.1:8889
+      OC_SKYRIM_URL           http://localhost:8889/sse（缺路径会自动补 sse→/sse）
       OC_SKYRIM_TRANSPORT     sse|streamable_http（默认 sse）
       OC_SKYRIM_ALLOW_REMOTE  1/true           允许非本机地址（默认关）
       OC_SKYRIM_TIMEOUT       单次调用最长等待秒（默认 30）
@@ -64,6 +67,57 @@ def _is_loopback_host(url: str) -> bool:
     return host in ("127.0.0.1", "::1", "localhost", "0.0.0.0", "[::1]")
 
 
+def _normalize_mcp_url(url: str, transport: str = "sse") -> str:
+    """给 MCP 端点补齐路径。
+
+    实测（2026-09-12，SkyrimNet beta24）：它的 MCP server **只**实现了 SSE 传输入口
+    `/sse`，POST/GET `/`、`/mcp` 一律 404；而 Streamable HTTP 那条路走不通。
+    用户若只填 `http://localhost:8889`（缺路径），握手必然失败，弹窗只报
+    「连接超时/失败」，很难看出是路径问题 —— 这里在路径为空时按传输方式补默认路径。
+    用户显式写了路径就原样尊重（可指向反代等自定义入口）。
+    """
+    raw = (url or "").strip().rstrip("/")
+    if not raw:
+        return raw
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(raw)
+    except Exception:  # noqa: BLE001
+        return raw
+    if not parsed.scheme or not parsed.netloc:
+        return raw
+    if (parsed.path or "").strip():
+        return raw
+    return raw + ("/mcp" if transport == "streamable_http" else "/sse")
+
+
+# 同一台机器上「本机」的两种常见写法，互为备用
+_LOOPBACK_SWAPS = {
+    "127.0.0.1": "localhost",
+    "localhost": "127.0.0.1",
+}
+
+
+def _loopback_fallback_url(url: str) -> Optional[str]:
+    """给出同一端点的「另一种本机写法」，没有则返回 None。
+
+    病灶（2026-09-12 实测）：SkyrimNet 的 MCP.yaml 默认 `host: localhost`，而 Windows
+    优先把 localhost 解析成 IPv6 回环 `::1`，于是插件**只监听 [::1]:8889**；
+    此时填 `127.0.0.1`（IPv4）会被「积极拒绝」，反向亦然。
+    换一种回环写法再试一次，两种宿主写法都能连上，用户不必关心绑的是 v4 还是 v6。
+    """
+    try:
+        from urllib.parse import urlparse, urlunparse
+        parsed = urlparse(url)
+    except Exception:  # noqa: BLE001
+        return None
+    alt = _LOOPBACK_SWAPS.get((parsed.hostname or "").lower())
+    if not alt:
+        return None
+    netloc = f"{alt}:{parsed.port}" if parsed.port else alt
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
 # ─────────────────────────────────────────────────────────────
 # Result 类型 —— 对应 N.E.K.O 的 status 分档：绝不静默当成功
 # ─────────────────────────────────────────────────────────────
@@ -96,7 +150,7 @@ def _load_config(skyrim_config: Optional[dict] = None) -> dict:
         "server_type": (os.environ.get("OC_SKYRIM_SERVER_TYPE") or "skyrimnet").strip().lower(),
         "skylink_dll": (os.environ.get("OC_SKYRIM_SKYLINK_DLL") or "").strip(),
         "dotnet_path": (os.environ.get("OC_SKYRIM_DOTNET") or "dotnet").strip(),
-        "skynet_url": (os.environ.get("OC_SKYRIM_URL") or "http://127.0.0.1:8889").strip().rstrip("/"),
+        "skynet_url": (os.environ.get("OC_SKYRIM_URL") or "http://localhost:8889/sse").strip().rstrip("/"),
         "skynet_transport": (os.environ.get("OC_SKYRIM_TRANSPORT") or "sse").strip().lower(),
         "allow_remote": os.environ.get("OC_SKYRIM_ALLOW_REMOTE", "").strip().lower()
                             in ("1", "true", "yes", "on"),
@@ -125,6 +179,8 @@ def _load_config(skyrim_config: Optional[dict] = None) -> dict:
         cfg["server_type"] = "skyrimnet"
     if cfg["skynet_transport"] not in ("sse", "streamable_http"):
         cfg["skynet_transport"] = "sse"
+    # 补全端点路径（用户只填 host:port 时也能连上）
+    cfg["skynet_url"] = _normalize_mcp_url(cfg["skynet_url"], cfg["skynet_transport"])
     return cfg
 
 
@@ -143,6 +199,7 @@ class SkyrimBridge:
         self._session: Optional[Any] = None
         self._connected = False
         self._tools_cache: list[str] = []
+        self._active_url: Optional[str] = None
         self._lock = threading.Lock()
         self._result_handlers: list[Any] = []
         self._start_loop()
@@ -200,22 +257,42 @@ class SkyrimBridge:
                         f"请先装 .NET 10 Desktop/Console Runtime）"
                     )
             else:
-                url = self.cfg.get("skynet_url", "http://127.0.0.1:8889")
+                url = self.cfg.get("skynet_url", "http://localhost:8889/sse")
                 transport = self.cfg.get("skynet_transport", "sse")
                 if not self.cfg.get("allow_remote", False) and not _is_loopback_host(url):
                     return SkyrimResult.fail(
                         "护栏拦截：URL 非本机，且未开启「允许远程」(allow_remote)"
                     )
-                try:
-                    if transport == "streamable_http":
-                        trio = await self._stack.enter_async_context(streamablehttp_client(url))
-                        read, write = trio[0], trio[1]
-                    else:
-                        read, write = await self._stack.enter_async_context(sse_client(url))
-                except Exception as e:  # noqa: BLE001
+                # 本机两种写法都试一遍（server 可能只绑了 IPv6 ::1 或只绑了 IPv4）
+                candidates = [url]
+                alt = _loopback_fallback_url(url)
+                if alt:
+                    candidates.append(alt)
+                last_err: Optional[Exception] = None
+                read = write = None
+                for cand in candidates:
+                    try:
+                        if transport == "streamable_http":
+                            trio = await self._stack.enter_async_context(streamablehttp_client(cand))
+                            read, write = trio[0], trio[1]
+                        else:
+                            read, write = await self._stack.enter_async_context(sse_client(cand))
+                        self._active_url = cand
+                        last_err = None
+                        break
+                    except Exception as e:  # noqa: BLE001
+                        last_err = e
+                        logger.debug("[skyrim_bridge] 连接 %s 失败，换回环写法重试", cand)
+                        try:  # 丢弃这一轮的连接栈，给下一个候选一个干净的 stack
+                            await self._stack.aclose()
+                        except Exception:  # noqa: BLE001
+                            logger.debug("skyrim_bridge: 非致命异常(已静默吞掉)", exc_info=True)
+                        self._stack = AsyncExitStack()
+                if read is None or write is None or last_err is not None:
                     return SkyrimResult.fail(
-                        f"连接 SkyrimNet({transport}) @ {url} 失败：{e}\n"
-                        f"（确认游戏已运行且装好 SkyrimNet，其 MCP server 在 8889 监听）"
+                        f"连接 SkyrimNet({transport}) @ {url} 失败：{last_err}\n"
+                        f"（确认游戏已运行且装好 SkyrimNet；它的 MCP server 走 SSE 传输，"
+                        f"端点 http://localhost:8889/sse，端口 8889 需在监听）"
                     )
             self._session = await self._stack.enter_async_context(ClientSession(read, write))
             await self._session.initialize()

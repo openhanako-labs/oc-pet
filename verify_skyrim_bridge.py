@@ -44,7 +44,7 @@ check("SkyrimResult 可构造", hasattr(sb, "SkyrimResult"))
 print("== 2. 配置加载 ==")
 cfg = sb._load_config()
 check("默认 server_type=skyrimnet", cfg["server_type"] == "skyrimnet")
-check("默认 skynet_url", cfg["skynet_url"] == "http://127.0.0.1:8889")
+check("默认 skynet_url", cfg["skynet_url"] == "http://localhost:8889/sse")
 check("默认 transport=sse", cfg["skynet_transport"] == "sse")
 check("默认 allow_remote=False", cfg["allow_remote"] is False)
 check("默认 timeout=30", cfg["timeout"] == 30)
@@ -59,6 +59,31 @@ cfg3 = sb._load_config({"server_type": "bogus"})
 check("非法 server_type 回退 skyrimnet", cfg3["server_type"] == "skyrimnet")
 cfg4 = sb._load_config({"skynet_transport": "weird"})
 check("非法 transport 回退 sse", cfg4["skynet_transport"] == "sse")
+
+# 端点路径补全（2026-09-12 实测：SkyrimNet MCP 只认 SSE 的 /sse，缺路径必失败）
+check("URL 补 /sse（无路径）", sb._normalize_mcp_url("http://localhost:8889", "sse")
+      == "http://localhost:8889/sse")
+check("URL 补 /sse（仅尾斜杠）", sb._normalize_mcp_url("http://localhost:8889/", "sse")
+      == "http://localhost:8889/sse")
+check("URL 补 /mcp（streamable_http）",
+      sb._normalize_mcp_url("http://localhost:8889", "streamable_http")
+      == "http://localhost:8889/mcp")
+check("已带路径不重复补", sb._normalize_mcp_url("http://localhost:8889/sse", "sse")
+      == "http://localhost:8889/sse")
+check("自定义路径原样保留", sb._normalize_mcp_url("http://localhost:8889/custom", "sse")
+      == "http://localhost:8889/custom")
+check("空 URL 不炸", sb._normalize_mcp_url("", "sse") == "")
+check("入口自动补全：只填 host:port",
+      sb._load_config({"skynet_url": "http://localhost:8889"})["skynet_url"]
+      == "http://localhost:8889/sse")
+
+# 回环写法互换（server 可能只绑 IPv6 ::1 或只绑 IPv4）
+check("localhost → 127.0.0.1", sb._loopback_fallback_url("http://localhost:8889/sse")
+      == "http://127.0.0.1:8889/sse")
+check("127.0.0.1 → localhost", sb._loopback_fallback_url("http://127.0.0.1:8889/sse")
+      == "http://localhost:8889/sse")
+check("非回环无备用", sb._loopback_fallback_url("http://192.168.1.5:8889/sse") is None)
+check("保留端口与路径", sb._loopback_fallback_url("http://127.0.0.1:9999/x") == "http://localhost:9999/x")
 
 
 print("== 3. 护栏 _is_loopback_host ==")
@@ -144,7 +169,9 @@ check("未启用返回 None", b_none is None)
 check("未启用不注册能力", not any(c.name == "skyrim_tool" for c in EXTERNAL_CAPABILITIES))
 
 b_on = sb.init_skyrim_bridge({"enabled": True, "server_type": "skyrimnet",
-                              "skynet_url": "http://127.0.0.1:8889", "timeout": 5})
+                              # 故意指向一个没人听的端口：本脚本必须离线可跑，
+                              # 不能因为"游戏正好开着"就真连上去
+                              "skynet_url": "http://127.0.0.1:18899", "timeout": 5})
 check("启用返回 bridge", b_on is not None)
 check("启用注册 skyrim_tool", any(c.name == "skyrim_tool" for c in EXTERNAL_CAPABILITIES))
 # 取注册的 callable 跑一次（离线，会因连不上走降级，但不崩）
