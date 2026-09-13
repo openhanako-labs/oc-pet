@@ -160,10 +160,18 @@ class QwenTtsProvider(TTSProvider):
         default_voice: str = "",
     ):
         self._voice_refs = dict(voice_refs or {})
-        self._mode = (mode or os.environ.get("QWEN_TTS_MODE", "serve")).strip().lower()
-        if self._mode not in MODES:
-            logger.warning("未知 QWEN_TTS_MODE=%s，回退到 serve", self._mode)
-            self._mode = "serve"
+        # 模式优先级：参数 > 环境变量 > 自动检测
+        mode_arg = (mode or os.environ.get("QWEN_TTS_MODE", "")).strip().lower()
+        if mode_arg and mode_arg in MODES:
+            self._mode = mode_arg
+        else:
+            # 自动检测：找本地模型目录，有就 local
+            local_dir = r"W:\Games\Hanako\Work\projects\qwen-tts\models\Qwen3-TTS-12Hz-0.6B-Base"
+            if os.path.isdir(local_dir):
+                self._mode = "local"
+                logger.info("Qwen TTS: 自动检测到本地模型，使用 local 模式 | %s", local_dir)
+            else:
+                self._mode = "serve"
 
         self._default_voice = (
             default_voice
