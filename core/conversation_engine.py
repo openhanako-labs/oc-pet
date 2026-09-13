@@ -1766,6 +1766,68 @@ class ConversationEngine:
                 if self._tts_in_use > 0:
                     self._tts_in_use -= 1
     
+    def _synth_stream_and_play(self, tts, reply, emotion, anim, character, instruct, voice, gen) -> bool:
+        """流式合成：逐块推给主线程播放器。返回 True 表示已接管（不再走普通路径）。
+
+        调用线程：TTS 线程池。
+        数据通路：本方法 → on_tts_stream 回调（→ 主线程信号）→ StreamingPcmPlayer.feed
+        """
+        if self._is_stale(gen):
+            return False
+        cb = getattr(self, "on_tts_stream", None)
+        if not callable(cb):
+            return False
+        # 去掉标签，避免读出 [emotion:xxx]
+        tts_text = reply
+        try:
+            tts_text = self._adapter.parse_emotion(reply)[0]
+        except (AttributeError, Exception):
+            import re
+            tts_text = re.sub(r"\s*\[\s*emotion\s*[:=]\s*\w+\s*\]\s*", " ", reply, flags=re.IGNORECASE)
+            tts_text = re.sub(r"\s*\[expression:[^\]]*\]\s*", " ", tts_text, flags=re.IGNORECASE)
+            tts_text = re.sub(r"\s*\[duration:[^\]]*\]\s*", " ", tts_text, flags=re.IGNORECASE)
+            tts_text = tts_text.strip()
+        if not tts_text:
+            return False
+
+        # 先告诉主线程准备播放器（拿声卡前不阻塞）
+        try:
+            cb("begin", {"emotion": emotion}, gen)
+        except Exception as e:
+            logger.warning("流式 begin 回调失败: %s", e)
+            return False
+
+        n_chunks = 0
+        try:
+            for pcm in tts.synthesize_stream(tts_text, voice=voice):
+                if self._is_stale(gen):
+                    logger.debug("流式合成中途打断: gen=%d", gen)
+                    break
+                if not pcm:
+                    continue
+                n_chunks += 1
+                cb("chunk", pcm, gen)
+        except Exception as e:
+            logger.warning("流式合成失败: %s", e)
+            try:
+                cb("end", None, gen)
+            except Exception:
+                logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
+            return n_chunks > 0  # 已经放出一部分就当作接管了，避免重复朗读
+        try:
+            cb("end", None, gen)
+        except Exception as e:
+            logger.debug("流式 end 回调失败: %s", e)
+
+        # 文字气泡仍要显示（口型由播放器回调驱动）
+        if not self._is_stale(gen):
+            try:
+                _call_reply_cb(self.on_reply, reply, emotion, anim, "", None)
+            except Exception as _e:
+                logger.warning("流式回复文字回调失败: %s", _e)
+        logger.info("TTS 流式合成完成: %d chunks (gen=%d)", n_chunks, gen)
+        return True
+
     def _synth_and_reply(self, reply, emotion, anim, character, instruct, source, gen):
         """在 TTS 线程池中执行：合成 + 回调（on_reply 仍带 audio_path，口型链路不变）。"""
         # synth 前检查：已打断则不浪费算力
@@ -1786,6 +1848,30 @@ class ConversationEngine:
                 "TTS 已配置(provider=%s)但未就绪，跳过语音合成：%s",
                 getattr(tts, "name", "?"), _reason,
             )
+        # ── 流式路径：provider 支持且音色有参考音频 → 边合成边播 ──
+        streamed = False
+        if tts and tts_ready and reply and reply.strip() and reply.strip() not in ("\u2026", "..."):
+            try:
+                voice0 = ""
+                resolver0 = getattr(self, "_voice_resolver", None)
+                if callable(resolver0):
+                    try:
+                        voice0 = resolver0(character, emotion) or ""
+                    except Exception:
+                        voice0 = ""
+                can = getattr(tts, "can_stream", None)
+                if callable(can) and can(voice0):
+                    streamed = self._synth_stream_and_play(
+                        tts, reply, emotion, anim, character, instruct, voice0, gen,
+                    )
+            except Exception as e:
+                logger.warning("流式合成尝试失败，回退普通路径: %s", e)
+                streamed = False
+        if streamed:
+            with self._lock:
+                if self._tts_in_use > 0:
+                    self._tts_in_use -= 1
+            return
         try:
             if tts and tts_ready and reply and reply.strip() and reply.strip() not in ("\u2026", "..."):
                 try:

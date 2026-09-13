@@ -43,6 +43,7 @@ from ui.theme import get_default, rgb, rgba
 from motion.action_linker import ActionLinker
 from motion.foreground_watcher import ForegroundWatcher
 from ui.tts_player import TTSTtsPlayer
+from ui.streaming_pcm_player import StreamingPcmPlayer
 from ui.startup_screen import StartupScreen
 from core.perception import PerceptionController, ProactiveScheduler
 from core.pet_audio_bridge import PetAudioBridge, PetAudioCallbacks, AudioType
@@ -90,6 +91,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
     tts_stop_signal = Signal()  # 请求在主线程停止 TTS 播放
     # 2026-09-07: TTS 音频播放信号（供 BubbleMixin 的 speak() 回调使用）
     tts_audio_signal = Signal(str)  # audio_path
+    # 2026-09-13: 流式 TTS 信号（Qwen3-TTS local 边合成边播）
+    # kind: "begin" | "chunk" | "end"；payload: chunk 时为 PCM bytes
+    tts_stream_signal = Signal(str, object, int)  # kind, payload, gen
     # 语音识别完成后（后台线程）的状态写入：_is_thinking/_pending_* 与
     # _record_topic 一并经信号挪到主线程执行，避免主线程同帧读到中间态（B3-2）。
     chat_state_signal = Signal(str)  # 语音输入文本 -> 主线程更新聊天状态
@@ -450,6 +454,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         # 复用 status 通道在主线程显示 thinking 气泡，避免 27s 静默无反馈。
         self._engine.on_progress = self._on_engine_status
         self._engine.on_tts_ready = lambda: logger.info("Engine TTS ready")
+        # 2026-09-13: 流式 TTS 回调（Qwen3-TTS local 边合成边播）
+        self._engine.on_tts_stream = self._on_engine_tts_stream
         # P1: 流式 chunk 回调（边生成边显示气泡）
         self._engine.on_llm_chunk = self._on_engine_chunk
         # M4: 桥接 on_tool_progress -> Qt Signal
@@ -468,6 +474,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self.tts_stop_signal.connect(self._do_tts_stop)
         # 2026-09-07: TTS 音频播放信号（供 BubbleMixin 的 speak() 回调使用）
         self.tts_audio_signal.connect(self._do_play_tts_audio)
+        # 2026-09-13: 流式 TTS 信号
+        self.tts_stream_signal.connect(self._do_engine_tts_stream)
         self.chat_state_signal.connect(self._do_chat_state)
         self.screen_emotion_signal.connect(self._do_screen_emotion)
         self.screen_proactive_signal.connect(self._do_screen_proactive)
@@ -537,10 +545,19 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         if not tts_cfg.get("enabled", True):
             self._tts_player.disable()
 
+        # ── 流式 PCM 播放器（Qwen3-TTS local 边合成边播）──
+        self._stream_player = StreamingPcmPlayer(sample_rate=24000)
+        self._stream_player.set_volume(tts_cfg.get("volume", 0.8))
+        if not tts_cfg.get("enabled", True):
+            self._stream_player.disable()
+
         # TTS 口型回调
         self._tts_player.on_start = self._on_tts_start
         self._tts_player.on_end = self._on_tts_end
         self._tts_player.on_error = lambda msg: self._on_tts_end()
+        self._stream_player.on_start = self._on_tts_start
+        self._stream_player.on_end = self._on_tts_end
+        self._stream_player.on_error = lambda msg: self._on_tts_end()
 
         # ── AUDIO-07: 桌宠音频事件桥接器 ──
         self._audio_bridge = PetAudioBridge(self)
@@ -2582,7 +2599,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 self._record_conversation_facts(text)
             except Exception:
                 logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
-            self._tts_player.stop()
+            self._stop_all_tts()
             self.bubble.set_text("⏳ 思考中...")
             self._reposition_bubble()
             self.bubble.show()
@@ -2874,11 +2891,46 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         else:
             self._emotion_expiry_timer.stop()
 
+    def _stop_all_tts(self) -> None:
+        """停掉普通 TTS 与流式 TTS 播放（主线程）。"""
+        try:
+            self._tts_player.stop()
+        except Exception:
+            logger.debug("pet: 停 TTS 失败", exc_info=True)
+        try:
+            sp = getattr(self, "_stream_player", None)
+            if sp is not None:
+                sp.stop()
+        except Exception:
+            logger.debug("pet: 停流式 TTS 失败", exc_info=True)
+
     def _on_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str, action_intent=None):
         """对话引擎回复回调 - 从后台线程调用，通过信号转到主线程"""
         # 从 Python threading.Thread 调 QTimer.singleShot 不可靠
         # 用 Signal 发射，Qt 会自动跨线程投递到主线程
         self.engine_reply_signal.emit(reply, emotion, anim, audio_path, action_intent)
+
+    def _on_engine_tts_stream(self, kind: str, payload, gen: int):
+        """流式 TTS 回调（TTS 线程池调用）→ 信号转主线程。"""
+        self.tts_stream_signal.emit(kind, payload, gen)
+
+    def _do_engine_tts_stream(self, kind: str, payload, gen: int):
+        """主线程：流式 TTS 事件处理。"""
+        try:
+            if kind == "begin":
+                # 新一句开始：停掉旧播放 + 重建流式缓冲
+                self._stop_all_tts()
+                emo = "neutral"
+                if isinstance(payload, dict):
+                    emo = payload.get("emotion") or "neutral"
+                self._last_tts_emotion = emo
+                self._stream_player.prepare()
+            elif kind == "chunk":
+                self._stream_player.feed(payload)
+            elif kind == "end":
+                self._stream_player.finish()
+        except Exception as e:
+            logger.warning("流式 TTS 事件处理失败 (%s): %s", kind, e)
 
     def _on_engine_chunk(self, chunk: str, accumulated: str, emotion: str, gen: int):
         """P1: 流式 chunk 回调 - 从后台线程调用，通过信号转到主线程"""
@@ -2918,7 +2970,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             self._show_bubble(reply, emotion)
 
         # 截停旧 TTS
-        self._tts_player.stop()
+        self._stop_all_tts()
 
         # 显示气泡
         if reply and reply.strip() and reply.strip() not in ("\u2026", "..."):
@@ -3249,6 +3301,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         if hasattr(self, '_tts_player'):
             try:
                 self._tts_player.stop()
+            except Exception:
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
+        if hasattr(self, '_stream_player'):
+            try:
+                self._stream_player.stop()
             except Exception:
                 logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 

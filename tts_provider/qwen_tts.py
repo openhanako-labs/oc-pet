@@ -559,6 +559,202 @@ class QwenTtsProvider(TTSProvider):
             logger.warning("Qwen TTS [local] 合成失败: %s", e)
             return None
 
+    # ── 流式合成（local 模式）─────────────────────────────
+
+    def supports_streaming(self) -> bool:
+        """流式合成仅在 local 模式可用（serve 模式由服务端决定，暂不支持）。"""
+        return self._mode == "local"
+
+    def synth_stream(
+        self,
+        text: str,
+        ref_audio: str,
+        ref_text: str = "",
+        language: str = "Chinese",
+        chunk_frames: int = 25,
+        first_chunk_frames: int = 8,
+        left_context: int = 25,
+    ):
+        """流式合成：逐块 yield PCM 字节（Int16 LE 单声道）。
+
+        实现原理：talker 是逐帧自回归的，每生成一帧就有 16 个 codec code。
+        用 ``functools.wraps`` 包一层 ``talker.forward`` 截获每帧 codes，
+        攒够 ``chunk_frames`` 帧就用 speech tokenizer decoder 解成音频，
+        带上 ``left_context`` 帧的左侧上下文保证拼接处平滑。
+
+        首块用 ``first_chunk_frames``（更小）换取更低的 TTFF，
+        后续用 ``chunk_frames`` 降低解码开销。
+
+        Yields:
+            bytes: PCM Int16 little-endian 单声道（采样率见 ``stream_sample_rate``）
+
+        Raises:
+            RuntimeError: 模型未就绪 / 缺 ref_audio / 非 local 模式
+        """
+        if self._local_model is None:
+            raise RuntimeError("Qwen TTS [local] 模型未就绪")
+        if self._mode != "local":
+            raise RuntimeError(f"Qwen TTS 流式合成仅支持 local 模式（当前 {self._mode}）")
+        if not ref_audio:
+            raise RuntimeError("Qwen TTS [local] 流式合成需要 ref_audio")
+
+        import functools
+        import threading
+        import queue as _queue
+
+        import torch
+
+        model = self._local_model
+        outer = model.model
+        talker = outer.talker
+        decoder = outer.speech_tokenizer.model.decoder
+        total_upsample = decoder.total_upsample
+        eos_id = talker.config.codec_eos_token_id
+
+        # 复用已缓存的 prompt（同一 ref_audio 只算一次 speaker embedding）
+        prompt = self._get_clone_prompt(ref_audio, ref_text)
+        pdict = model._prompt_items_to_voice_clone_prompt(prompt)
+        input_ids = model._tokenize_texts([model._build_assistant_text(text)])
+        ref_ids = None
+        if ref_text:
+            ref_ids = [model._tokenize_texts([model._build_ref_text(ref_text)])[0]]
+        gen_kwargs = model._merge_generate_kwargs(do_sample=False)
+
+        frames_q: "_queue.Queue" = _queue.Queue()
+        err_box: list = []
+        orig_forward = talker.forward
+
+        @functools.wraps(orig_forward)
+        def _hooked(*args, **kwargs):
+            out = orig_forward(*args, **kwargs)
+            hs = getattr(out, "hidden_states", None)
+            if isinstance(hs, tuple) and len(hs) == 2 and hs[1] is not None:
+                frames_q.put(hs[1].detach().clone())
+            return out
+
+        def _worker():
+            try:
+                talker.forward = _hooked
+                if hasattr(talker, "rope_deltas"):
+                    talker.rope_deltas = None
+                outer.generate(
+                    input_ids=input_ids,
+                    ref_ids=ref_ids,
+                    voice_clone_prompt=pdict,
+                    languages=[language],
+                    **gen_kwargs,
+                )
+            except Exception as e:  # noqa: BLE001
+                err_box.append(e)
+            finally:
+                talker.forward = orig_forward
+                frames_q.put(None)
+
+        th = threading.Thread(target=_worker, daemon=True, name="QwenTTSGen")
+        th.start()
+
+        all_frames: list = []
+        emitted = 0
+
+        def _decode(start: int, end: int) -> bytes:
+            lo = max(0, start - left_context)
+            ctx = start - lo
+            codes = torch.cat(all_frames[lo:end], dim=0)      # (T, 16)
+            codes = codes.transpose(0, 1).unsqueeze(0)        # (1, 16, T)
+            with torch.no_grad():
+                wav = decoder(codes)
+            wav = wav[..., ctx * total_upsample:]
+            arr = wav.squeeze().float().cpu().numpy()
+            return _float_to_pcm16(arr)
+
+        try:
+            target = first_chunk_frames
+            while True:
+                item = frames_q.get()
+                if item is None:
+                    break
+                if item[0, 0].item() == eos_id:
+                    break
+                all_frames.append(item)
+                if len(all_frames) - emitted >= target:
+                    yield _decode(emitted, len(all_frames))
+                    emitted = len(all_frames)
+                    target = chunk_frames  # 首块之后恢复正常块大小
+            if emitted < len(all_frames):
+                yield _decode(emitted, len(all_frames))
+        finally:
+            th.join(timeout=5)
+
+        if err_box:
+            raise RuntimeError(f"Qwen TTS 流式生成失败: {err_box[0]}")
+
+    def _get_clone_prompt(self, ref_audio: str, ref_text: str):
+        """带缓存的 voice clone prompt（同一参考音频只算一次 embedding）。"""
+        key = (ref_audio, ref_text or "")
+        cache = getattr(self, "_prompt_cache", None)
+        if cache is None:
+            cache = self._prompt_cache = {}
+        if key not in cache:
+            cache.clear()  # 只保留最近一份，避免显存堆积
+            cache[key] = self._local_model.create_voice_clone_prompt(
+                ref_audio=ref_audio,
+                ref_text=ref_text or None,
+                x_vector_only_mode=(not bool(ref_text)),
+            )
+        return cache[key]
+
+    @property
+    def stream_sample_rate(self) -> int:
+        """流式 PCM 的采样率。"""
+        return 24000
+
+    def can_stream(self, voice: str = "") -> bool:
+        """给定音色能否走流式合成（需 local 模式 + 已就绪 + 该音色有参考音频）。"""
+        if self._mode != "local" or not self._ready:
+            return False
+        ref_audio, _ = self._resolve_ref(voice)
+        return bool(ref_audio)
+
+    def _resolve_ref(self, voice: str) -> tuple:
+        """音色名 → (ref_audio, ref_text)。不在 refs 里则返回 ("", "")。"""
+        entry = self._voice_refs.get(voice, "")
+        if isinstance(entry, dict):
+            return entry.get("path", "") or "", entry.get("text", "") or ""
+        return (entry or ""), ""
+
+    def synthesize_stream(
+        self,
+        text: str,
+        voice: str = "",
+        chunk_frames: int = 25,
+        first_chunk_frames: int = 8,
+    ):
+        """流式合成入口：内部解析 voice → ref_audio，逐块 yield PCM 字节。
+
+        Yields:
+            bytes: PCM Int16 LE 单声道
+
+        Raises:
+            RuntimeError: 不可流式（非 local / 未就绪 / 音色无参考音频）
+        """
+        ref_audio, ref_text = self._resolve_ref(voice)
+        if not ref_audio:
+            raise RuntimeError(f"音色 {voice!r} 无参考音频，无法流式合成")
+        yield from self.synth_stream(
+            text,
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+            chunk_frames=chunk_frames,
+            first_chunk_frames=first_chunk_frames,
+        )
+
+
+def _float_to_pcm16(arr) -> bytes:
+    """float32 [-1,1] → Int16 LE bytes（单声道）。"""
+    import numpy as np
+    a = np.asarray(arr, dtype=np.float32).reshape(-1)
+    return np.clip(a * 32767.0, -32768, 32767).astype(np.int16).tobytes()
+
 
 def _audio_to_wav_bytes(audio, sample_rate: int = 24000) -> bytes:
     """把 numpy 音频数组转成 wav 字节。
