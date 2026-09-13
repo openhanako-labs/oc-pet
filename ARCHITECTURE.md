@@ -151,4 +151,3 @@ oc-pet/
 ## 已知技术债（2026-08-12 评审）
 - `pet.py` 仍是 god-object：10 个 mixin 只搬方法，`__init__` 约 300 行集中接线。
 - `_rebuild` 的 `old.cleanup()` 与 worker 正在合成的 use-after-cleanup 残留（需引用计数）。
-- 详细见 `docs/code-review-2026-08-12.md`。

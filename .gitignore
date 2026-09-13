@@ -87,5 +87,16 @@ docs/SILENT-EXCEPTIONS.md
 docs/SPIKE-BORROW-SHELL.md
 docs/upgrade-a-g-design.md
 
+# 内部计划（不提交）：工作计划、改动方案、评审记录
+docs/voice-expression-plan.md
+docs/voice-skyrimnet-integration-plan.md
+docs/architecture-flowchart.png
+
+# 内部产物（不提交）：竞品分析、改动方案、迁移图
+docs/为什么存在.md
+docs/桌宠主动对话改动方案.md
+docs/migration-class-diagram.mermaid
+docs/migration-sequence-diagram.mermaid
+
 # 评审产物（内部，不提交；与上面"内部文档"同规）
 docs/review-*/
