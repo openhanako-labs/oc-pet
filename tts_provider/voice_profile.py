@@ -30,7 +30,7 @@ from typing import Collection, Optional
 logger = logging.getLogger(__name__)
 
 # 引擎名集合（用于 voice_emotion_map 的 provider 细分识别）
-KNOWN_PROVIDERS = frozenset({"edge", "mimo", "api", "cosyvoice", "aqua"})
+KNOWN_PROVIDERS = frozenset({"edge", "mimo", "api", "cosyvoice", "aqua", "qwen"})
 
 # MIMO 已知音色：模块常量 MIMO_VOICES 只列了 3 个预置，实际服务端还支持
 # 设置面板里的一批中文/英文音色；这里合并成完整白名单用于校验回退。

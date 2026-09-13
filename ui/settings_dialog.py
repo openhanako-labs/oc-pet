@@ -184,14 +184,14 @@ class SettingsDialog(QDialog):
 
                 # TTS 引擎下拉（agent 级覆盖）
                 eng = QComboBox()
-                eng.addItems(["沿用全局", "CosyVoice 本地", "微软 Edge (免费)", "MIMO TTS", "API 调用"])
-                eng_map = {"": 0, "cosyvoice": 1, "edge": 2, "mimo": 3, "api": 4}
+                eng.addItems(["沿用全局", "CosyVoice 本地", "微软 Edge (免费)", "MIMO TTS", "API 调用", "Qwen3-TTS 本地"])
+                eng_map = {"": 0, "cosyvoice": 1, "edge": 2, "mimo": 3, "api": 4, "qwen": 5}
                 ac = next((a for a in agents if a.get("id") == aid), {})
                 agent_tts = ac.get("tts", {}) if isinstance(ac.get("tts"), dict) else {}
                 cur_eng = agent_tts.get("provider", "")
                 eng.setCurrentIndex(eng_map.get(cur_eng, 0))
 
-                # 音色下拉（Edge 音色 + CosyVoice 参考音色）
+                # 音色下拉（Edge 音色 + CosyVoice/Qwen 参考音色）
                 voice = QComboBox()
                 voice.setEditable(True)
                 voice.setMinimumWidth(150)
@@ -200,17 +200,37 @@ class SettingsDialog(QDialog):
                     edge_voices = EDGE_VOICES
                 except Exception:
                     edge_voices = ["zh-CN-XiaoxiaoNeural"]
+                # 第一项：沿用全局
+                voice.addItem("沿用全局")
                 for item in ([f"edge|{v}" for v in edge_voices] +
-                             ["cosy|ophelia", "cosy|luoqixi", "cosy|aimis", "cosy|alice", "cosy|glados", "cosy|rebecca"]):
+                             ["cosy|ophelia", "cosy|luoqixi", "cosy|aimis", "cosy|alice", "cosy|glados", "cosy|rebecca",
+                              "qwen|ophelia", "qwen|luoqixi", "qwen|aimis", "qwen|alice", "qwen|glados",
+                              "qwen|rebecca", "qwen|lo", "qwen|vivian", "qwen|ryan", "qwen|aiden"]):
                     voice.addItem(item)
                 cur_voice = agent_tts.get("voice", "") or agent_tts.get("edge_voice", "")
-                if cur_voice:
-                    tag = f"{cur_eng or 'cosy'}|{cur_voice}"
-                    v_idx = voice.findText(tag)
-                    if v_idx >= 0:
-                        voice.setCurrentIndex(v_idx)
+                if cur_eng:
+                    # 独立引擎：选中保存的音色，启用下拉框
+                    voice.setEnabled(True)
+                    if cur_voice:
+                        tag = f"{cur_eng}|{cur_voice}"
+                        v_idx = voice.findText(tag)
+                        if v_idx >= 0:
+                            voice.setCurrentIndex(v_idx)
+                        else:
+                            voice.setEditText(cur_voice)
+                else:
+                    # 沿用全局：选中第一项，禁用下拉框
+                    voice.setCurrentIndex(0)
+                    voice.setEnabled(False)
+
+                # 引擎切换时联动音色状态
+                def _on_engine_changed(idx, voice_cb=voice):
+                    if idx == 0:
+                        voice_cb.setCurrentIndex(0)
+                        voice_cb.setEnabled(False)
                     else:
-                        voice.setEditText(cur_voice)
+                        voice_cb.setEnabled(True)
+                eng.currentIndexChanged.connect(_on_engine_changed)
 
                 # 助手下拉（服务端可用 agent）
                 ag = QComboBox()
@@ -268,8 +288,8 @@ class SettingsDialog(QDialog):
         tts_layout.addRow(self.tts_enabled)
 
         self.tts_provider = QComboBox()
-        self.tts_provider.addItems(["本地 CosyVoice", "MIMO TTS", "API 调用", "微软 Edge (免费)"])
-        tts_prov_map = {"cosyvoice": 0, "mimo": 1, "api": 2, "edge": 3}
+        self.tts_provider.addItems(["本地 CosyVoice", "MIMO TTS", "API 调用", "微软 Edge (免费)", "Qwen3-TTS 本地"])
+        tts_prov_map = {"cosyvoice": 0, "mimo": 1, "api": 2, "edge": 3, "qwen": 4}
         self.tts_provider.setCurrentIndex(tts_prov_map.get(self._config.get("tts", {}).get("provider", "cosyvoice"), 0))
         tts_layout.addRow("TTS 引擎", self.tts_provider)
 
@@ -1514,7 +1534,7 @@ class SettingsDialog(QDialog):
 
         # TTS
         c.setdefault("tts", {})["enabled"] = self.tts_enabled.isChecked()
-        c["tts"]["provider"] = ["cosyvoice", "mimo", "api", "edge"][self.tts_provider.currentIndex()]
+        c["tts"]["provider"] = ["cosyvoice", "mimo", "api", "edge", "qwen"][self.tts_provider.currentIndex()]
         c["tts"]["volume"] = self.tts_volume.value() / 100
         if hasattr(self, "tts_edge_voice"):
             c["tts"]["edge_voice"] = self.tts_edge_voice.currentText()
@@ -1616,14 +1636,22 @@ class SettingsDialog(QDialog):
 
         # 桌宠独立配置（per-pet）：写回 agents[].tts / agents[].dialog.agent_id
         if getattr(self, '_per_pet_rows', None):
-            eng_map_inv = ["", "cosyvoice", "edge", "mimo", "api"]
+            # 用 currentText 解析，不依赖索引顺序
+            eng_text_map = {
+                "沿用全局": "",
+                "CosyVoice 本地": "cosyvoice",
+                "微软 Edge (免费)": "edge",
+                "MIMO TTS": "mimo",
+                "API 调用": "api",
+                "Qwen3-TTS 本地": "qwen",
+            }
             agents_out = c.setdefault("agents", [])
             for aid, (eng_cb, voice_cb, agent_cb) in self._per_pet_rows.items():
                 ac = next((a for a in agents_out if a.get("id") == aid), None)
                 if ac is None:
                     ac = {"id": aid, "enabled": False}
                     agents_out.append(ac)
-                eng = eng_map_inv[eng_cb.currentIndex()]
+                eng = eng_text_map.get(eng_cb.currentText(), "")
                 # 解析音色："edge|xxx" 或 "cosy|xxx"；空则移除该字段
                 vtxt = voice_cb.currentText()
                 vtag, _, vname = vtxt.partition("|")
@@ -1640,10 +1668,18 @@ class SettingsDialog(QDialog):
                     if eng == "edge":
                         if vtag == "edge" and vname:
                             ac["tts"]["edge_voice"] = vname
+                        else:
+                            if isinstance(ac["tts"], dict):
+                                ac["tts"].pop("edge_voice", None)
                         ac["tts"].pop("voice", None) if isinstance(ac["tts"], dict) else None
                     else:
-                        if vtag == "cosy" and vname:
+                        # cosy / qwen 等通过 voice_profile 映射到音色的引擎，统一走 voice 字段
+                        if vtag in ("cosy", "qwen") and vname:
                             ac["tts"]["voice"] = vname
+                        else:
+                            # 音色选"沿用全局"或非标准格式，清掉 voice
+                            if isinstance(ac["tts"], dict):
+                                ac["tts"].pop("voice", None)
                         ac["tts"].pop("edge_voice", None)
                 # 助手绑定：空 = 沿用全局
                 selected_agent = agent_cb.currentData()

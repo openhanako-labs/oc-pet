@@ -56,6 +56,15 @@ class VoiceProviderMixin:
             elif provider == "aqua":
                 from tts_provider.aqua_tts import AquaTtsProvider
                 return AquaTtsProvider()
+            elif provider == "qwen":
+                from tts_provider.qwen_tts import QwenTtsProvider, load_voice_refs
+                tts_cfg = self.config.get("tts", {}) or {}
+                voice_refs = load_voice_refs(self.config)
+                qwen = QwenTtsProvider(
+                    voice_refs=voice_refs,
+                    default_voice=tts_cfg.get("qwen_default_voice", ""),
+                )
+                return qwen
             else:
                 from tts_provider.cosyvoice import CosyVoiceProvider
                 return CosyVoiceProvider()
@@ -90,6 +99,22 @@ class VoiceProviderMixin:
                 tts_cfg.get("edge_rate", ""),
                 tts_cfg.get("edge_pitch", ""),
             )
+        elif provider == "qwen":
+            # qwen 引擎：base_url / voice_refs / mode / default_voice 任何一项变了都要重建
+            try:
+                from tts_provider.qwen_tts import load_voice_refs
+                import os as _os
+                refs = load_voice_refs(self.config)
+                tts_cfg_q = self.config.get("tts", {}) or {}
+                api_sig = (
+                    _os.environ.get("QWEN_TTS_MODE", "serve").strip().lower(),
+                    _os.environ.get("QWEN_TTS_BASE_URL", "") or _os.environ.get("TTS_BASE_URL", ""),
+                    _os.environ.get("QWEN_TTS_MODEL", ""),
+                    _os.environ.get("QWEN_TTS_DEFAULT_VOICE", ""),
+                    tuple(sorted((k, str(v)) for k, v in refs.items())),
+                )
+            except Exception:
+                api_sig = ()
         return (provider, api_sig)
 
     # ── P2-7 语音身份/音色 ──────────────────────────────────────
