@@ -908,8 +908,18 @@ class ConversationEngine:
         """热刷新插件工具：重新 discover + 重建统一路由索引 + 刷新 LLM 工具列表。
 
         P7：新增/删除插件 30 秒内生效，无需重启桌宠。
+
+        2026-09-14 优化：先看插件目录的 mtime 是否变了，**没变就直接跳过**。
+        原实现每 30s 无条件全量重扫（遍历 26 插件 + 正则解析 100 个 JS 文件），
+        而工具列表几乎从不变——白烧 CPU（实测日志里每 30s 一次
+        "Tool registry: 100 tools from plugins"）。
         """
         try:
+            stamp = self._plugins_dir_stamp()
+            if stamp is not None and stamp == getattr(self, "_plugins_stamp", None):
+                return  # 目录没动过：跳过全量重扫
+            self._plugins_stamp = stamp
+
             before = self._tool_registry.tool_count
             self._tool_registry.refresh()
             self._unified_router.refresh(self._tool_registry)
@@ -919,6 +929,45 @@ class ConversationEngine:
                 logger.info("插件热刷新: 工具数 %d -> %d", before, after)
         except Exception as e:
             logger.warning("插件热刷新失败: %s", e)
+
+    @staticmethod
+    def _plugin_roots():
+        """插件根目录列表（单一来源，便于测试注入）。
+
+        与 `core.tool_registry` 扫描的两个来源一致：
+        - Hana 全局插件：`~/.hanako/plugins`
+        - oc-pet 本地插件：项目内 `plugins/`
+        """
+        from pathlib import Path
+        return [
+            Path.home() / ".hanako" / "plugins",
+            Path(__file__).resolve().parent.parent / "plugins",
+        ]
+
+    @classmethod
+    def _plugins_dir_stamp(cls):
+        """插件目录的"版本戳"：各插件目录名 + manifest 的 mtime。
+
+        比逐文件 hash 便宜得多，且足以发现"新增/删除插件"或"改了 manifest"。
+        拿不到时返回 None（调用方会保守地执行一次全量刷新）。
+        """
+        try:
+            parts = []
+            for root in cls._plugin_roots():
+                if not root.is_dir():
+                    continue
+                for d in sorted(root.iterdir()):
+                    if not d.is_dir():
+                        continue
+                    mf = d / "manifest.json"
+                    try:
+                        mt = mf.stat().st_mtime if mf.is_file() else 0.0
+                    except OSError:
+                        mt = 0.0
+                    parts.append(f"{d.name}:{mt:.0f}")
+            return "|".join(parts) if parts else None
+        except Exception:
+            return None
 
     def _is_stale(self, gen: int) -> bool:
         """检查消息代际是否已过期（用户已打断/发新消息）。

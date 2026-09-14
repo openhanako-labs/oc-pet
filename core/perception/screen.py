@@ -194,6 +194,9 @@ class ScreenPerception:
     def __init__(self, interval: int = 120):
         self._interval = interval
         self._base_interval = interval
+        # 2026-09-14：对话避让钩子。由 pet.py 注入 `_is_conversation_busy`，
+        # 为 None 时行为不变（不避让）。
+        self.busy_check = None
         # 随机间隔范围（秒）：interval 为基准，实际每次截屏后在下限~上限间随机。
         # 默认基准 ± 30%，既防模式化打扰，也不至于等太久
         self._interval_min = int(interval * 0.7)
@@ -295,11 +298,26 @@ class ScreenPerception:
     def _should_enrich(self, scene: ScreenScene | None, now: float) -> bool:
         """是否应发起一次 LLM 语义增强（冷却 + 场景变化判断）。
 
+        2026-09-14 避让：**对话进行中不发起 enrich**。
+        实测屏幕感知与用户回复抢同一条 API（日志：`Vision API timeout` 连续三次，
+        与回复同时段），用户感知为"回复变慢"。
+        场景还在那里，等对话结束再分析不迟。
+
         Returns:
             True=放行（并已记录本次 enrich 时间/场景，供下次判断）。
         """
         if scene is None:
             return False
+        # 避让：对话进行中先不做 LLM 增强（不消耗 _last_enrich_at，
+        # 这样对话结束后可以立即补一次，不会被冷却拖住）
+        busy = getattr(self, "busy_check", None)
+        if callable(busy):
+            try:
+                if busy():
+                    logger.debug("Screen enrich 避让：对话进行中")
+                    return False
+            except Exception:
+                logger.debug("busy_check 失败，按不忙处理", exc_info=True)
         scene_changed = (scene.scene or "") != getattr(self, "_last_enriched_scene", "")
         if scene_changed or (now - self._last_enrich_at >= self._enrich_cooldown):
             self._last_enrich_at = now

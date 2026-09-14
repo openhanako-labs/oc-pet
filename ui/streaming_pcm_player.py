@@ -29,6 +29,7 @@ import array
 import logging
 import math
 import threading
+import time
 from collections import deque
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,12 @@ class StreamingPcmPlayer(QObject):
         self._volume = 0.8
         self._last_error = ""
         self._finished = False
+        # 2026-09-14 预缓冲：实测合成速率仅 0.36x 实时（低于播放所需 1.0x），
+        # "首块一到就开声卡"会立刻抽干缓冲 → 用户听到"两个字一卡"。
+        # 改为攒够 N 秒再开播，用首字延迟换流畅。0 = 关闭（回旧行为）。
+        self._prebuffer_bytes = 0
+        self._prebuffer_max_wait_s = 8.0
+        self._playback_wait_from = 0.0
         # 设备未就绪时先落在这里，prepare() 时冲刷（避免 feed 早于 prepare）
         self._pending: deque = deque()
 
@@ -246,6 +253,33 @@ class StreamingPcmPlayer(QObject):
                 except Exception:
                     logger.debug("streaming_pcm: 音量设置失败", exc_info=True)
 
+    def set_prebuffer(self, seconds: float, max_wait_s: float = 8.0) -> None:
+        """设预缓冲时长（秒）。0 = 关闭（回"首块即播"的旧行为）。
+
+        为什么需要：实测本机合成速率仅 **0.36x 实时**（低于播放所需 1.0x），
+        首块一到就开声卡会立即抽干缓冲，用户听到"两个字一卡"。
+        攒够 N 秒再开播，用首字延迟换流畅。
+
+        Args:
+            seconds: 预缓冲目标时长。1.5~3.0s 是较平衡的值。
+            max_wait_s: 最长等待；超过则不等了（防合成极慢时永远不出声）。
+        """
+        try:
+            sec = max(0.0, float(seconds))
+        except (TypeError, ValueError):
+            sec = 0.0
+        # Int16 单声道 → 每秒字节数
+        bytes_per_sec = 2 * max(1, self._channels) * max(1, self._sample_rate)
+        self._prebuffer_bytes = int(sec * bytes_per_sec)
+        try:
+            self._prebuffer_max_wait_s = max(0.5, float(max_wait_s))
+        except (TypeError, ValueError):
+            self._prebuffer_max_wait_s = 8.0
+        logger.info(
+            "流式预缓冲：%.1fs（%d 字节），最长等 %.1fs",
+            sec, self._prebuffer_bytes, self._prebuffer_max_wait_s,
+        )
+
     def is_playing(self) -> bool:
         with self._lock:
             if self._sink is None:
@@ -279,6 +313,8 @@ class StreamingPcmPlayer(QObject):
                 self._finished = False
                 # LIP-1：新一句从 0 起算播放时钟（否则口型会继承上一句的进度）
                 self._device.consumed_bytes = 0
+                # 预缓冲：记录起等时刻（供超时保护判断）
+                self._playback_wait_from = time.monotonic()
                 # 冲刷 prepare 之前 feed 进来的数据
                 while self._pending:
                     self._device.append(self._pending.popleft())
@@ -375,9 +411,11 @@ class StreamingPcmPlayer(QObject):
             try:
                 pending = dev.pending()
                 if self._sink is None:
-                    # 首块数据到了 → 打开声卡
+                    # 首块数据到了 → 判断是否攒够预缓冲再开声卡
                     if pending > 0:
-                        self._open_sink()
+                        if self._should_start_playback(dev, pending):
+                            self._open_sink()
+                        # 不够就继续等（下个泵周期再看）
                     elif dev.is_eof():
                         # 一直没有数据就结束（空合成）
                         self._cleanup()
@@ -396,6 +434,30 @@ class StreamingPcmPlayer(QObject):
                         logger.debug("streaming_pcm: on_end 回调失败", exc_info=True)
             except Exception:
                 logger.debug("streaming_pcm: 泵循环异常", exc_info=True)
+
+    def _should_start_playback(self, dev, pending_bytes: int) -> bool:
+        """是否该开声卡了（预缓冲判断）。
+
+        不等的情况：
+        - 预缓冲已关闭（_prebuffer_bytes <= 0）
+        - 合成已结束（eof）——再等也不会有新数据，短句应该直接播
+        - 已等超时（_prebuffer_max_wait_s）——防合成极慢时永远不出声
+        """
+        need = getattr(self, "_prebuffer_bytes", 0)
+        if need <= 0:
+            return True
+        if dev.is_eof():
+            return True
+        if pending_bytes >= need:
+            return True
+        waited = time.monotonic() - getattr(self, "_playback_wait_from", 0.0)
+        if waited >= getattr(self, "_prebuffer_max_wait_s", 8.0):
+            logger.debug(
+                "预缓冲超时（等了 %.1fs，仅 %d/%d 字节），先开播",
+                waited, pending_bytes, need,
+            )
+            return True
+        return False
 
     def _cleanup(self) -> None:
         self._active = False

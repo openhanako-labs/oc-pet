@@ -63,7 +63,14 @@
       "miku": "ophelia"
     },
     "edge_voice": "zh-CN-XiaoxiaoNeural",
-    "voice_emotion_map": {}
+    "voice_emotion_map": {},
+    "stream": {
+      "chunk_frames": 25,
+      "first_chunk_frames": 6,
+      "left_context": 8,
+      "prebuffer_seconds": 1.5,
+      "prebuffer_max_wait_seconds": 8.0
+    }
   },
   "sfx": {
     "enabled": true,

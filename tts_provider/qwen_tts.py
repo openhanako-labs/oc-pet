@@ -726,10 +726,16 @@ class QwenTtsProvider(TTSProvider):
         self,
         text: str,
         voice: str = "",
-        chunk_frames: int = 25,
-        first_chunk_frames: int = 8,
+        chunk_frames: int = 0,
+        first_chunk_frames: int = 0,
     ):
         """流式合成入口：内部解析 voice → ref_audio，逐块 yield PCM 字节。
+
+        2026-09-14：参数默认值改为从 config 读（0 = 用配置/内置默认）。
+        实测本机（3060 Laptop 6GB）合成速率仅 **0.36x 实时**，
+        低于播放所需的 1.0x——缓冲必然被抽干，用户听到"两个字一卡"。
+        调小 chunk 不能提高吞吐，但能减小**卡顿的颗粒度**
+        （小块 = 短促断续，大块 = 明显中断）。
 
         Yields:
             bytes: PCM Int16 LE 单声道
@@ -740,13 +746,54 @@ class QwenTtsProvider(TTSProvider):
         ref_audio, ref_text = self._resolve_ref(voice)
         if not ref_audio:
             raise RuntimeError(f"音色 {voice!r} 无参考音频，无法流式合成")
+        kw = self._stream_params()
         yield from self.synth_stream(
             text,
             ref_audio=ref_audio,
             ref_text=ref_text,
-            chunk_frames=chunk_frames,
-            first_chunk_frames=first_chunk_frames,
+            chunk_frames=int(chunk_frames) if chunk_frames else kw["chunk_frames"],
+            first_chunk_frames=int(first_chunk_frames) if first_chunk_frames else kw["first_chunk_frames"],
+            left_context=kw["left_context"],
         )
+
+    @staticmethod
+    def _stream_params() -> dict:
+        """从 config 读流式参数（`tts.stream` 块），缺省用内置默认。
+
+        配置示例（config.json）：
+            "tts": {
+              "stream": {
+                "chunk_frames": 12,        # 每块帧数（12 帧 ≈ 1s 音频）
+                "first_chunk_frames": 6,   # 首块（更小 = 更早出声）
+                "left_context": 8          # 解码上下文（影响解码量）
+              }
+            }
+
+        注：`left_context` 直接决定每次解码的额外开销——
+        原值 25 配 chunk_frames=25 等于**解码量翻倍**（2.00x）；
+        降到 8 后为 1.32x，省约 1/3 解码。
+
+        ⚠️ **chunk_frames 不宜调小**：left_context 固定时，chunk 越小
+        解码开销占比越高（chunk=12/ctx=8 → 1.67x；chunk=6/ctx=8 → 2.33x），
+        反而更慢。要减小卡顿颗粒度应优先靠预缓冲，而不是切碎 chunk。
+        """
+        out = {"chunk_frames": 25, "first_chunk_frames": 8, "left_context": 8}
+        try:
+            from config import load_config
+            st = ((load_config().get("tts", {}) or {}).get("stream", {}) or {})
+            for k in ("chunk_frames", "first_chunk_frames", "left_context"):
+                v = st.get(k)
+                if v is None:
+                    continue
+                try:
+                    iv = int(v)
+                except (TypeError, ValueError):
+                    continue
+                if iv > 0:
+                    out[k] = iv
+        except Exception as e:
+            logger.debug("读 tts.stream 配置失败，用默认: %s", e)
+        return out
 
 
 def _float_to_pcm16(arr) -> bytes:

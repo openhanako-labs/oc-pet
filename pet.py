@@ -329,6 +329,12 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._perception.screen.on_emotion = self._on_screen_emotion
         self._perception.screen.on_screen_proactive = self._on_screen_proactive
         self._perception.screen.on_update = self._on_screen_update
+        # 2026-09-14 对话避让：屏幕 LLM 增强与用户回复抢同一条 API
+        # （实测 Vision API timeout 与回复同时段），对话进行中让路。
+        try:
+            self._perception.screen.busy_check = self._is_conversation_busy
+        except Exception as e:
+            logger.debug("屏幕感知避让钩子注入失败（非致命）: %s", e)
 
         # ── 屏幕感知开关（从配置读取）──
         screen_cfg = self.config.get("screen", {})
@@ -562,6 +568,17 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         # ── 流式 PCM 播放器（Qwen3-TTS local 边合成边播）──
         self._stream_player = StreamingPcmPlayer(sample_rate=24000)
         self._stream_player.set_volume(tts_cfg.get("volume", 0.8))
+        # 2026-09-14 预缓冲：实测合成速率仅 0.36x 实时（低于播放所需 1.0x），
+        # 首块一到就开声卡会立即抽干缓冲 → 用户听到"两个字一卡"。
+        # 默认 1.5s（用首字延迟换流畅）；配 0 可关闭。
+        _stream_cfg = tts_cfg.get("stream", {}) or {}
+        try:
+            self._stream_player.set_prebuffer(
+                _stream_cfg.get("prebuffer_seconds", 1.5),
+                _stream_cfg.get("prebuffer_max_wait_seconds", 8.0),
+            )
+        except Exception as e:
+            logger.warning("预缓冲配置失败（用默认）: %s", e)
         if not tts_cfg.get("enabled", True):
             self._stream_player.disable()
 
@@ -995,14 +1012,55 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
         ``schedule_reflect`` 把 LLM 工作放后台线程，结果经 Qt 信号回主线程，
         不阻塞主线程（0x8001010D 约束）。
+
+        2026-09-14 避让：**对话进行中不发起反思**。
+        实测反思一次吃 29s / 12623 token（日志：`source=memory_reflect`），
+        与用户回复抢同一条 API——用户感知为"回复变慢"。
+        反思是 24h 周期任务，晚一分钟无所谓。
         """
         engine = getattr(self, "_reflection_engine", None)
         if engine is None:
             return
+        # 用 getattr 兜底：调用方可能未继承完整 mixin（如测试桩），
+        # 拿不到避让判据时按“不忙”处理（宁可多跑一次反思，也不要崩）。
+        busy_fn = getattr(self, "_is_conversation_busy", None)
+        if callable(busy_fn):
+            try:
+                if busy_fn():
+                    logger.debug("反思避让：对话进行中，跳过本轮")
+                    return
+            except Exception:
+                logger.debug("对话忙判断失败，按不忙处理", exc_info=True)
         try:
             engine.schedule_reflect()
         except Exception as exc:
             logger.debug("P1 反思调度失败（非致命）: %s", exc)
+
+    def _is_conversation_busy(self) -> bool:
+        """对话是否正在进行（供后台 LLM 任务避让）。
+
+        判据（任一为真即算忙）：
+        - 正在等 Agent 回复（`_pending_chat`）
+        - 正在流式/普通播 TTS
+
+        后台任务（反思/屏幕感知）与用户回复抢同一条 API 是实测的延迟来源，
+        这里给它们一个统一的"让路"信号。
+        """
+        if getattr(self, "_pending_chat", False):
+            return True
+        try:
+            sp = getattr(self, "_stream_player", None)
+            if sp is not None and sp.is_playing():
+                return True
+        except Exception:
+            logger.debug("判断流式播放状态失败", exc_info=True)
+        try:
+            tp = getattr(self, "_tts_player", None)
+            if tp is not None and tp.is_playing():
+                return True
+        except Exception:
+            logger.debug("判断普通 TTS 状态失败", exc_info=True)
+        return False
 
     def _init_p1_embedding_check(self):
         """A 线 P1-1：确认 HybridMemoryRecall 默认 embedding provider 已接。
