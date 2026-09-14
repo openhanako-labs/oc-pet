@@ -69,6 +69,11 @@ class Live2DRenderer(AvatarRenderer):
     # 卡手势防御：非 idle motion 播满此秒数强制回 idle（模型 motion 全 Loop=true，
     # waving/touch 等手势 mp3.json 都是 2.667s 循环，播 1.5 圈后回位）
     GESTURE_TIMEOUT = 5.0  # 2026-09-07: 从 3.0 提到 5.0，避免 LLM 生成期间表情被重置
+    # W3（2026-09-14）：显式参数意图（LLM [action:{params:...}]）的保留时长。
+    # 旧实现下 _param_intent 永不过期 → 写过的嘴型/眉眼会一直挂着。
+    # 用户要求“情绪结束就收”；这类参数不由情绪驱动，故给一个保留窗口，
+    # 到期后平滑回归情绪基准值。设 0 或负数 = 关闭超时（保留旧行为）。
+    PARAM_INTENT_TTL: float = 6.0
     # idle 重播最小间隔（秒）：IdleLoopProcessor 每帧都会试，本值防止异常快速重播。
     # 正常 idle motion 长度 2-4s 远大于此值，不受影响。实测修复前 idle 一秒播 3 次。
     IDLE_RESTART_MIN_INTERVAL: float = 0.5
@@ -287,10 +292,37 @@ class Live2DRenderer(AvatarRenderer):
         "mouth_form": "ParamMouthForm",
         "mouth_open": "ParamMouthOpenY",
         "blush": "ParamCheek",
+        # ── W4 扩容（2026-09-14）：语义名 → 模型实际参数 id ──
+        # 全部经 miku.cdi3.json（141 参数）逐个核对存在。
+        # 注意：这些是**模型自定义命名**，非 Cubism 标准，换模型需重核。
+        "mouth_waizui": "Paramwaizui",      # 歪嘴（撇嘴/不屑）
+        "mouth_guzui": "Paramguzui",        # 鼓嘴（生气/卖萌）
+        "mouth_guzui2": "Paramguzui2",      # 鼓嘴2
+        "cheek_gulian": "Paramgulian",      # 鼓脸
+        "mouth_tushe": "Paramtushe",        # 吐舌（调皮）
+        "mouth_bite_lip": "mouthRollLower",  # 咬唇（害羞/紧张）
+        "mouth_pucker": "mouthRollLower2",  # 撅嘴（撒娇）
+        "mouth_shrug": "ParamMouthShrug",   # 撇嘴变体
+        "eye_squint_l": "EyeL_Squint",      # 眯眼 L
+        "eye_squint_r": "EyeR_Squint",      # 眯眼 R
+        "eye_deform": "Param7",             # 眼变形（眼型）
+        "brow_lx": "ParamBrowLX",           # 左眉左右
+        "brow_rx": "ParamBrowRX",           # 右眉左右
+        "brow_ly": "ParamBrowLY",           # 左眉上下
+        "brow_ry": "ParamBrowRY",           # 右眉上下
+        "hair_front": "ParamHairFront",     # 前发摇动
+        "hair_side": "ParamHairSide",       # 侧发摇动
+        "hair_back": "ParamHairBack",       # 后发摇动
     }
     
     # 参数白名单（参考 LLM_Live2D 的 genericParameterCatalog，2026-09-06）
-    # 只允许写入白名单里的参数，防止 LLM 或动画预设写入无效参数
+    # 只允许写入白名单里的参数，防止 LLM 或动画预设写入无效参数。
+    #
+    # ⚠️ v2（2026-09-14 W4）：白名单是**跨模型的允许集**（union），
+    #    不代表当前模型都有。实际写入前还会过一层“按模型实际参数表校验”
+    #    （_effective_whitelist）——单靠这个集合会在换模型时写出无效参数。
+    #    历史上这里同时列了标准名与变体名（如 ParamEyeOpen 与 ParamEyeLOpen），
+    #    正是为了兼容不同模型的命名差异；真正的有效性由模型校验那一层负责。
     _PARAM_WHITE_LIST: set[str] = {
         "ParamAngleX", "ParamAngleY", "ParamAngleZ",
         "ParamBodyAngleX", "ParamBodyAngleY", "ParamBodyAngleZ",
@@ -305,7 +337,48 @@ class Live2DRenderer(AvatarRenderer):
         "ParamEyeLOpen", "ParamEyeROpen",
         "ParamBrowLAngle", "ParamBrowRAngle",
         "ParamBrowLForm", "ParamBrowRForm",
+        # ── W4 扩容（2026-09-14）：表情丰富度前置 ──
+        # 全部经 miku.cdi3.json 逐个核对存在，见 _PARAM_NAME_MAP 注释。
+        "Paramwaizui", "Paramguzui", "Paramguzui2", "Paramgulian",
+        "Paramtushe", "mouthRollLower", "mouthRollLower2", "ParamMouthShrug",
+        "EyeL_Squint", "EyeR_Squint", "Param7",
+        "ParamBrowLX", "ParamBrowRX", "ParamBrowLY", "ParamBrowRY",
+        "ParamHairFront", "ParamHairSide", "ParamHairBack",
     }
+
+    def _effective_whitelist(self) -> set[str]:
+        """白名单 ∩ 模型实际参数（缓存）。
+
+        W4（2026-09-14）：白名单是跨模型允许集，其中必然包含当前模型没有的名字。
+        这里按模型实际参数表做一次校验，把无效名字滤掉——否则 LLM 写入
+        ParamEyeOpen 这类“白名单有、模型无”的参数会静默失效。
+
+        探测失败（拿不到参数表）时返回原白名单：宁可能写无效，也不要因为
+        探测问题把功能全禁了（与 param_writer 的失败闭合策略一致）。
+        """
+        cached = getattr(self, "_effective_wl_cache", None)
+        if cached is not None:
+            return cached
+        wl = self._PARAM_WHITE_LIST
+        model = getattr(self, "_model", None)
+        if model is None:
+            return wl
+        try:
+            count = model.GetParameterCount()
+            available = {str(model.GetParameter(i).id) for i in range(count)}
+        except (AttributeError, TypeError, RuntimeError):
+            logger.debug("白名单模型校验失败，回退原白名单", exc_info=True)
+            return wl
+        effective = wl & available
+        dropped = wl - available
+        if dropped:
+            logger.info(
+                "参数白名单按模型校验：%d 个存在，%d 个此模型没有（已过滤）",
+                len(effective), len(dropped),
+            )
+            logger.debug("被过滤的白名单参数: %s", ", ".join(sorted(dropped)))
+        self._effective_wl_cache = effective
+        return effective
 
     # 自动表情序列的加权随机权重（_tick_auto_motion 25% 分支用）。
     # 值越大越常出现；0 表示不参与自动播放。戏剧性/长时间表情给低权重，
@@ -379,6 +452,12 @@ class Live2DRenderer(AvatarRenderer):
         # 说话（TTS 口型）
         self._speaking: bool = False
         self._mouth_phase: float = 0.0
+        # 实时音频电平源（0~1 RMS）。默认不可用 → _update_mouth 回退正弦包络。
+        # 由 set_mouth_level_source 注入；异常一律当作"无电平"，不崩帧循环。
+        self._mouth_level_fn = lambda: None
+        # 口型包络（快起慢落）：音频块粒度约 40~170ms，直接跟会让嘴"跳"。
+        # 起得快要跟上辅音爆发，落得慢要避免字间出现生硬的闭合。
+        self._mouth_env: float = 0.0
 
         # 当前情绪
         self._emotion_target: str = "neutral"
@@ -443,6 +522,8 @@ class Live2DRenderer(AvatarRenderer):
         # 读取）。原只在 _set_intent_params 里赋值，而 submit_motion_request 会先
         # 直接 .update() → 同样 AttributeError。在此无条件初始化。
         self._param_intent: dict = {}
+        # W3：参数意图设置时刻（_expire_intent_params 据此判断是否过期）
+        self._param_intent_set_at: float = 0.0
         # [feel:] 设定的 VA 目标在此时刻前不被离散情绪覆盖（2026-09-10）。
         # 没有它的话：apply_action_intent 刚写完 _va_target，紧接着
         # pet.py:2873 的 _sync_renderer_master_emotion 就会用离散 emotion
@@ -692,6 +773,9 @@ class Live2DRenderer(AvatarRenderer):
             model.LoadModelJson(self._model_path)
 
             self._model = model
+            # W4（2026-09-14）：换模型后白名单缓存必须失效，
+            # 否则上一模型的参数集会串到新模型（新模型可能没有那些参数）。
+            self._effective_wl_cache = None
             # 模型体检：换模型自动检测参数覆盖，是「缺参数→表情/动作静默失效」
             # 的第一道防线（live2d_renderer 换模型有 52 处裸 except:pass，缺这步会盲人摸象）。
             try:
@@ -1403,14 +1487,43 @@ class Live2DRenderer(AvatarRenderer):
             self._note_frame_failure("GazeParams", e)
 
     def _update_mouth(self) -> None:
+        """说话口型：优先跟真实音频电平，无电平源时回退正弦包络。
+
+        v2（2026-09-14）：从"纯正弦开合"改为"跟音量"。
+        正弦版的问题：说"啊——"和说"嘶——"嘴动得一模一样，看着像比划不像说话。
+        现在若上游（StreamingPcmPlayer）提供了实时 RMS 电平，就按音量驱动嘴巴——
+        重音、停顿、快慢都能看出来。
+
+        电平源不可用（普通文件 TTS / 设备未就绪 / 未接线）时自动回退到原正弦，
+        行为与旧版一致，不会因为没接上就不动嘴。
+        """
         if not self._model:
             return
         P = self._live2d.StandardParams
         if self._speaking:
-            self._mouth_phase += 0.35
-            val = 0.5 + 0.5 * math.sin(self._mouth_phase * 3.0)
-            val = 0.15 + val * 0.6
+            level = self._read_mouth_level()
+            if level is not None:
+                # 快起慢落包络：起 0.55 / 落 0.18。
+                # 直接跟原始 RMS 会因音频块粒度（~40~170ms）出现"跳帧感"。
+                # 注：系数按帧计（与同函数正弦版 `_mouth_phase += 0.35` 同口径），
+                # 帧率偏离设计值时快慢会略变，但不影响"快起慢落"这个相对关系。
+                env = self._mouth_env
+                target = level
+                # 上升快、下降慢：视觉上像真人在说话
+                k = 0.55 if target > env else 0.18
+                env = env + (target - env) * k
+                self._mouth_env = env
+                # 电平驱动：RMS 天然偏小，做一次非线性提亮，让视觉幅度跟得上听觉。
+                # 保留小底噪（静音段嘴微开）避免"说话时嘴完全闭合"的僵硬感。
+                val = 0.08 + 0.92 * min(1.0, math.sqrt(max(0.0, env)) * 1.6)
+            else:
+                # 回退：原正弦包络（无电平源时行为不变）
+                self._mouth_phase += 0.35
+                val = 0.5 + 0.5 * math.sin(self._mouth_phase * 3.0)
+                val = 0.15 + val * 0.6
         else:
+            # 停止说话：包络归零，下次开口从闭合起算，不会"继承"上次的幅度
+            self._mouth_env = 0.0
             val = 0.0
         try:
             self._model.SetParameterValue(P.ParamMouthOpenY, val, 1.0)
@@ -1539,6 +1652,8 @@ class Live2DRenderer(AvatarRenderer):
 
             # 结构化动作意图（[action:{...}] 注入的直接参数目标）：复用同一帧率无关
             # 指数平滑，平滑过渡到目标值，避免瞬间跳变。每条独立 try/except 兜底。
+            # W3：先做过期释放，避免 LLM 写过的参数永久卡住。
+            self._expire_intent_params()
             intent_targets = getattr(self, "_param_intent", None) or {}
             if intent_targets:
                 _pcur = getattr(self, "_param_cur", {}) or {}
@@ -1601,8 +1716,11 @@ class Live2DRenderer(AvatarRenderer):
                     # 2026-09-06: 先查映射表，再查 StandardParams 属性，最后用原名兜底
                     _mapped = self._PARAM_NAME_MAP.get(_name, _name)
                     _pid = getattr(P, _mapped, _mapped)
-                    # 白名单检查：只允许写入白名单里的参数（参考 LLM_Live2D 的 genericParameterCatalog）
+                    # 白名单检查：先过跨模型允许集，再过“按模型实际参数”校验
+                    # （W4 2026-09-14：单靠静态集合会在换模型时写出无效参数）
                     if _pid not in self._PARAM_WHITE_LIST:
+                        continue
+                    if _pid not in self._effective_whitelist():
                         continue
                     self._model.SetParameterValue(_pid, float(_val), 1.0)
                 except Exception as e:
@@ -2779,6 +2897,11 @@ class Live2DRenderer(AvatarRenderer):
 
         只保留字符串键 + 数值值的合法项；其余忽略。新意图会重置目标集合
         （未提及的参数即视为“释放”，不再作为目标写入）。
+
+        W3（2026-09-14）：同时记录设置时刻，供 `_expire_intent_params` 做超时释放。
+        旧实现下 `_param_intent` **永不过期**——LLM 一次 `[action:{params:...}]`
+        写入的嘴型/眉眼会一直挂着，直到下一次 intent 到来（可能永不）。
+        这是用户反复反馈的“表情卡住”的另一条路径（与贴图表情超时同源）。
         """
         targets: dict[str, float] = {}
         for k, v in params.items():
@@ -2790,7 +2913,29 @@ class Live2DRenderer(AvatarRenderer):
                 continue
             targets[k] = fv * intensity
         self._param_intent = targets
+        self._param_intent_set_at = time.monotonic()
         # 不清空 _param_cur：保留当前平滑值作为起点，继续平滑过渡。
+
+    def _expire_intent_params(self) -> None:
+        """动作意图参数超时释放（W3）。
+
+        用户要求“情绪结束就收”，而非固定 N 秒。这里处理的是**显式参数意图**
+        （LLM `[action:{params:...}]`）——它不由情绪驱动，无法“随情绪收回”，
+        所以给它一个可配的保留时长（默认 6s）：到期后清空目标集，
+        `_update_procedural_emotion` 会把参数平滑回情绪基准值（而非硬切）。
+
+        到期释放而非永久保持，是旧实现下“嘴型/眉眼永久卡住”的根因修复。
+        新 intent 到来时会重置计时（见 _set_intent_params）。
+        """
+        if not self._param_intent:
+            return
+        now = time.monotonic()
+        ttl = getattr(self, "_param_intent_ttl", self.PARAM_INTENT_TTL)
+        if ttl <= 0:
+            return  # 配 0/负数 = 关闭超时（保持旧行为，便于对照排查）
+        if now - getattr(self, "_param_intent_set_at", 0.0) > ttl:
+            self._param_intent = {}
+            logger.debug("动作意图参数超时释放（%.1fs）", ttl)
 
     def _trigger_gesture(self, gesture, intensity: float) -> bool:
         """gesture 名 → 触发对应 motion/expression。
@@ -2885,6 +3030,34 @@ class Live2DRenderer(AvatarRenderer):
 
     def set_speaking(self, speaking: bool) -> None:
         self._speaking = bool(speaking)
+
+    def set_mouth_level_source(self, fn) -> None:
+        """接入实时音频电平源（返回 0.0~1.0 的 RMS；None/异常表示不可用）。
+
+        由 PetWindow 在播放器就绪后调用，把 StreamingPcmPlayer.current_level
+        接进来。未接入时 _update_mouth 自动回退正弦包络。
+        """
+        self._mouth_level_fn = fn if callable(fn) else (lambda: None)
+
+    def _read_mouth_level(self):
+        """读一次电平，失败一律返回 None（走正弦回退）。
+
+        渲染帧循环不能被电平源拖崩：源可能跨线程、设备可能已释放。
+        """
+        fn = getattr(self, "_mouth_level_fn", None)
+        if fn is None:
+            return None
+        try:
+            level = fn()
+        except Exception:
+            logger.debug("Live2DRenderer: 读口型电平失败（回退正弦）", exc_info=True)
+            return None
+        if level is None:
+            return None
+        try:
+            return max(0.0, min(1.0, float(level)))
+        except (TypeError, ValueError):
+            return None
 
     # ── 变换 ──
 

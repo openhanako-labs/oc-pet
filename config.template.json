@@ -216,6 +216,12 @@
     "port": 8988,
     "auth_token": ""
   },
+  "mcp_server": {
+    "enabled": false,
+    "port": 8979,
+    "auth_token": "",
+    "allow_actions": true
+  },
   "plugin_tools": {
     "enabled": true
   }

@@ -146,6 +146,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._init_interaction()
         self._init_engine()
         self._init_voice_audio()
+        self._init_mcp_server()
         self._init_visual_startup()
         # T05：N.E.K.O. 移植四线成果接入主循环（focus/chat_panel/memory_panel/proactive generator）
         self._init_neko_t05()
@@ -567,6 +568,27 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         except Exception as e:
             logger.warning("AUDIO-07: Failed to connect bridge: %s", e)
 
+
+    def _wire_mouth_level_source(self) -> None:
+        """把流式播放器的实时音频电平接到渲染器口型（Live2D 专用）。
+
+        2026-09-14：口型从"纯正弦开合"升级为"跟真实音量"。
+        电平取 StreamingPcmPlayer.current_level()（声卡刚拉走那块 PCM 的 RMS），
+        因此与听到的声音同步。
+
+        接线失败/渲染器不支持时静默跳过——_update_mouth 会自动回退正弦包络，
+        与旧版行为一致，不会因为接线问题让嘴不动。
+        """
+        r = getattr(self, "_renderer", None)
+        sp = getattr(self, "_stream_player", None)
+        if r is None or sp is None or not hasattr(r, "set_mouth_level_source"):
+            logger.debug("口型电平接线跳过（渲染器或播放器不支持）")
+            return
+        try:
+            r.set_mouth_level_source(sp.current_level)
+            logger.info("口型电平已接线（振幅驱动）")
+        except Exception as e:
+            logger.warning("口型电平接线失败（回退正弦）: %s", e)
 
     def _init_visual_startup(self):
         """渲染器/物理/UI/托盘/启动收尾（与 __init__ 原顺序一致）。"""
@@ -1401,6 +1423,104 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         except Exception as e:
             logger.warning("window.trigger 调度失败: %s", e)
 
+    def _init_mcp_server(self):
+        """W1a（2026-09-14）：启动桌宠 MCP 提供方，让 Hana 看见桌宠。
+
+        背景：桌宠一直只做 MCP **消费方**（skyrim_bridge 连 SkyrimNet），
+        Hana 侧对桌宠一无所知。这里反过来把桌宠自己的状态/能力/表现暴露成 MCP 工具。
+
+        默认关（config mcp_server.enabled=false），零行为、不占端口。
+        线程安全：action_sink 只做 EventBus.emit，实际动作由主线程订阅者执行。
+        """
+        try:
+            from core.mcp_server import build_from_config
+            srv = build_from_config(
+                self.config,
+                state_provider=self._status_snapshot,
+                capabilities_provider=self._mcp_capabilities,
+                action_sink=self._mcp_action_sink,
+            )
+            if srv is None:
+                self._mcp_server = None
+                return
+            # 主线程订阅：MCP 线程 emit → QTimer 转主线程执行
+            from core.event_bus import EventBus
+
+            def _on_mcp_action(action, params):
+                try:
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(
+                        0, lambda: self._apply_mcp_action(action, params)
+                    )
+                except Exception as e:
+                    logger.warning("MCP 动作调度失败: %s", e)
+
+            self._mcp_action_handler = _on_mcp_action
+            EventBus.on("mcp_action", _on_mcp_action)
+            srv.start()
+            self._mcp_server = srv
+        except Exception as e:
+            logger.warning("MCP server 启动失败（非致命）: %s", e)
+            self._mcp_server = None
+
+    def _mcp_capabilities(self) -> list:
+        """MCP 用能力清单（只列桌宠自己的内部能力，不含 Hana 插件工具）。"""
+        try:
+            from core.capability_registry import CAPABILITIES
+            return [
+                {"name": c.name, "description": c.description or ""}
+                for c in CAPABILITIES
+            ]
+        except Exception as e:
+            logger.warning("MCP 能力清单读取失败: %s", e)
+            return []
+
+    def _mcp_action_sink(self, action: str, params: dict) -> str:
+        """MCP 写操作入口（MCP 线程调用）。只发事件，立即返回。"""
+        from core.event_bus import EventBus
+        EventBus.emit("mcp_action", action=action, params=dict(params or {}))
+        return f"已派发: {action}"
+
+    def _apply_mcp_action(self, action: str, params: dict) -> None:
+        """主线程应用 MCP 动作（白名单已在 mcp_server 侧校验）。"""
+        try:
+            if action == "set_emotion":
+                emo = str(params.get("emotion") or "neutral")
+                try:
+                    inten = float(params.get("intensity", 1.0))
+                except (TypeError, ValueError):
+                    inten = 1.0
+                if hasattr(self, "_set_surface_emotion"):
+                    self._set_surface_emotion(emo, duration_ms=2500)
+                r = getattr(self, "_renderer", None)
+                if r is not None and hasattr(r, "set_emotion"):
+                    r.set_emotion(emo, inten)
+            elif action == "play_anim":
+                anim = str(params.get("anim") or "idle")
+                if hasattr(self, "_set_anim_seq"):
+                    self._set_anim_seq(anim)
+            elif action == "expression":
+                name = str(params.get("name") or "")
+                r = getattr(self, "_renderer", None)
+                if name and r is not None and hasattr(r, "_apply_expression"):
+                    r._apply_expression(name)
+            elif action == "say":
+                text = str(params.get("text") or "")
+                if text:
+                    self._show_bubble(text)
+            elif action == "celebrate":
+                if hasattr(self, "_celebrate"):
+                    self._celebrate()
+            elif action == "idle":
+                if hasattr(self, "_set_anim_seq"):
+                    self._set_anim_seq("idle")
+                r = getattr(self, "_renderer", None)
+                if r is not None and hasattr(r, "set_emotion_expression_only"):
+                    r.set_emotion_expression_only("neutral")
+            logger.info("MCP 动作已应用: %s %s", action, params)
+        except Exception as e:
+            logger.warning("MCP 动作应用失败 (%s): %s", action, e)
+
     def _status_snapshot(self) -> dict:
         """状态快照（F GET /pet/state 只读输出）。"""
         state = "idle"
@@ -2184,6 +2304,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
         # 角色渲染器(帧精灵 / Live2D / 未来 VRM) — 按角色目录格式自动选择
         self._renderer = create_renderer(self._current_char, self, override_format=self.config.get("render_format"))
+        # 口型电平接线：把流式播放器的实时 RMS 接到渲染器。
+        # 必须在 renderer 创建后（_init_voice_audio 早于 _setup_ui，那时还没 renderer）。
+        self._wire_mouth_level_source()
         # 兼容别名(供 pet.py 其他部分使用)
         self.char_label = self._renderer.label
         self.char_label.installEventFilter(self)

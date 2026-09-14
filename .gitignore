@@ -88,7 +88,9 @@ docs/SPIKE-BORROW-SHELL.md
 docs/upgrade-a-g-design.md
 
 # 内部计划（不提交）：工作计划、改动方案、评审记录
-docs/voice-expression-plan.md
+# 2026-09-14：voice-expression-plan.md 已删除，其调研结论转存至 voice-interop-plan.md（同属内部）
+docs/voice-interop-plan.md
+docs/STATUS.md
 docs/voice-skyrimnet-integration-plan.md
 docs/architecture-flowchart.png
 

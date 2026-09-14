@@ -25,11 +25,41 @@ PCM 数据来自 TTS 工作线程。因此：
 """
 from __future__ import annotations
 
+import array
 import logging
+import math
 import threading
 from collections import deque
 
 logger = logging.getLogger(__name__)
+
+
+def _rms_int16(data: bytes) -> float:
+    """计算 Int16 LE 单声道 PCM 的归一化 RMS（0.0~1.0）。
+
+    用于口型驱动：返回值就是"此刻声音有多大"。
+    空数据/非偶数长度返回 0.0（失败闭合，不驱动口型）。
+    numpy 可用时走向量化，否则纯 Python 回退（音频线程，必须够快）。
+    """
+    if not data:
+        return 0.0
+    usable = len(data) - (len(data) % 2)
+    if usable <= 0:
+        return 0.0
+    try:
+        import numpy as np
+        samples = np.frombuffer(data[:usable], dtype="<i2")
+        if samples.size == 0:
+            return 0.0
+        mean_sq = float(np.mean(samples.astype("f4") ** 2))
+    except Exception:
+        arr = array.array("h")
+        arr.frombytes(data[:usable])
+        if not arr:
+            return 0.0
+        mean_sq = sum(float(v) * float(v) for v in arr) / len(arr)
+    rms = math.sqrt(mean_sq) / 32768.0
+    return min(1.0, max(0.0, rms))
 
 try:
     from PySide6.QtCore import QIODevice, QTimer, QObject
@@ -51,6 +81,9 @@ if _QT_OK:
             self._size = 0
             self._lock = threading.Lock()
             self._eof = False
+            # 最近一次被声卡拉走的音频块的归一化 RMS（0~1）。
+            # 由音频线程写、渲染线程读；Python 浮点赋值是原子的，无需额外锁。
+            self.level: float = 0.0
 
         def append(self, data: bytes) -> None:
             if not data:
@@ -75,6 +108,12 @@ if _QT_OK:
             with self._lock:
                 self._eof = False
 
+        def current_level(self) -> float:
+            """当前音频电平（0~1）。无数据/已播完时为 0.0。"""
+            if self.is_eof() and self.pending() == 0:
+                return 0.0
+            return self.level
+
         def isSequential(self) -> bool:  # noqa: N802 (Qt 命名)
             return True
 
@@ -98,7 +137,11 @@ if _QT_OK:
                         out += chunk[:need]
                         self._chunks[0] = chunk[need:]
                         self._size -= need
-                return bytes(out)
+                result = bytes(out)
+            # 实时电平：在"真正被声卡拉走"的这一层采样，是口型的唯一真相点。
+            # 注意必须在锁外算（RMS 可能耗时，不能阻塞 append/feed）。
+            self.level = _rms_int16(result)
+            return result
 
         def writeData(self, data) -> int:  # noqa: N802
             return 0
@@ -150,6 +193,20 @@ class StreamingPcmPlayer(QObject):
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
+
+    def current_level(self) -> float:
+        """当前正在播放的音频电平（0.0~1.0），供口型驱动。
+
+        取的是声卡刚刚拉走那块数据的 RMS，所以与听到的声音同步。
+        设备未就绪/已停时为 0.0（失败闭合：嘴闭上，不会僵在半开）。
+        """
+        dev = self._device
+        if dev is None or not self._active:
+            return 0.0
+        try:
+            return dev.current_level()
+        except Exception:
+            return 0.0
 
     def disable(self) -> None:
         self._enabled = False
