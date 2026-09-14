@@ -1831,12 +1831,32 @@ class ConversationEngine:
         try:
             tts_text = self._adapter.parse_emotion(reply)[0]
         except (AttributeError, Exception):
-            import re
-            tts_text = re.sub(r"\s*\[\s*emotion\s*[:=]\s*\w+\s*\]\s*", " ", reply, flags=re.IGNORECASE)
-            tts_text = re.sub(r"\s*\[expression:[^\]]*\]\s*", " ", tts_text, flags=re.IGNORECASE)
-            tts_text = re.sub(r"\s*\[duration:[^\]]*\]\s*", " ", tts_text, flags=re.IGNORECASE)
-            tts_text = tts_text.strip()
+            tts_text = reply
+        # 2026-09-14：补全标签剥离。
+        # `parse_emotion` 只剥 [emotion:xxx]，但回复里还会带
+        # [expression:] / [action:] / [do:] / [duration:] / [feel:]。
+        # 实测：'… [action:{...}]' 会因带标签而绕过"占位符"检查，
+        # 最终被合成并播出一个无声的省略号。
+        import re as _re
+        for _pat in (
+            r"\s*\[\s*emotion\s*[:=]\s*\w+\s*\]",
+            r"\s*\[expression:[^\]]*\]",
+            r"\s*\[action:[^\]]*\]",
+            r"\s*\[do:[^\]]*\]",
+            r"\s*\[duration:[^\]]*\]",
+            r"\s*\[feel:[^\]]*\]",
+        ):
+            tts_text = _re.sub(_pat, " ", tts_text, flags=_re.IGNORECASE)
+        tts_text = tts_text.strip()
         if not tts_text:
+            return False
+
+        # 2026-09-14：占位符防护（与 speak() 一致）。
+        # 上游空回复会被填成 "…"（见 _do_engine_reply_inner），
+        # 若直接拿去合成，会浪费一次 TTS 并播出一个无声的省略号
+        # （用户感知为"不播放 TTS 了"）。
+        if tts_text.strip() in ("…", "...", "。", ".", "，", ","):
+            logger.debug("流式合成跳过：文本为占位符 %r", tts_text.strip())
             return False
 
         # 先告诉主线程准备播放器（拿声卡前不阻塞）

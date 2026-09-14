@@ -13,11 +13,18 @@ class AudioMixin:
 
     # ── AUDIO-07 回调：TTS 开始 → PET-02 口型 ──
     def on_tts_start(self, emotion: str = "neutral") -> None:
-        """AUDIO-07 回调：TTS 开始 → PET-02 口型"""
+        """AUDIO-07 回调：TTS 开始 → PET-02 口型。
+
+        2026-09-14：同时负责显示**延后的气泡**——
+        只在 TTS 真正开始播放这一刻显示一次，避免“文本回复完一次 +
+        TTS 合成完又一次”的重复气泡。
+        """
         r = getattr(self, '_renderer', None)
         # Live2D 等实时渲染器：直接驱动口型参数
         if r is not None and hasattr(r, 'set_speaking'):
             r.set_speaking(True)
+        # 显示延后的气泡（只在开播时一次）
+        self._flush_pending_bubble(emotion)
         # _frames 可能尚未初始化（渲染器未加载/加载失败时），None 按无口型帧处理
         frames = getattr(r, '_frames', None) or {}
         if emotion in ('happy', 'angry', 'surprised'):
@@ -31,6 +38,23 @@ class AudioMixin:
                 logger.debug("AUDIO-07 TTS mouth: %s (emotion=%s)", seq, emotion)
                 return
         logger.debug("AUDIO-07 TTS mouth: no speak frames, skip")
+
+    def _flush_pending_bubble(self, emotion: str = "") -> None:
+        """显示延后的气泡（TTS 开播时调）。
+
+        只对 `_do_engine_reply_inner` 暂存的文本生效；
+        无暂存内容时什么也不做（不干扰其他气泡路径）。
+        """
+        text = getattr(self, "_pending_bubble_text", "") or ""
+        if not text:
+            return
+        emo = emotion or getattr(self, "_pending_bubble_emotion", "neutral") or "neutral"
+        self._pending_bubble_text = ""
+        try:
+            self._show_bubble(text, emotion=emo, priority=1)
+            logger.debug("TTS 开播，显示气泡: %r", text[:30])
+        except Exception:
+            logger.debug("显示延后气泡失败（非致命）", exc_info=True)
 
     def on_tts_end(self) -> None:
         """AUDIO-07 回调：TTS 结束 → 恢复 idle"""

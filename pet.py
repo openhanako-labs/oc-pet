@@ -570,12 +570,15 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._stream_player.set_volume(tts_cfg.get("volume", 0.8))
         # 2026-09-14 预缓冲：实测合成速率仅 0.36x 实时（低于播放所需 1.0x），
         # 首块一到就开声卡会立即抽干缓冲 → 用户听到"两个字一卡"。
-        # 默认 1.5s（用首字延迟换流畅）；配 0 可关闭。
+        #
+        # 默认走**智能预缓冲**（由 _setup_lip_timeline 传入预期时长，
+        # 算"撑到合成结束所需的量"——数学上永不断粮）。
+        # 固定档（prebuffer_seconds）仅作为无文本信息时的降级手段，默认 0。
         _stream_cfg = tts_cfg.get("stream", {}) or {}
         try:
             self._stream_player.set_prebuffer(
-                _stream_cfg.get("prebuffer_seconds", 1.5),
-                _stream_cfg.get("prebuffer_max_wait_seconds", 8.0),
+                _stream_cfg.get("prebuffer_seconds", 0),
+                _stream_cfg.get("prebuffer_max_wait_seconds", 12.0),
             )
         except Exception as e:
             logger.warning("预缓冲配置失败（用默认）: %s", e)
@@ -602,12 +605,14 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
     def _wire_mouth_level_source(self) -> None:
         """把流式播放器的实时音频电平接到渲染器口型（Live2D 专用）。
 
-        2026-09-14：口型从"纯正弦开合"升级为"跟真实音量"。
-        电平取 StreamingPcmPlayer.current_level()（声卡刚拉走那块 PCM 的 RMS），
-        因此与听到的声音同步。
+        2026-09-14：电平从"纯正弦开合"升级为"跟真实音量"。
 
-        接线失败/渲染器不支持时静默跳过——_update_mouth 会自动回退正弦包络，
-        与旧版行为一致，不会因为接线问题让嘴不动。
+        ⚠️ **必须用 _mouth_level_probe 而非 sp.current_level 直连**：
+        `current_level()` 在未播放时返回 **0.0**（而非 None），
+        而 `_update_mouth` 把 0.0 当作"真实静音"。
+        后果：Edge / CosyVoice 等**文件式 TTS** 不走流式播放器，
+        电平恒为 0.0 → 嘴全程锁在 0.08（几乎闭合，看着像不说话）。
+        probe 在未播放时返回 None，让渲染器回退到正弦包络。
         """
         r = getattr(self, "_renderer", None)
         sp = getattr(self, "_stream_player", None)
@@ -615,10 +620,40 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             logger.debug("口型电平接线跳过（渲染器或播放器不支持）")
             return
         try:
-            r.set_mouth_level_source(sp.current_level)
-            logger.info("口型电平已接线（振幅驱动）")
+            r.set_mouth_level_source(self._mouth_level_probe)
+            logger.info("口型电平已接线（振幅驱动，非流式时回退正弦）")
         except Exception as e:
             logger.warning("口型电平接线失败（回退正弦）: %s", e)
+
+    def _mouth_level_probe(self):
+        """口型电平探测（2026-09-14 完善）：
+
+        优先级：
+          1. 流式播放器在播 → 返回真实 RMS（Qwen 流式 TTS，最准）
+          2. 文件式播放器在播 → 返回位置包络（Edge/CosyVoice/MiMo/API，粗略但能动）
+          3. 都没在播 → None（渲染器闭嘴或正弦兑底）
+
+        为什么不能用 `is_playing()` 以外的判据：
+        - 流式 `current_level()` 未播放时返回 0.0，与"真实静音"无法区分
+        - 文件式 `current_level()` 未播放时返回 **None**（不是 0.0），语义正确
+        """
+        sp = getattr(self, "_stream_player", None)
+        if sp is not None:
+            try:
+                if sp.is_playing():
+                    return sp.current_level()
+            except Exception:
+                logger.debug("流式口型电平探测失败", exc_info=True)
+        # 回落：文件式 TTS（Edge/CosyVoice/MiMo/API）——位置包络，比纯正弦更贴合音频起止
+        fp = getattr(self, "_tts_player", None)
+        if fp is not None and hasattr(fp, "current_level"):
+            try:
+                lvl = fp.current_level()
+                if lvl is not None:
+                    return lvl
+            except Exception:
+                logger.debug("文件式口型电平探测失败", exc_info=True)
+        return None
 
     def _init_visual_startup(self):
         """渲染器/物理/UI/托盘/启动收尾（与 __init__ 原顺序一致）。"""
@@ -683,6 +718,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._pending_user_msg = ""  # 等待配对的用户消息
         self._pending_emotion = "neutral"  # 等待配对的 emotion
         self._pending_chat = False  # 是否正在等待 Agent 回复
+        # 2026-09-14：延后显示的气泡文本（等 TTS 开播时再显示，避免重复气泡）
+        self._pending_bubble_text = ""
+        self._pending_bubble_emotion = "neutral"
 
         # ── 空闲自言自语 ──
         self.idle_chatter_signal.connect(self._do_idle_chatter)
@@ -3148,6 +3186,20 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         """流式 TTS 回调（TTS 线程池调用）→ 信号转主线程。"""
         self.tts_stream_signal.emit(kind, payload, gen)
 
+    def _smart_prebuffer_enabled(self) -> bool:
+        """是否启用智能预缓冲（config `tts.stream.smart_prebuffer`）。
+
+        默认 False。R=0.36x 时需攒到 ~74% 才能不断粮，首字会晚 10 秒左右——
+        这是真实取舍，不替用户默认打开。
+        """
+        try:
+            return bool(
+                (self.config.get("tts", {}) or {})
+                .get("stream", {}).get("smart_prebuffer", False)
+            )
+        except Exception:
+            return False
+
     def _play_clock(self) -> float:
         """返回当前 TTS 已播放时长（秒）。供口型时间轴同步用。
 
@@ -3166,17 +3218,32 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         """LIP-1：从文本生成口型时间轴并接到渲染器。
 
         在 TTS begin 时调用——那时文本已完整（无需等音频）。
+        同时告知播放器**预期音频时长**，启用智能预缓冲。
         失败/文本为空/无 pypinyin → 清除时间轴，回退振幅驱动。
         """
         r = getattr(self, "_renderer", None)
-        if r is None or not hasattr(r, "set_lip_timeline"):
-            return
+        frames = []
         try:
-            from core.lip_sync import build_timeline
+            from core.lip_sync import build_timeline, total_duration
             frames = build_timeline(text or "")
         except Exception as e:
             logger.debug("口型时间轴生成失败（回退振幅）: %s", e)
             frames = []
+
+        # 智能预缓冲：告知播放器预期总时长（口型时间轴就是按同一语速估的）
+        sp = getattr(self, "_stream_player", None)
+        if sp is not None and frames:
+            try:
+                from core.lip_sync import total_duration
+                sp.set_expected_duration(
+                    total_duration(frames),
+                    enable=self._smart_prebuffer_enabled(),
+                )
+            except Exception as e:
+                logger.debug("预期时长设置失败: %s", e)
+
+        if r is None or not hasattr(r, "set_lip_timeline"):
+            return
         if not frames:
             try:
                 r.clear_lip_timeline()
@@ -3239,28 +3306,54 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             self._pending_chat = False
 
     def _do_engine_reply_inner(self, reply: str, emotion: str, anim: str, audio_path: str, action_intent=None):
-        """在主线程中处理引擎回复（内部实现）"""
+        """在主线程中处理引擎回复（内部实现）。
+
+        气泡时序（2026-09-14 改）：**只在 TTS 开始播放时显示一次**。
+
+        旧行为会显示两次：
+          1) 流式气泡结束时用完整回复替换一次（或文本回复完显示）
+          2) TTS 合成完又显示一次
+        用户反馈“重复”。现在改为：把待显示文本暂存，
+        由 `on_tts_start`（真正开口那一刻）统一显示。
+
+        无 TTS（或 TTS 关闭）时，不能把气泡吞了——那时直接显示。
+        """
         # 取消超时计时器
         if hasattr(self, '_think_timeout'):
             self._think_timeout.stop()
-        
-        # P1: 如果正在流式显示，结束流式气泡（用完整回复替换）
+
+        # P1: 如果正在流式显示，结束流式气泡（但**不**立即重显）
         if getattr(self, '_is_streaming_bubble', False):
             self._finish_bubble_stream()
-            self._show_bubble(reply, emotion)
 
         # 截停旧 TTS
         self._stop_all_tts()
 
-        # 显示气泡
+        # 计算要显示的文本
+        display_text = ""
         if reply and reply.strip() and reply.strip() not in ("\u2026", "..."):
             try:
-                compact = compact_bubble_text(reply)
+                display_text = compact_bubble_text(reply) or reply
             except Exception:
-                compact = reply
-            self._show_bubble(compact or reply, emotion=emotion, priority=1)
+                display_text = reply
+
+        # 是否有即将播放的音频（有则延到 on_tts_start 显示）
+        will_play = bool(
+            audio_path and os.path.exists(audio_path)
+            and (self.config.get("tts", {}) or {}).get("enabled", True)
+        )
+        if will_play and display_text:
+            # 暂存：等 TTS 真正开始播放时再显示（避免两次气泡）
+            self._pending_bubble_text = display_text
+            self._pending_bubble_emotion = emotion
+            logger.debug("气泡延后到 TTS 开播时显示: %r", display_text[:30])
+        elif display_text:
+            # 无音频：直接显示（否则用户什么都看不到）
+            self._pending_bubble_text = ""
+            self._show_bubble(display_text, emotion=emotion, priority=1)
         else:
-            # 空回复也要清除"思考中"气泡
+            # 空回复也要清除“思考中”气泡
+            self._pending_bubble_text = ""
             try:
                 self.bubble.hide_bubble()
             except Exception:

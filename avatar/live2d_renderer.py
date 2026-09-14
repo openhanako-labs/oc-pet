@@ -1708,7 +1708,7 @@ class Live2DRenderer(AvatarRenderer):
                 writer.write_group("eyes_open", cur, gate=True)
                 writer.write_group("eyes_smile", cur, gate=True)
                 writer.write_group("eyebrows", cur, gate=True)
-                writer.write_group("mouth_form", cur, gate=True)
+                writer.write_group("mouth_form", cur, gate=not getattr(self, "_speaking", False))
                 writer.write_group("mouth_open", cur, gate=not getattr(self, "_speaking", False))
                 writer.write_group("gaze", cur, gate=True)
                 _apply_head = (not getattr(self, "_gaze_enabled", True)) or (getattr(self, "_emote_seq_active", False) and (("head_angle_x", "head_angle_y") & (self._emote_seq[self._emote_seq_idx].get("params") or {}).keys()))

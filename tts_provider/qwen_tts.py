@@ -505,10 +505,16 @@ class QwenTtsProvider(TTSProvider):
                                 logger.info("Qwen TTS [local] 使用 ModelScope 缓存: %s", model_path)
                                 break
 
+            # 2026-09-14：attn_implementation="sdpa" —— 不用 flash-attn 库
+            # （Windows 没有 win_amd64 wheel，源码编译也不被支持），
+            # 改用 PyTorch 内置 SDPA：transformers 切到 SDPA 后，
+            # CUDA 上会自动选 Flash 后端（sm_86 Ampere 支持），
+            # 注意力计算从 O(n²) 显存 + 较慢的 math 核 降到 flash 内核。
             self._local_model = Qwen3TTSModel.from_pretrained(
                 model_path,
                 device_map="cuda",
                 dtype=torch.bfloat16,
+                attn_implementation="sdpa",
             )
             self._ready = True
             logger.info("Qwen TTS [local] ready | model=%s | VRAM=%.2f GB",
@@ -763,21 +769,18 @@ class QwenTtsProvider(TTSProvider):
         配置示例（config.json）：
             "tts": {
               "stream": {
-                "chunk_frames": 12,        # 每块帧数（12 帧 ≈ 1s 音频）
-                "first_chunk_frames": 6,   # 首块（更小 = 更早出声）
-                "left_context": 8          # 解码上下文（影响解码量）
+                "chunk_frames": 25,
+                "first_chunk_frames": 8,
+                "left_context": 25
               }
             }
 
-        注：`left_context` 直接决定每次解码的额外开销——
-        原值 25 配 chunk_frames=25 等于**解码量翻倍**（2.00x）；
-        降到 8 后为 1.32x，省约 1/3 解码。
-
-        ⚠️ **chunk_frames 不宜调小**：left_context 固定时，chunk 越小
-        解码开销占比越高（chunk=12/ctx=8 → 1.67x；chunk=6/ctx=8 → 2.33x），
-        反而更慢。要减小卡顿颗粒度应优先靠预缓冲，而不是切碎 chunk。
+        ⚠️ **left_context 不要轻易调小**（2026-09-14 实测教训）：
+        它同时是解码器的**预热上下文**——过短会导致拼接处产生杂音。
+        曾试图 25→8 以减少解码量，但解码本就不是瓶颈（瓶颈是 talker 自回归），
+        省下的算力微不足道，却引入杂音风险。故保持 25。
         """
-        out = {"chunk_frames": 25, "first_chunk_frames": 8, "left_context": 8}
+        out = {"chunk_frames": 25, "first_chunk_frames": 8, "left_context": 25}
         try:
             from config import load_config
             st = ((load_config().get("tts", {}) or {}).get("stream", {}) or {})

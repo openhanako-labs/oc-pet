@@ -18,9 +18,55 @@ logger = logging.getLogger(__name__)
 class VoiceProviderMixin:
     """TTS / ASR provider 的创建与按需重建。"""
 
+    def _effective_tts_config(self) -> dict:
+        """当前桌宠的**有效 TTS 配置**（全局 + per-agent 覆盖）。
+
+        2026-09-14（方案 A）：设置面板的「桌宠独立配置」之前只写不读——
+        写进了 `agents[].tts`，但运行时只看全局 `tts`，
+        所以“单独设置桌宠的 TTS”存了不生效。
+
+        覆盖规则（只覆盖 provider/voice 类字段，不动 volume/enabled 等全局开关）：
+        - `agents[<当前agent>].tts.provider` 非空 → 覆盖全局 provider
+        - `.voice` / `.edge_voice` → 覆盖对应音色字段
+
+        兼容：无 agents[].tts（老配置）→ 原样返回全局配置。
+        """
+        base = dict((self.config.get("tts", {}) or {}))
+        try:
+            agents = self.config.get("agents", []) or []
+            me = getattr(self, "_agent_id", "") or getattr(self, "_current_char", "")
+            if not me:
+                return base
+            entry = next(
+                (a for a in agents if isinstance(a, dict) and a.get("id") == me),
+                None,
+            )
+            if not entry:
+                return base
+            at = entry.get("tts")
+            if not isinstance(at, dict) or not at:
+                return base
+            p = str(at.get("provider") or "").strip()
+            if p:
+                base["provider"] = p
+            v = str(at.get("voice") or "").strip()
+            if v:
+                # cosy/qwen 等走 voice 字段；edge 走 edge_voice
+                if p == "edge":
+                    base["edge_voice"] = v
+                else:
+                    base["voice"] = v
+            ev = str(at.get("edge_voice") or "").strip()
+            if ev:
+                base["edge_voice"] = ev
+        except Exception as e:
+            logger.debug("per-agent TTS 覆盖解析失败（用全局）: %s", e)
+        return base
+
     def _create_tts_provider(self):
-        """根据配置创建 TTS provider，失败返回 None"""
-        provider = self.config.get("tts", {}).get("provider", "cosyvoice")
+        """根据**有效配置**（全局 + per-agent 覆盖）创建 TTS provider。"""
+        eff = self._effective_tts_config()
+        provider = eff.get("provider", "cosyvoice")
         try:
             if provider == "mimo":
                 from tts_provider.mimo_tts import MimoTtsProvider
@@ -45,12 +91,11 @@ class VoiceProviderMixin:
                 return ApiTtsProvider()
             elif provider == "edge":
                 from tts_provider.edge_tts import EdgeTtsProvider
-                tts_cfg = self.config.get("tts", {}) or {}
                 edge = EdgeTtsProvider()
                 edge.configure(
-                    voice=tts_cfg.get("edge_voice", ""),
-                    rate=tts_cfg.get("edge_rate", ""),
-                    pitch=tts_cfg.get("edge_pitch", ""),
+                    voice=eff.get("edge_voice", ""),
+                    rate=eff.get("edge_rate", ""),
+                    pitch=eff.get("edge_pitch", ""),
                 )
                 return edge
             elif provider == "aqua":
@@ -58,11 +103,10 @@ class VoiceProviderMixin:
                 return AquaTtsProvider()
             elif provider == "qwen":
                 from tts_provider.qwen_tts import QwenTtsProvider, load_voice_refs
-                tts_cfg = self.config.get("tts", {}) or {}
                 voice_refs = load_voice_refs(self.config)
                 qwen = QwenTtsProvider(
                     voice_refs=voice_refs,
-                    default_voice=tts_cfg.get("qwen_default_voice", ""),
+                    default_voice=eff.get("qwen_default_voice", ""),
                 )
                 return qwen
             else:
@@ -77,8 +121,11 @@ class VoiceProviderMixin:
 
         只纳入决定「创建出哪个 provider 实例」的字段。volume / enabled
         这类运行期开关不算，它们由 _tts_player 直接生效，无需重建。
+
+        2026-09-14（方案 A）：改读 `_effective_tts_config()`——
+        否则 per-agent 改了引擎/音色也不会触发重建（存了不生效）。
         """
-        tts_cfg = self.config.get("tts", {}) or {}
+        tts_cfg = self._effective_tts_config()
         provider = tts_cfg.get("provider", "cosyvoice")
         api_sig: tuple = ()
         if provider in ("mimo", "api"):
@@ -93,7 +140,6 @@ class VoiceProviderMixin:
                 api_sig = ()
         elif provider == "edge":
             # edge 引擎参数改变时也要重建
-            tts_cfg = self.config.get("tts", {}) or {}
             api_sig = (
                 tts_cfg.get("edge_voice", ""),
                 tts_cfg.get("edge_rate", ""),

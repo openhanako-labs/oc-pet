@@ -197,6 +197,33 @@ def test_lip_frame_duration():
     assert f.duration == pytest.approx(0.5)
 
 
+def test_char_sec_matches_measured_tts_speed():
+    """★ 字速必须是实测值（2026-09-14 修正）。
+
+    实测：14 字文本 → 58 帧 @12Hz = 4.83s，即 0.345 s/字。
+    原估 0.18 导致时间轴短 48% → 口型提前走完、不贴。
+    """
+    assert DEFAULT_CHAR_SEC == pytest.approx(0.345, abs=0.001)
+
+
+def test_timeline_duration_close_to_real_audio():
+    """★ 时间轴总时长应与实测音频时长接近（误差 < 20%）。"""
+    # 实测样本：'晚上好。安心的，那就安心着。' → 58 帧 @12Hz = 4.83s
+    text = "晚上好。安心的，那就安心着。"
+    fr = build_timeline(text)
+    dur = total_duration(fr)
+    real = 58 / 12.0
+    assert abs(dur - real) / real < 0.20, \
+        f"时间轴 {dur:.2f}s 与实测音频 {real:.2f}s 偏差过大"
+
+
+def test_char_sec_scales_proportionally():
+    """字速翻倍 → 时长翻倍（保证它是线性因子）。"""
+    a = total_duration(build_timeline("你好世界", char_sec=0.2))
+    b = total_duration(build_timeline("你好世界", char_sec=0.4))
+    assert b == pytest.approx(a * 2, rel=0.01)
+
+
 # ── 渲染器接线 ──
 
 

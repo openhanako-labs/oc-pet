@@ -125,6 +125,25 @@ if _QT_OK:
         def isSequential(self) -> bool:  # noqa: N802 (Qt 命名)
             return True
 
+        def atEnd(self) -> bool:  # noqa: N802 (Qt 命名)
+            """流是否已结束。
+
+            ⚠️ **必须覆写**（2026-09-14 修）。
+            QIODevice.atEnd() 的默认实现是 `bytesAvailable() == 0`——
+            对**流式**设备这是错的："暂时没数据"不等于"流结束"。
+
+            实测后果：首块（8 帧 ≈ 0.67s，约一个字）被拉走后缓冲变空，
+            atEnd() 立即变 True → Qt 认为流已结束 → sink 停止；
+            等下一块（可能 6 秒后）到达时，_pump_once 的重挂条件不成立
+            → **用户听到"播了一个字后面就不播了"**。
+
+            正确语义：只有收到 eof 标记（上游 finish()）且缓冲抽空才算结束。
+            """
+            with self._lock:
+                if self._eof and self._size == 0:
+                    return True
+                return False
+
         def bytesAvailable(self) -> int:  # noqa: N802
             with self._lock:
                 return self._size + super().bytesAvailable()
@@ -182,11 +201,23 @@ class StreamingPcmPlayer(QObject):
         self._last_error = ""
         self._finished = False
         # 2026-09-14 预缓冲：实测合成速率仅 0.36x 实时（低于播放所需 1.0x），
-        # "首块一到就开声卡"会立刻抽干缓冲 → 用户听到"两个字一卡"。
-        # 改为攒够 N 秒再开播，用首字延迟换流畅。0 = 关闭（回旧行为）。
+        # "首块一到就开声卡"会立即抽干缓冲 → 用户听到"两个字一卡"。
+        # 分两档：
+        #   - 固定档（_prebuffer_bytes）：无文本信息时的降级手段
+        #   - 智能档（_expected_bytes）：知道本句总时长时，
+        #     攒够"剩下合成时间所需的量"再开播——数学上永不断粮
         self._prebuffer_bytes = 0
+        self._expected_bytes = 0
+        self._received_bytes = 0
+        # 智能预缓冲开关。**默认关**（2026-09-14 实测教训）：
+        # R=0.36x 时，"撑到合成结束"需要攒到 ~74%——首字会晚 10 秒，
+        # 比卡顿更难接受。故默认回到"首块即播"；想要流畅可手动开。
+        self._smart_prebuffer_on = False
         self._prebuffer_max_wait_s = 8.0
         self._playback_wait_from = 0.0
+        # 合成速率估计（实时倍率）。用于智能预缓冲的"剩余时间"推算。
+        # 0.36 是实测值；每句结束后根据实际数据滑动更新。
+        self._synth_rate = 0.36
         # 设备未就绪时先落在这里，prepare() 时冲刷（避免 feed 早于 prepare）
         self._pending: deque = deque()
 
@@ -254,15 +285,19 @@ class StreamingPcmPlayer(QObject):
                     logger.debug("streaming_pcm: 音量设置失败", exc_info=True)
 
     def set_prebuffer(self, seconds: float, max_wait_s: float = 8.0) -> None:
-        """设预缓冲时长（秒）。0 = 关闭（回"首块即播"的旧行为）。
+        """固定预缓冲时长（秒）。0 = 关闭。
 
-        为什么需要：实测本机合成速率仅 **0.36x 实时**（低于播放所需 1.0x），
-        首块一到就开声卡会立即抽干缓冲，用户听到"两个字一卡"。
-        攒够 N 秒再开播，用首字延迟换流畅。
+        ⚠️ **固定值在慢合成下必然失败**（2026-09-14 教训）：
+        实测合成速率仅 0.36x 实时（低于播放所需 1.0x）——
+        消耗比供给快 0.64x，攒 1.5s 只够撑 2.3 秒就抽干。
+        只要合成速率 < 1.0x，**任何"攒一点再播"都必然断粮，除非攒满**。
+
+        所以优先用 `set_expected_duration()` 的智能预缓冲；
+        本方法仅作为无文本信息时的降级手段。
 
         Args:
-            seconds: 预缓冲目标时长。1.5~3.0s 是较平衡的值。
-            max_wait_s: 最长等待；超过则不等了（防合成极慢时永远不出声）。
+            seconds: 预缓冲目标时长。
+            max_wait_s: 最长等待；超过则不等了。
         """
         try:
             sec = max(0.0, float(seconds))
@@ -276,9 +311,37 @@ class StreamingPcmPlayer(QObject):
         except (TypeError, ValueError):
             self._prebuffer_max_wait_s = 8.0
         logger.info(
-            "流式预缓冲：%.1fs（%d 字节），最长等 %.1fs",
+            "流式预缓冲（固定）：%.1fs（%d 字节），最长等 %.1fs",
             sec, self._prebuffer_bytes, self._prebuffer_max_wait_s,
         )
+
+    def set_expected_duration(self, seconds: float, enable: bool = False) -> None:
+        """告知本句的**预期音频总时长**（秒），供智能预缓冲使用。
+
+        原理：合成速率 R < 1.0x 时，固定预缓冲必然失败。
+        但我们可以**估计还剩多久合成完**，攒够那段时间即可：
+
+            buffered_s >= (expected - received) / R
+
+        即"缓冲里已有的音频，够不够撑到合成结束"。
+
+        ⚠️ **默认不启用**（enable=False）：R=0.36 时需攒到 ~74% 才满足，
+        首字会晚 10 秒——这是真实取舍，由调用方/配置决定。
+
+        Args:
+            seconds: 预期总时长（≤0 则不启用）。
+            enable: 是否真的启用智能预缓冲。
+        """
+        try:
+            sec = float(seconds)
+        except (TypeError, ValueError):
+            sec = 0.0
+        bytes_per_sec = 2 * max(1, self._channels) * max(1, self._sample_rate)
+        self._expected_bytes = int(max(0.0, sec) * bytes_per_sec)
+        self._received_bytes = 0
+        self._smart_prebuffer_on = bool(enable) and self._expected_bytes > 0
+        if self._smart_prebuffer_on:
+            logger.info("智能预缓冲已启用：预期音频 %.2fs（首字会晚，换流畅）", sec)
 
     def is_playing(self) -> bool:
         with self._lock:
@@ -313,8 +376,9 @@ class StreamingPcmPlayer(QObject):
                 self._finished = False
                 # LIP-1：新一句从 0 起算播放时钟（否则口型会继承上一句的进度）
                 self._device.consumed_bytes = 0
-                # 预缓冲：记录起等时刻（供超时保护判断）
+                # 预缓冲：记录起等时刻 + 清空本句计数
                 self._playback_wait_from = time.monotonic()
+                self._received_bytes = 0
                 # 冲刷 prepare 之前 feed 进来的数据
                 while self._pending:
                     self._device.append(self._pending.popleft())
@@ -371,6 +435,7 @@ class StreamingPcmPlayer(QObject):
         """
         if not pcm:
             return
+        self._received_bytes += len(pcm)
         dev = self._device
         if dev is None:
             self._pending.append(pcm)
@@ -423,10 +488,21 @@ class StreamingPcmPlayer(QObject):
                     return
 
                 state = self._sink.state()
-                if pending > 0 and state == QAudio.State.IdleState:
-                    # 数据又到了但设备已停 → 重新挂上
-                    self._sink.start(dev)
-                elif dev.is_eof() and pending == 0 and state == QAudio.State.IdleState:
+                # 2026-09-14：重挂条件从 "仅 IdleState" 改为 "非 ActiveState"。
+                # 原因：atEnd 误判导致 sink 停止时，状态可能是 StoppedState
+                # （而非 IdleState），旧条件永远不成立 → 后续数据再也接不上。
+                # 只要还有数据且声卡没在跑，就重新 start。
+                if pending > 0 and state != QAudio.State.ActiveState:
+                    try:
+                        self._sink.start(dev)
+                        logger.debug(
+                            "流式播放：重新挂上 sink（state=%s, pending=%d）",
+                            state, pending,
+                        )
+                    except Exception as e:
+                        logger.debug("重挂 sink 失败: %s", e)
+                elif (dev.is_eof() and pending == 0
+                      and state != QAudio.State.ActiveState):
                     self._cleanup()
                     try:
                         self.on_end()
@@ -438,15 +514,29 @@ class StreamingPcmPlayer(QObject):
     def _should_start_playback(self, dev, pending_bytes: int) -> bool:
         """是否该开声卡了（预缓冲判断）。
 
+        优先智能档（知道预期总时长）：攒够"撑到合成结束"的量。
+        降级固定档：攒够 _prebuffer_bytes。
+
         不等的情况：
-        - 预缓冲已关闭（_prebuffer_bytes <= 0）
-        - 合成已结束（eof）——再等也不会有新数据，短句应该直接播
+        - 预缓冲已关闭
+        - 合成已结束（eof）——再等也不会有新数据，短句应直接播
         - 已等超时（_prebuffer_max_wait_s）——防合成极慢时永远不出声
         """
+        if dev.is_eof():
+            return True
+        expected = getattr(self, "_expected_bytes", 0)
+        if expected > 0 and getattr(self, "_smart_prebuffer_on", False):
+            need = self._smart_prebuffer_need(expected)
+            if need is not None:
+                if pending_bytes >= need:
+                    return True
+                waited = time.monotonic() - getattr(self, "_playback_wait_from", 0.0)
+                if waited >= getattr(self, "_prebuffer_max_wait_s", 8.0):
+                    logger.debug("智能预缓冲超时（等 %.1fs），先开播", waited)
+                    return True
+                return False
         need = getattr(self, "_prebuffer_bytes", 0)
         if need <= 0:
-            return True
-        if dev.is_eof():
             return True
         if pending_bytes >= need:
             return True
@@ -459,6 +549,33 @@ class StreamingPcmPlayer(QObject):
             return True
         return False
 
+    def _smart_prebuffer_need(self, expected_bytes: int):
+        """智能预缓冲目标字节数；无法推算时返回 None（降级固定档）。
+
+        推导（R = 合成速率，单位"音频秒/墙钟秒"）：
+          - 已收到音频 = received / bytes_per_sec （秒）
+          - 剩余待合成音频 = (expected - received) / bytes_per_sec
+          - 合成这些还需墙钟 = 剩余音频 / R
+          - 播放这些需墙钟 = 剩余音频 / 1.0
+          要不抽干，需要缓冲里的音频 >= 合成剩余所需的墙钟时间：
+              buffered_s >= 剩余音频 / R
+          → buffered_bytes >= (expected - received) / R
+
+        取 R = 估计的合成速率（默认 0.36，实测值）。
+        """
+        try:
+            rate = float(getattr(self, "_synth_rate", 0.36))
+        except (TypeError, ValueError):
+            rate = 0.36
+        if rate <= 0.01:
+            return None
+        received = min(int(getattr(self, "_received_bytes", 0)), int(expected_bytes))
+        remaining = max(0, int(expected_bytes) - received)
+        # 剩余音频 / R = 需要撑住的墙钟秒数，换算成字节
+        need = int(remaining / rate)
+        # 不超过总量（攒满就不必再等）
+        return min(need, int(expected_bytes))
+
     def _cleanup(self) -> None:
         self._active = False
         if self._pump is not None:
@@ -470,13 +587,26 @@ class StreamingPcmPlayer(QObject):
             self._pump = None
         if self._sink is not None:
             try:
+                # 先 stop（停止拉数据），再断开 source，最后才 close device。
+                # 顺序很重要：deleteLater 是延迟删除，若先 close 了 device，
+                # sink 在真正析构前仍可能去读 → 报
+                # "QIODevice::read (_PcmStreamDevice): device not open"。
                 self._sink.stop()
+                try:
+                    self._sink.setSource(None)  # 断开拉取源
+                except Exception:
+                    logger.debug("sink 断开 source 失败（非致命）", exc_info=True)
                 self._sink.deleteLater()
             except Exception:
                 logger.debug("streaming_pcm: sink 释放失败", exc_info=True)
             self._sink = None
         if self._device is not None:
             try:
+                # 先确保没有活跃的 read 回调，再关闭
+                try:
+                    self._device.blockSignals(True)
+                except Exception:
+                    pass
                 self._device.close()
                 self._device.deleteLater()
             except Exception:
