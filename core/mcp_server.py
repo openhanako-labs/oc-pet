@@ -106,12 +106,14 @@ class PetMCPServer:
         state_provider: Callable[[], dict],
         capabilities_provider: Optional[Callable[[], list]] = None,
         action_sink: Optional[Callable[[str, dict], Any]] = None,
+        catalog_provider: Optional[Callable[[str], dict]] = None,
         port: int = DEFAULT_PORT,
         allow_actions: bool = True,
     ):
         self._state_provider = state_provider
         self._capabilities_provider = capabilities_provider
         self._action_sink = action_sink
+        self._catalog_provider = catalog_provider
         self._port = int(port or DEFAULT_PORT)
         self._allow_actions = bool(allow_actions)
         self._thread: threading.Thread | None = None
@@ -156,6 +158,17 @@ class PetMCPServer:
         except Exception as e:
             logger.warning("MCP: 读能力清单失败: %s", e)
             return []
+
+    def _safe_catalog(self, system: str) -> dict:
+        """读 Hana 全体系目录（DISC-2）。失败降级为 error dict。"""
+        if self._catalog_provider is None:
+            return {"error": "桌宠未接入 Hana 目录（catalog_provider 未配置）"}
+        try:
+            r = self._catalog_provider(system)
+            return r if isinstance(r, dict) else {"error": "catalog_provider 返回非 dict"}
+        except Exception as e:
+            logger.warning("MCP: 读 Hana 目录失败: %s", e)
+            return {"error": str(e)[:200]}
 
     def _dispatch_action(self, action: str, params: dict) -> str:
         """派发写操作。只登记/发信号，立即返回（不碰渲染线程）。"""
@@ -203,6 +216,19 @@ class PetMCPServer:
             """
             caps = self._safe_capabilities()
             return {"count": len(caps), "capabilities": caps}
+
+        @app.tool()
+        def pet_hana_catalog(system: str = "summary") -> dict:
+            """查询 Hana 全体系目录（桌宠读到的 Hana 全景）。
+
+            Args:
+                system: 要查的体系，可选 summary（默认，只给统计）/
+                    plugins / apps / mcp / skills / agents。
+                    除 summary 外会返回该体系的明细清单（名称/描述/工具数/状态）。
+
+            只读。注意：返回的是**清单**（有什么），不含用户数据内容。
+            """
+            return self._safe_catalog(system)
 
         @app.tool()
         def pet_set_emotion(emotion: str, intensity: float = 1.0) -> str:
@@ -329,6 +355,7 @@ def build_from_config(
     state_provider: Callable[[], dict],
     capabilities_provider: Optional[Callable[[], list]] = None,
     action_sink: Optional[Callable[[str, dict], Any]] = None,
+    catalog_provider: Optional[Callable[[str], dict]] = None,
 ) -> Optional[PetMCPServer]:
     """按 config 的 `mcp_server` 块构建 server；未启用时返回 None。
 
@@ -349,6 +376,7 @@ def build_from_config(
         state_provider=state_provider,
         capabilities_provider=capabilities_provider,
         action_sink=action_sink,
+        catalog_provider=catalog_provider,
         port=port,
         allow_actions=bool(cfg.get("allow_actions", True)),
     )

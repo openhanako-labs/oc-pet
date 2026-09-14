@@ -533,11 +533,24 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             self._voice_input._on_status = self._on_voice_status
             # 持续监听：VAD 回调（每帧音频数据到达时触发）
             self._voice_input.set_vad_callback(self._on_voice_vad)
-            # 仅当 ASR 使用本地 Whisper 时才预加载本地模型；
-            # 远程(mimo/api)走 API，不需要本地大模型，避免无意义地加载
-            # torch/whisper 及下游依赖（funasr/wetext 等），造成启动卡顿与运行时下载
-            if getattr(asr_provider, "name", "") == "whisper_local":
+            # 仅当 ASR 使用本地模型时才预加载；远程(mimo/api)走 API，
+            # 不需要本地大模型，避免无意义地加载 torch/whisper 及下游依赖
+            # （funasr/wetext 等），造成启动卡顿与运行时下载。
+            # R1（2026-09-14）：sensevoice 也是本地模型，同样需预加载；
+            # 但它 import 链实测 13.5s，**必须后台线程**（preload_whisper 已如此）。
+            _asr_name = getattr(asr_provider, "name", "")
+            if _asr_name == "whisper_local":
                 preload_whisper()
+            elif _asr_name == "sensevoice":
+                try:
+                    import threading as _threading
+                    _threading.Thread(
+                        target=asr_provider.preload,
+                        name="SenseVoicePreload", daemon=True,
+                    ).start()
+                    logger.info("SenseVoice 预加载已入后台线程（import 链较重）")
+                except Exception as e:
+                    logger.warning("SenseVoice 预加载启动失败（非致命）: %s", e)
 
         # ── TTS 播放器 ──
         tts_cfg = self.config.get("tts", {})
@@ -1439,6 +1452,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 state_provider=self._status_snapshot,
                 capabilities_provider=self._mcp_capabilities,
                 action_sink=self._mcp_action_sink,
+                catalog_provider=self._mcp_hana_catalog,
             )
             if srv is None:
                 self._mcp_server = None
@@ -1464,16 +1478,55 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             self._mcp_server = None
 
     def _mcp_capabilities(self) -> list:
-        """MCP 用能力清单（只列桌宠自己的内部能力，不含 Hana 插件工具）。"""
+        """MCP 用能力清单。
+
+        分两部分：
+        - 桌宠**自己的**内部能力（CAPABILITIES）
+        - **Hana 的**全体系摘要（DISC-2）——让 Hana 自己也能看到"我有什么"
+        """
+        out: list = []
         try:
             from core.capability_registry import CAPABILITIES
-            return [
-                {"name": c.name, "description": c.description or ""}
+            out.extend(
+                {"name": c.name, "description": c.description or "", "source": "pet"}
                 for c in CAPABILITIES
-            ]
+            )
         except Exception as e:
             logger.warning("MCP 能力清单读取失败: %s", e)
-            return []
+        # DISC-2：附上 Hana 全体系摘要（不附明细，避免 token 爆炸）
+        try:
+            from core.hana_catalog import get_catalog
+            cat = get_catalog()
+            out.append({
+                "name": "hana_catalog",
+                "description": (
+                    f"Hana 全体系目录（plugins={cat['totals']['plugins']}, "
+                    f"apps={cat['totals']['apps']}, mcp={cat['totals']['mcp_connectors']}, "
+                    f"skills={cat['totals']['skills']}, agents={cat['totals']['agents']}）；"
+                    "用 pet_hana_catalog 取明细"
+                ),
+                "source": "hana",
+            })
+        except Exception as e:
+            logger.debug("Hana 目录摘要读取失败: %s", e)
+        return out
+
+    def _mcp_hana_catalog(self, system: str = "") -> dict:
+        """取 Hana 全体系目录明细（供 MCP 工具调用）。"""
+        try:
+            from core.hana_catalog import get_catalog
+            cat = get_catalog()
+        except Exception as e:
+            return {"error": str(e)[:200]}
+        s = (system or "").strip().lower()
+        if s in ("plugins", "apps", "mcp", "skills", "agents"):
+            return {s: cat[s]}
+        if s == "summary" or not s:
+            return {
+                "totals": cat["totals"],
+                "hana_server_reachable": cat["hana_server_reachable"],
+            }
+        return {"error": f"未知体系: {system}（可用: plugins/apps/mcp/skills/agents/summary）"}
 
     def _mcp_action_sink(self, action: str, params: dict) -> str:
         """MCP 写操作入口（MCP 线程调用）。只发事件，立即返回。"""

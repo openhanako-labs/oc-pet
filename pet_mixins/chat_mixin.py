@@ -100,6 +100,13 @@ class ChatMixin:
                 self._voice_continuous_buffer = []
                 self._voice_continuous_silence = 0
                 self._voice_continuous_started = False
+                # ASR-1：懒建 VAD 并重置（首次开启时会加载 Silero ONNX）
+                v = self._get_vad()
+                if v is not None and hasattr(v, "reset"):
+                    try:
+                        v.reset()
+                    except Exception as e:
+                        logger.debug("VAD 初始 reset 失败: %s", e)
                 self._voice_continuous_action.setChecked(True)
                 self._voice_continuous_action.setText("🎤 监听中")
                 self._show_bubble("👂 持续监听已开启", emotion="happy")
@@ -117,31 +124,74 @@ class ChatMixin:
             self._voice_continuous_action.setText("🎤 持续监听")
             self._show_bubble("持续监听已关闭", emotion="neutral")
 
+    def _get_vad(self):
+        """懒初始化 VAD（ASR-1 2026-09-14）。
+
+        优先 Silero（onnxruntime 直跑，能区分人声与视频声），
+        不可用时自动回退能量 VAD（行为与改动前一致）。
+
+        配置：`asr.vad_backend` = auto（默认）/ silero / energy
+        """
+        v = getattr(self, "_vad", None)
+        if v is not None:
+            return v
+        try:
+            from core.audio_input.vad import create_vad
+            backend = "auto"
+            try:
+                backend = (self.config.get("asr", {}) or {}).get("vad_backend", "auto")
+            except Exception:
+                backend = "auto"
+            v = create_vad(backend)
+        except Exception as e:
+            logger.warning("VAD 创建失败，回退能量判据: %s", e)
+            v = None
+        self._vad = v
+        return v
+
     def _on_voice_vad(self, chunk: np.ndarray, rms: float):
         """VAD 回调（音频线程调用）：检测语音活动，自动切分语音段。
 
-        设计：
-        - rms > 0.02 视为有人说话，累积音频
-        - rms <= 0.02 视为静音，计数静音帧
-        - 静音超过 40 帧（约 1.3s）视为语音段结束，自动识别发送
-        - 语音段太短（< 0.5s）则丢弃
+        判据（ASR-1 2026-09-14 升级）：
+        - 优先用 **Silero VAD**（onnxruntime，区分人声与视频/音乐声）
+        - 不可用时回退 **RMS 能量阈值**（与改动前行为一致）
+
+        分段逻辑不变：
+        - 语音中累积音频
+        - 静音超 40 帧（约 1.3s）视为句尾，自动识别发送
+        - 语音段 < 0.5s 丢弃
         """
         if not self._voice_continuous:
             return
 
-        # 自适应底噪（惰性初始化）：环境在放视频/音乐时噪声抬高，阈值随之抬高，
-        # 避免把背景音（如 B 站视频台词）当成真人说话触发识别。
-        # 只在“未开始说话”的静音态更新底噪，说话中断音不更新，避免截断语句。
-        if not self._voice_continuous_started:
-            nf = getattr(self, "_vad_noise_floor", 0.006)
-            nf = 0.9 * nf + 0.1 * max(rms, 1e-5)
-            self._vad_noise_floor = nf
-            THRESHOLD = max(0.02, nf * 3.0)
+        # ── 判据：Silero VAD 优先，能量阈值回退 ──
+        vad = self._get_vad()
+        is_speech = False
+        if vad is not None:
+            try:
+                if getattr(vad, "backend", "") == "silero":
+                    is_speech = vad.is_speech(chunk)
+                else:
+                    # 能量 VAD 需要调用方算好的 rms（保持旧逻辑）
+                    if not self._voice_continuous_started:
+                        nf = getattr(self, "_vad_noise_floor", 0.006)
+                        nf = 0.9 * nf + 0.1 * max(rms, 1e-5)
+                        self._vad_noise_floor = nf
+                    is_speech = vad.is_speech(chunk, rms)
+            except Exception as e:
+                logger.debug("VAD 推理异常，本帧按能量回退: %s", e)
+                is_speech = rms > max(0.02, getattr(self, "_vad_noise_floor", 0.006) * 3.0)
         else:
-            THRESHOLD = max(0.02, getattr(self, "_vad_noise_floor", 0.006) * 3.0)
+            # 无 VAD 对象：完整回退旧逻辑
+            if not self._voice_continuous_started:
+                nf = getattr(self, "_vad_noise_floor", 0.006)
+                nf = 0.9 * nf + 0.1 * max(rms, 1e-5)
+                self._vad_noise_floor = nf
+            is_speech = rms > max(0.02, getattr(self, "_vad_noise_floor", 0.006) * 3.0)
+
         SILENCE_FRAMES_LIMIT = 40  # 约 1.3s（512 帧/帧）
 
-        if rms > THRESHOLD:
+        if is_speech:
             # 有人说话：累积音频，重置静音计数
             with self._voice_buffer_lock:
                 self._voice_continuous_buffer.append(chunk.copy())
@@ -159,6 +209,13 @@ class ChatMixin:
                         self._voice_continuous_buffer = []
                     self._voice_continuous_silence = 0
                     self._voice_continuous_started = False
+                    # ASR-1：段结束重置 VAD 内部状态（context/触发标志），
+                    # 否则下一句会继承上一句的尾部 context 与滞回状态。
+                    if vad is not None and hasattr(vad, "reset"):
+                        try:
+                            vad.reset()
+                        except Exception as e:
+                            logger.debug("VAD reset 失败: %s", e)
 
                     # 太短丢弃
                     if len(audio) < int(self._voice_input.SAMPLE_RATE * 0.5):

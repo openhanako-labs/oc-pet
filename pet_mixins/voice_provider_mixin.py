@@ -241,6 +241,12 @@ class VoiceProviderMixin:
             elif provider == "api":
                 from asr_provider.api_asr import ApiAsrProvider
                 return ApiAsrProvider()
+            elif provider == "sensevoice":
+                # R1（2026-09-14）：中文专用本地 ASR（FunASR/SenseVoice）。
+                # 顺带输出情感标签。注意 import 链重（实测 13.5s），
+                # 模型加载由调用方放后台线程（与 whisper_local 同约定）。
+                from asr_provider.sensevoice import SenseVoiceProvider
+                return SenseVoiceProvider()
             else:
                 from asr_provider.whisper_local import WhisperLocalProvider
                 return WhisperLocalProvider()

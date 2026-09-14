@@ -188,7 +188,9 @@
     "backend": "faster_whisper",
     "model": "small",
     "language": "zh",
-    "device": ""
+    "device": "",
+    "sensevoice_model": "iic/SenseVoiceSmall",
+    "vad_backend": "auto"
   },
   "character_package": "default",
   "render_format": "sprite",

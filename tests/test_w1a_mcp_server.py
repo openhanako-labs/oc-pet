@@ -50,9 +50,6 @@ def _server(**kw):
     return PetMCPServer(**kw)
 
 
-# ── 基础 ──
-
-
 def test_default_port_is_8979():
     """端口不能撞 8977/8988/8077/8889。"""
     assert DEFAULT_PORT == 8979
@@ -240,3 +237,51 @@ def test_build_from_config_readonly_flag():
         _state_provider,
     )
     assert s is not None and s.allow_actions is False
+
+
+# ── DISC-2：Hana 目录查询 ──
+
+
+def test_safe_catalog_without_provider():
+    s = _server()
+    r = s._safe_catalog("summary")
+    assert "error" in r
+
+
+def test_safe_catalog_returns_provider_result():
+    s = _server(catalog_provider=lambda sys_: {"totals": {"plugins": 26}})
+    assert s._safe_catalog("summary")["totals"]["plugins"] == 26
+
+
+def test_safe_catalog_survives_exception():
+    def boom(_):
+        raise RuntimeError("catalog dead")
+
+    s = _server(catalog_provider=boom)
+    assert "error" in s._safe_catalog("summary")
+
+
+def test_safe_catalog_handles_non_dict():
+    s = _server(catalog_provider=lambda _: "not a dict")
+    assert "error" in s._safe_catalog("summary")
+
+
+@pytest.mark.skipif(not MCP_AVAILABLE, reason="未安装 mcp SDK")
+def test_catalog_tool_registered():
+    import asyncio
+
+    s = _server(catalog_provider=lambda sys_: {"ok": True})
+    app = s._build_app()
+    tools = asyncio.run(app.list_tools())
+    assert "pet_hana_catalog" in {t.name for t in tools}
+
+
+@pytest.mark.skipif(not MCP_AVAILABLE, reason="未安装 mcp SDK")
+def test_build_from_config_passes_catalog_provider():
+    s = build_from_config(
+        {"mcp_server": {"enabled": True}},
+        _state_provider, _caps_provider, _Sink(),
+        lambda sys_: {"totals": {}},
+    )
+    assert s is not None
+    assert s._safe_catalog("summary") == {"totals": {}}
