@@ -1791,8 +1791,9 @@ class ConversationEngine:
             return False
 
         # 先告诉主线程准备播放器（拿声卡前不阻塞）
+        # LIP-1：带上文本，让主线程能预生成口型时间轴（音素级口型需要它）
         try:
-            cb("begin", {"emotion": emotion}, gen)
+            cb("begin", {"emotion": emotion, "text": tts_text}, gen)
         except Exception as e:
             logger.warning("流式 begin 回调失败: %s", e)
             return False

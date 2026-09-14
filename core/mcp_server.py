@@ -310,6 +310,21 @@ class PetMCPServer:
                 loop.run_until_complete(
                     self._app.run_streamable_http_async()
                 )
+            except SystemExit as e:
+                # ⚠️ uvicorn 端口被占时会 sys.exit(1)。
+                # 在非主线程里 SystemExit 会直接终止整个进程（实测：
+                # test_real_startup_smoke 因 8979 被占而挂掉）。
+                # MCP server 是可选能力，**绝不能因为端口占用而拖死桌宠**。
+                logger.warning(
+                    "MCP server 启动失败（端口 %d 可能被占），已降级为不提供 MCP: %s",
+                    self._port, e,
+                )
+            except OSError as e:
+                # 同样是端口占用（某些路径不走 SystemExit）
+                logger.warning(
+                    "MCP server 绑定失败（端口 %d 可能被占），已降级: %s",
+                    self._port, e,
+                )
             except Exception as e:
                 logger.warning("MCP server 运行结束/异常: %s", e)
             finally:

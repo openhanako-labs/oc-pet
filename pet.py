@@ -3090,6 +3090,48 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         """流式 TTS 回调（TTS 线程池调用）→ 信号转主线程。"""
         self.tts_stream_signal.emit(kind, payload, gen)
 
+    def _play_clock(self) -> float:
+        """返回当前 TTS 已播放时长（秒）。供口型时间轴同步用。
+
+        基于流式播放器实际吃掉的字节数（而非墙钟）——
+        否则网络/合成卡顿时口型会跑到声音前面。
+        """
+        sp = getattr(self, "_stream_player", None)
+        if sp is None:
+            return 0.0
+        try:
+            return float(sp.played_seconds())
+        except Exception:
+            return 0.0
+
+    def _setup_lip_timeline(self, text: str) -> None:
+        """LIP-1：从文本生成口型时间轴并接到渲染器。
+
+        在 TTS begin 时调用——那时文本已完整（无需等音频）。
+        失败/文本为空/无 pypinyin → 清除时间轴，回退振幅驱动。
+        """
+        r = getattr(self, "_renderer", None)
+        if r is None or not hasattr(r, "set_lip_timeline"):
+            return
+        try:
+            from core.lip_sync import build_timeline
+            frames = build_timeline(text or "")
+        except Exception as e:
+            logger.debug("口型时间轴生成失败（回退振幅）: %s", e)
+            frames = []
+        if not frames:
+            try:
+                r.clear_lip_timeline()
+            except Exception:
+                pass
+            return
+        try:
+            r.set_lip_timeline(frames, clock_fn=self._play_clock)
+            logger.info("口型时间轴已接入：%d 片段，%.2fs",
+                        len(frames), frames[-1].end)
+        except Exception as e:
+            logger.warning("口型时间轴接入失败（回退振幅）: %s", e)
+
     def _do_engine_tts_stream(self, kind: str, payload, gen: int):
         """主线程：流式 TTS 事件处理。"""
         try:
@@ -3097,9 +3139,13 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 # 新一句开始：停掉旧播放 + 重建流式缓冲
                 self._stop_all_tts()
                 emo = "neutral"
+                text = ""
                 if isinstance(payload, dict):
                     emo = payload.get("emotion") or "neutral"
+                    text = payload.get("text") or ""
                 self._last_tts_emotion = emo
+                # LIP-1：先建时间轴（须在 prepare 前——prepare 后声卡可能立即拉数据）
+                self._setup_lip_timeline(text)
                 self._stream_player.prepare()
             elif kind == "chunk":
                 self._stream_player.feed(payload)

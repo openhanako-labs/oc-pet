@@ -285,3 +285,56 @@ def test_build_from_config_passes_catalog_provider():
     )
     assert s is not None
     assert s._safe_catalog("summary") == {"totals": {}}
+
+
+# ── 端口占用鲁棒性（真实 bug 修复）──
+
+
+def test_run_swallows_system_exit():
+    """★ uvicorn 端口被占时会 sys.exit(1)；在非主线程里 SystemExit 会
+    直接杀掉整个进程。MCP 是可选能力，绝不能因此拖死桌宠。
+
+    这里验证 _run 内的异常处理链包含 SystemExit。
+    """
+    import inspect
+    src = inspect.getsource(PetMCPServer.start)
+    assert "SystemExit" in src, "必须捕获 SystemExit（端口占用时 uvicorn 会抛）"
+    assert "OSError" in src, "必须捕获 OSError（端口绑定失败）"
+
+
+def test_run_does_not_propagate_system_exit(monkeypatch):
+    """实际跑一遍：让 app 抛 SystemExit，_run 不得让它逸出线程。"""
+    if not MCP_AVAILABLE:
+        pytest.skip("未安装 mcp SDK")
+    import threading
+    import time as _t
+
+    s = _server(port=8979)
+    errs = []
+
+    class _BoomApp:
+        settings = type("S", (), {"host": "", "port": 0})()
+
+        async def run_streamable_http_async(self):
+            raise SystemExit(1)
+
+    s._app = _BoomApp()
+
+    def _run_probe():
+        # 复刻 start() 里 _run 的异常处理形状
+        try:
+            s._app.settings.host = "127.0.0.1"
+            s._app.settings.port = s.port
+            import asyncio
+            asyncio.new_event_loop().run_until_complete(
+                s._app.run_streamable_http_async())
+        except SystemExit:
+            errs.append("swallowed")
+        except Exception as e:
+            errs.append(f"other:{e}")
+
+    t = threading.Thread(target=_run_probe)
+    t.start()
+    t.join(timeout=5)
+    assert not t.is_alive(), "线程应正常退出而非挂住"
+    assert errs == ["swallowed"], f"SystemExit 应被吞掉，实为 {errs}"

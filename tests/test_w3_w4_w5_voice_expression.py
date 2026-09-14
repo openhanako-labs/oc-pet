@@ -66,6 +66,7 @@ def test_rms_never_exceeds_one():
 
 class _FakeStdParams:
     ParamMouthOpenY = "MouthOpenY"
+    ParamMouthForm = "MouthForm"
 
 
 class _FakeModel:
@@ -84,6 +85,12 @@ def _make_renderer_with_mouth():
     r._mouth_phase = 0.0
     r._mouth_env = 0.0
     r._mouth_level_fn = lambda: None
+    # LIP-1 新增字段
+    r._lip_frames = []
+    r._lip_clock_fn = None
+    r._lip_started_at = 0.0
+    r._mouth_lip_open = 0.0
+    r._mouth_lip_form = 0.0
     r._live2d = type("L", (), {"StandardParams": _FakeStdParams})()
     r._note_frame_failure = lambda *a, **k: None
     r._param_intent = {}
@@ -91,13 +98,25 @@ def _make_renderer_with_mouth():
     return r
 
 
+def _mouth_open_of(r):
+    """取最近一次写入的 ParamMouthOpenY（按参数名筛选）。
+
+    LIP-1 后 _update_mouth 会额外写 ParamMouthForm，
+    所以不能再用 writes[-1]（那可能是 form）。
+    """
+    for pid, val, _w in reversed(r._model.writes):
+        if pid == _FakeStdParams.ParamMouthOpenY:
+            return val
+    raise AssertionError("未写入 ParamMouthOpenY")
+
+
 def test_mouth_falls_back_to_sine_without_level_source():
     """无电平源时走正弦：连续两次调用应产生不同的嘴型值。"""
     r = _make_renderer_with_mouth()
     r._update_mouth()
-    first = r._model.writes[-1][1]
+    first = _mouth_open_of(r)
     r._update_mouth()
-    second = r._model.writes[-1][1]
+    second = _mouth_open_of(r)
     assert first != second
     assert 0.0 <= first <= 1.0 and 0.0 <= second <= 1.0
 
@@ -108,13 +127,13 @@ def test_mouth_follows_level_when_source_available():
     r._mouth_level_fn = lambda: 0.4
     for _ in range(20):
         r._update_mouth()
-    loud = r._model.writes[-1][1]
+    loud = _mouth_open_of(r)
 
     r2 = _make_renderer_with_mouth()
     r2._mouth_level_fn = lambda: 0.02
     for _ in range(20):
         r2._update_mouth()
-    quiet = r2._model.writes[-1][1]
+    quiet = _mouth_open_of(r2)
 
     assert loud > quiet
 
@@ -128,14 +147,17 @@ def test_mouth_level_source_exception_falls_back():
 
     r._mouth_level_fn = boom
     r._update_mouth()  # 不应抛异常
-    assert len(r._model.writes) == 1
+    # 按参数名计数（LIP-1 后每帧还会写 MouthForm）
+    opens = [w for w in r._model.writes if w[0] == _FakeStdParams.ParamMouthOpenY]
+    assert len(opens) == 1
 
 
 def test_mouth_level_source_none_falls_back():
     r = _make_renderer_with_mouth()
     r._mouth_level_fn = lambda: None
     r._update_mouth()
-    assert len(r._model.writes) == 1
+    opens = [w for w in r._model.writes if w[0] == _FakeStdParams.ParamMouthOpenY]
+    assert len(opens) == 1
 
 
 def test_mouth_env_resets_when_not_speaking():
@@ -148,7 +170,7 @@ def test_mouth_env_resets_when_not_speaking():
     r._speaking = False
     r._update_mouth()
     assert r._mouth_env == 0.0
-    assert r._model.writes[-1][1] == 0.0
+    assert _mouth_open_of(r) == 0.0
 
 
 def test_mouth_set_level_source_rejects_non_callable():

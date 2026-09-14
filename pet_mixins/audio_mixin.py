@@ -37,6 +37,12 @@ class AudioMixin:
         r = getattr(self, '_renderer', None)
         if r is not None and hasattr(r, 'set_speaking'):
             r.set_speaking(False)
+        # LIP-1：清除口型时间轴（否则下一句会沿用旧时间轴）
+        if r is not None and hasattr(r, 'clear_lip_timeline'):
+            try:
+                r.clear_lip_timeline()
+            except Exception:
+                logger.debug("清口型时间轴失败", exc_info=True)
         self._set_anim_seq('idle')
         logger.debug("AUDIO-07 TTS mouth: restored idle")
 

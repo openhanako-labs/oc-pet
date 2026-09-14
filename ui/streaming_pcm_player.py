@@ -84,6 +84,9 @@ if _QT_OK:
             # 最近一次被声卡拉走的音频块的归一化 RMS（0~1）。
             # 由音频线程写、渲染线程读；Python 浮点赋值是原子的，无需额外锁。
             self.level: float = 0.0
+            # 已被声卡取走的**总字节数**（LIP-1：口型时间轴的播放时钟）。
+            # 用它而非墙钟，避免网络/合成卡顿时口型跑到声音前面。
+            self.consumed_bytes: int = 0
 
         def append(self, data: bytes) -> None:
             if not data:
@@ -114,6 +117,10 @@ if _QT_OK:
                 return 0.0
             return self.level
 
+        def played_bytes(self) -> int:
+            """已被声卡取走的总字节数。"""
+            return self.consumed_bytes
+
         def isSequential(self) -> bool:  # noqa: N802 (Qt 命名)
             return True
 
@@ -141,6 +148,7 @@ if _QT_OK:
             # 实时电平：在"真正被声卡拉走"的这一层采样，是口型的唯一真相点。
             # 注意必须在锁外算（RMS 可能耗时，不能阻塞 append/feed）。
             self.level = _rms_int16(result)
+            self.consumed_bytes += len(result)
             return result
 
         def writeData(self, data) -> int:  # noqa: N802
@@ -208,6 +216,23 @@ class StreamingPcmPlayer(QObject):
         except Exception:
             return 0.0
 
+    def played_seconds(self) -> float:
+        """已播放时长（秒）。LIP-1 口型时间轴的同步时钟。
+
+        基于声卡实际取走的字节数计算，而非墙钟——
+        这样网络/合成卡顿时口型不会跑到声音前面。
+        """
+        dev = self._device
+        if dev is None:
+            return 0.0
+        try:
+            nbytes = int(dev.played_bytes())
+        except Exception:
+            return 0.0
+        # Int16 单声道：每样本 2 字节
+        frames = nbytes / 2.0 / max(1, self._channels)
+        return max(0.0, frames / float(self._sample_rate or 1))
+
     def disable(self) -> None:
         self._enabled = False
         self.stop()
@@ -252,6 +277,8 @@ class StreamingPcmPlayer(QObject):
                     self._pump.start()
                 self._active = True
                 self._finished = False
+                # LIP-1：新一句从 0 起算播放时钟（否则口型会继承上一句的进度）
+                self._device.consumed_bytes = 0
                 # 冲刷 prepare 之前 feed 进来的数据
                 while self._pending:
                     self._device.append(self._pending.popleft())

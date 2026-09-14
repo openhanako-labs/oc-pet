@@ -458,6 +458,13 @@ class Live2DRenderer(AvatarRenderer):
         # 口型包络（快起慢落）：音频块粒度约 40~170ms，直接跟会让嘴"跳"。
         # 起得快要跟上辅音爆发，落得慢要避免字间出现生硬的闭合。
         self._mouth_env: float = 0.0
+        # LIP-1：音素级口型时间轴（由 set_lip_timeline 注入）
+        self._lip_frames: list = []
+        self._lip_clock_fn = None
+        self._lip_started_at: float = 0.0
+        # 当前音素形状（用于振幅级模式下保持唇形连贯）
+        self._mouth_lip_open: float = 0.0
+        self._mouth_lip_form: float = 0.0
 
         # 当前情绪
         self._emotion_target: str = "neutral"
@@ -1487,49 +1494,76 @@ class Live2DRenderer(AvatarRenderer):
             self._note_frame_failure("GazeParams", e)
 
     def _update_mouth(self) -> None:
-        """说话口型：优先跟真实音频电平，无电平源时回退正弦包络。
+        """说话口型。三级优先（LIP-1 2026-09-14）：
 
-        v2（2026-09-14）：从"纯正弦开合"改为"跟音量"。
-        正弦版的问题：说"啊——"和说"嘶——"嘴动得一模一样，看着像比划不像说话。
-        现在若上游（StreamingPcmPlayer）提供了实时 RMS 电平，就按音量驱动嘴巴——
-        重音、停顿、快慢都能看出来。
+        1. **音素级**：有口型时间轴 + 播放位置 → 嘴型跟**具体发音**
+           （`/a/` 张大、`/i/` 咧嘴、`/m/` 闭唇）
+        2. **振幅级**：有实时电平 → 嘴跟**音量**（重音/停顿能看出来）
+        3. **正弦回退**：都没有 → 原行为（不会因为没接上就不动嘴）
 
-        电平源不可用（普通文件 TTS / 设备未就绪 / 未接线）时自动回退到原正弦，
-        行为与旧版一致，不会因为没接上就不动嘴。
+        音素级与振幅级的关系：音素级定**嘴型**（open/form 的形状），
+        振幅级定**幅度**（同样的形状，声大时更夸张）。
+        两者叠加才有“既对音又跟声”的效果。
         """
         if not self._model:
             return
         P = self._live2d.StandardParams
-        if self._speaking:
-            level = self._read_mouth_level()
-            if level is not None:
-                # 快起慢落包络：起 0.55 / 落 0.18。
-                # 直接跟原始 RMS 会因音频块粒度（~40~170ms）出现"跳帧感"。
-                # 注：系数按帧计（与同函数正弦版 `_mouth_phase += 0.35` 同口径），
-                # 帧率偏离设计值时快慢会略变，但不影响"快起慢落"这个相对关系。
-                env = self._mouth_env
-                target = level
-                # 上升快、下降慢：视觉上像真人在说话
-                k = 0.55 if target > env else 0.18
-                env = env + (target - env) * k
-                self._mouth_env = env
-                # 电平驱动：RMS 天然偏小，做一次非线性提亮，让视觉幅度跟得上听觉。
-                # 保留小底噪（静音段嘴微开）避免"说话时嘴完全闭合"的僵硬感。
-                val = 0.08 + 0.92 * min(1.0, math.sqrt(max(0.0, env)) * 1.6)
-            else:
-                # 回退：原正弦包络（无电平源时行为不变）
-                self._mouth_phase += 0.35
-                val = 0.5 + 0.5 * math.sin(self._mouth_phase * 3.0)
-                val = 0.15 + val * 0.6
-        else:
-            # 停止说话：包络归零，下次开口从闭合起算，不会"继承"上次的幅度
+        if not self._speaking:
+            # 停止说话：包络归零，下次开口从闭合起算
             self._mouth_env = 0.0
-            val = 0.0
+            self._mouth_lip_open = 0.0
+            self._mouth_lip_form = 0.0
+            try:
+                self._model.SetParameterValue(P.ParamMouthOpenY, 0.0, 1.0)
+            except Exception as e:
+                self._note_frame_failure("MouthOpen", e)
+            return
+
+        level = self._read_mouth_level()
+        lip = self._read_lip_shape()   # (open, form) 或 None
+
+        if lip is not None:
+            # ── 音素级：嘴型由发音决定 ──
+            lip_open, lip_form = lip
+            self._mouth_lip_open = lip_open
+            self._mouth_lip_form = lip_form
+            # 振幅作为“音量缩放”：声大时形状更夸张，但不改变形状本身
+            if level is not None:
+                env = getattr(self, "_mouth_env", 0.0)
+                k = 0.55 if level > env else 0.18
+                self._mouth_env = env + (level - env) * k
+                gain = 0.55 + 0.45 * min(1.0, math.sqrt(max(0.0, self._mouth_env)) * 1.6)
+            else:
+                gain = 1.0
+            val = max(0.0, min(1.0, lip_open * gain))
+            form = max(-1.0, min(1.0, lip_form))
+        elif level is not None:
+            # ── 振幅级（无音素时间轴）：跟音量 ──
+            env = getattr(self, "_mouth_env", 0.0)
+            k = 0.55 if level > env else 0.18
+            env = env + (level - env) * k
+            self._mouth_env = env
+            # RMS 天然偏小，做一次非线性提亮；保留小底噪避免完全闭合的僵硬感
+            val = 0.08 + 0.92 * min(1.0, math.sqrt(max(0.0, env)) * 1.6)
+            form = getattr(self, "_mouth_lip_form", 0.0)  # 沿用上一次唇形（保持连贯）
+        else:
+            # ── 正弦回退（与 LIP-1 之前一致）──
+            self._mouth_phase = getattr(self, "_mouth_phase", 0.0) + 0.35
+            val = 0.5 + 0.5 * math.sin(self._mouth_phase * 3.0)
+            val = 0.15 + val * 0.6
+            form = 0.0
+
         try:
             self._model.SetParameterValue(P.ParamMouthOpenY, val, 1.0)
         except Exception as e:
             # 失败 = 说话时嘴不动（TTS 同步的核心），用户 100% 能看见
             self._note_frame_failure("MouthOpen", e)
+        # 唇形（圆唇/扁唇）——非所有模型都有该参数，失败静默。
+        # 注意：**无条件写入**（包括 0）——若只写非零值，标点/静音段会残留上一字的唇形。
+        try:
+            self._model.SetParameterValue(P.ParamMouthForm, form, 0.8)
+        except Exception:
+            logger.debug("Live2DRenderer: 模型无 MouthForm 参数", exc_info=True)
 
     # ── P4/P2-6: 程序化自主动作层（让 Live2D 真正"活"，不依赖 motion 文件）──
 
@@ -3038,6 +3072,47 @@ class Live2DRenderer(AvatarRenderer):
         接进来。未接入时 _update_mouth 自动回退正弦包络。
         """
         self._mouth_level_fn = fn if callable(fn) else (lambda: None)
+
+    def set_lip_timeline(self, frames, clock_fn=None) -> None:
+        """接入口型时间轴（LIP-1）。
+
+        Args:
+            frames: `core.lip_sync.LipFrame` 列表（按时间升序）。
+                空列表/None = 清除，回退到振幅/正弦。
+            clock_fn: 返回"当前播放位置（秒）"的可调用对象。
+                未提供时用内部计时器（从 set_lip_timeline 起算）。
+
+        由 PetWindow 在 TTS begin 时调用（那时文本已完整，可预生成时间轴）。
+        """
+        self._lip_frames = list(frames) if frames else []
+        self._lip_clock_fn = clock_fn if callable(clock_fn) else None
+        self._lip_started_at = time.monotonic()
+
+    def clear_lip_timeline(self) -> None:
+        """清除口型时间轴（TTS 结束时调用）。"""
+        self._lip_frames = []
+        self._lip_clock_fn = None
+        self._mouth_lip_open = 0.0
+        self._mouth_lip_form = 0.0
+
+    def _read_lip_shape(self):
+        """读当前应采用的 (开口度, 唇形)。无时间轴/超出范围返回 None。
+
+        热路径（每帧调用）：时间轴为空时直接返回 None（零开销）。
+        """
+        frames = getattr(self, "_lip_frames", None)
+        if not frames:
+            return None
+        try:
+            from core.lip_sync import sample as _lip_sample
+            if self._lip_clock_fn is not None:
+                at = float(self._lip_clock_fn())
+            else:
+                at = time.monotonic() - getattr(self, "_lip_started_at", 0.0)
+            return _lip_sample(frames, at)
+        except Exception:
+            logger.debug("Live2DRenderer: 口型时间轴采样失败（回退振幅）", exc_info=True)
+            return None
 
     def _read_mouth_level(self):
         """读一次电平，失败一律返回 None（走正弦回退）。
