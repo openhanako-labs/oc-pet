@@ -591,3 +591,189 @@ def test_qwen_tts_uses_sdpa_attention():
     src = inspect.getsource(qwen_tts)
     assert "attn_implementation" in src, "Qwen TTS 应显式指定 attention 实现"
     assert '"sdpa"' in src or "'sdpa'" in src, "应使用 SDPA（而非默认）"
+
+# ── 2026-09-15 死锁修复（TTS 不出声 + 主线程卡死）──
+#
+# 事故现场（logs/oc_pet.log）：
+#   13:38:15 合成启动（code_predictor 初始化）
+#   13:38:15 → 13:39:37 零产出（无"口型时间轴"/"开始流式播放"/"合成完成"）
+#   13:39:37 主线程心跳停 → launcher 92s 后判卡死强杀
+#
+# 三个独立缺陷：
+#   ① frames_q.get() 无超时 → 生成 stall 时消费端永久阻塞
+#   ② atEnd()/is_playing() 持 self._lock 调 Qt → 与音频线程锁序反转
+#   ③ 分句预合成 enqueue() 写了但从未接线
+
+
+def test_stream_consumer_has_timeout():
+    """★ ① frames_q.get() 必须带超时。
+
+    无超时 → 生成线程 stall 时消费端永久阻塞，finally 里的 th.join
+    永远到不了 → TTS 线程池被占死 → 后续所有 TTS 都不出声。
+    """
+    import inspect
+    from tts_provider import qwen_tts
+    src = inspect.getsource(qwen_tts.QwenTtsProvider.synth_stream)
+    assert "frames_q.get(timeout=" in src, "消费端必须带超时"
+    assert "_queue.Empty" in src, "必须捕获 Empty 以便优雅退出"
+
+
+def test_stream_stall_raises_instead_of_hanging():
+    """stall 时应抛错（让上层知道），而不是静默永久挂住。"""
+    import inspect
+    from tts_provider import qwen_tts
+    src = inspect.getsource(qwen_tts.QwenTtsProvider.synth_stream)
+    assert "_stalled" in src
+    assert "stall" in src.lower()
+
+
+def test_atend_does_not_deadlock_with_concurrent_reads():
+    """★ ② atEnd() 与 readData() 并发不得死锁（行为验证）。
+
+    旧实现两者都取 self._lock；atEnd 由 Qt 音频线程在持内部锁时调用，
+    与主线程的 sink.start() 形成 ABBA → 主线程冻死。
+    这里用多线程真实并发调用来验证不再互相阻塞。
+    """
+    import threading
+    from ui.streaming_pcm_player import _PcmStreamDevice
+
+    d = _PcmStreamDevice()
+    d.append(b"\x00\x01" * 4000)
+    errors = []
+
+    def reader():
+        try:
+            for _ in range(3000):
+                d.readData(256)
+        except Exception as e:
+            errors.append(e)
+
+    def ender():
+        try:
+            for _ in range(3000):
+                d.atEnd()
+                d.pending()
+        except Exception as e:
+            errors.append(e)
+
+    ts = [threading.Thread(target=reader) for _ in range(2)]
+    ts += [threading.Thread(target=ender) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(timeout=10)
+    assert not any(t.is_alive() for t in ts), "并发调用出现阻塞（疑似死锁）"
+    assert not errors, f"并发调用报错: {errors}"
+
+
+def test_atend_is_lock_free():
+    """atEnd 内部不得引用锁对象（防止改回去）。"""
+    from ui.streaming_pcm_player import _PcmStreamDevice
+    names = _PcmStreamDevice.atEnd.__code__.co_names
+    assert "_lock" not in names, f"atEnd 引用了锁: {names}"
+
+
+def test_pump_once_calls_qt_outside_lock():
+    """★ ② _pump_once 的 Qt 调用必须在锁外。"""
+    import inspect
+    from ui.streaming_pcm_player import StreamingPcmPlayer
+    src = inspect.getsource(StreamingPcmPlayer._pump_once)
+    # 锁块应很短（只取快照），后面才是 Qt 调用
+    assert "sink = self._sink" in src, "应在锁内取快照"
+    assert "sink.start(dev)" in src or "sink.state()" in src
+
+
+def test_stop_cleanup_outside_lock():
+    """★ ② stop() 的 _cleanup（含 sink.stop）必须在锁外。"""
+    import inspect
+    from ui.streaming_pcm_player import StreamingPcmPlayer
+    src = inspect.getsource(StreamingPcmPlayer.stop)
+    assert "self._cleanup()" in src
+    # _cleanup 不应出现在 with self._lock 块内
+    lock_pos = src.index("with self._lock:")
+    cleanup_pos = src.index("self._cleanup()")
+    assert cleanup_pos > lock_pos
+
+
+# ── 2026-09-15 分句预合成（stream_mode="sentence"）──
+
+def test_split_tts_sentences_basic():
+    """中文句末标点正确切分，标点随前句。"""
+    from core.conversation_engine import _split_tts_sentences
+    s = "今天天气不错。我们出去走走吧！"
+    assert _split_tts_sentences(s) == ["今天天气不错。", "我们出去走走吧！"]
+
+
+def test_split_tts_sentences_no_punct():
+    """无标点 → 整段返回，不强行切。"""
+    from core.conversation_engine import _split_tts_sentences
+    s = "没有标点的一段长文本"
+    assert _split_tts_sentences(s) == [s]
+
+
+def test_split_tts_sentences_merges_short():
+    """过短片段合并到前一句，避免碎片化。"""
+    from core.conversation_engine import _split_tts_sentences
+    s = "好的。啊。继续"
+    parts = _split_tts_sentences(s)
+    assert len(parts) == 2, parts
+    assert parts[0] == "好的。啊。", parts
+    assert parts[1] == "继续", parts
+
+
+def test_split_tts_sentences_ellipsis():
+    """省略号算句界但不单独成段。"""
+    from core.conversation_engine import _split_tts_sentences
+    s = "你好…我也好"
+    parts = _split_tts_sentences(s)
+    assert parts == ["你好…", "我也好"], parts
+
+
+def test_synth_stream_uses_sentence_mode_by_default():
+    """★ 流式合成默认走分句模式（除非配置为 chunk）。"""
+    import inspect
+    from core.conversation_engine import ConversationEngine
+    src = inspect.getsource(ConversationEngine._synth_stream_and_play)
+    assert "_split_tts_sentences" in src, "应调用切句函数"
+    assert 'stream_mode != "chunk"' in src, "应有 chunk 回退分支"
+    assert "synthesize_stream(_sent" in src, "应逐句合成"
+
+# ── 2026-09-15 分句预合成 ──
+
+
+def test_split_sentences_basic():
+    """★ 按句末标点切分，标点随前句。"""
+    from core.conversation_engine import _split_tts_sentences
+    r = _split_tts_sentences('你好呀！今天天气不错。我们去散步吧？')
+    assert r == ['你好呀！', '今天天气不错。', '我们去散步吧？']
+
+
+def test_split_sentences_no_punct_returns_whole():
+    """无标点 → 整段返回（不强行切）。"""
+    from core.conversation_engine import _split_tts_sentences
+    assert _split_tts_sentences('一句话没有标点') == ['一句话没有标点']
+
+
+def test_split_sentences_empty_and_placeholder():
+    """空文本/纯省略号 → 不炸。"""
+    from core.conversation_engine import _split_tts_sentences
+    assert _split_tts_sentences('') == []
+    assert _split_tts_sentences('…') == ['…']
+
+
+def test_split_sentences_short_fragments_merge():
+    """过短片段合并到前句，避免碎片化。"""
+    from core.conversation_engine import _split_tts_sentences
+    r = _split_tts_sentences('短句。中句，带逗号。长句啊啊啊啊啊啊啊啊啊啊啊！')
+    assert r == ['短句。', '中句，带逗号。', '长句啊啊啊啊啊啊啊啊啊啊啊！']
+
+
+def test_stream_uses_sentence_mode_by_default():
+    """★ 流式合成默认分句：合成循环按句子迭代。"""
+    import inspect
+    from core import conversation_engine
+    src = inspect.getsource(conversation_engine.ConversationEngine._synth_stream_and_play)
+    assert "_split_tts_sentences(tts_text)" in src, "默认应分句"
+    assert 'stream_mode != "chunk"' in src, "应支持 chunk 模式回退"
+    # 逐句调用 synthesize_stream（而非整段一次）
+    assert "for pcm in tts.synthesize_stream(_sent" in src, "应按句合成"

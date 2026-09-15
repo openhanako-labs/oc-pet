@@ -27,6 +27,52 @@ from .perception import PerceptionController
 logger = logging.getLogger(__name__)
 
 
+# ── 分句预合成（2026-09-15）──
+
+_SENT_END = "。！？!?；;…"
+
+
+def _split_tts_sentences(text: str, min_len: int = 2) -> list[str]:
+    """按句末标点切分（标点随前句）。用于分句预合成。
+
+    规则：
+    - 在 。！？!?；;… 处切开，标点随前句
+    - 连续标点/空段跳过
+    - 过短片段（< min_len）合并到前一句，避免碎片化
+    - 无标点或切完只剩一段 → 整段返回（不强行切）
+
+    为什么只按句末切、不按逗号切：句界是自然停顿，听感上是换气；
+    逗号级切分会把句子碎成一字一停，反而更糟。
+    """
+    if not text or not text.strip():
+        return []
+    parts: list[str] = []
+    buf: list[str] = []
+    for ch in text:
+        buf.append(ch)
+        if ch in _SENT_END:
+            seg = "".join(buf).strip()
+            if seg:
+                parts.append(seg)
+            buf = []
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    merged: list[str] = []
+    _strip_re = None
+    for seg in parts:
+        # 有效长度 = 去句末标点后的字符数（避免"啊。"这类 1 字句碎片化）
+        if _strip_re is None:
+            import re as _re
+            _strip_re = _re.compile("[" + _SENT_END + "]")
+        core_len = len(_strip_re.sub("", seg))
+        if merged and core_len < min_len:
+            merged[-1] += seg
+        else:
+            merged.append(seg)
+    return merged
+
+
 def _call_reply_cb(cb, reply, emotion, anim, audio_path, action_intent=None):
     """兼容 4 参（历史契约）与 5 参（含 action_intent）的 on_reply 回调。
 
@@ -1869,14 +1915,40 @@ class ConversationEngine:
 
         n_chunks = 0
         try:
-            for pcm in tts.synthesize_stream(tts_text, voice=voice):
+            # 2026-09-15：分句预合成。
+            # stream_mode="sentence"（默认）：按句子切分，逐句合成。
+            # 作用不是提高 R（R<1 时卡顿仍在），而是把断点移到句界——
+            # 感知上从"话说一半被掐"变成"句间换气"；且每句独立生成，
+            # 单句 stall 不拖累整段（配合 frames_q 超时）。
+            # stream_mode="chunk"：回旧行为（整段一股脑合成）。
+            stream_mode = "sentence"
+            try:
+                from config import load_config as _lc
+                _sm = (((_lc().get("tts", {}) or {}).get("stream", {}) or {}).get("mode")) or "sentence"
+                stream_mode = str(_sm).lower()
+            except Exception:
+                pass
+            sentences = [tts_text]
+            if stream_mode != "chunk":
+                _sents = _split_tts_sentences(tts_text)
+                if len(_sents) > 1:
+                    sentences = _sents
+            for _si, _sent in enumerate(sentences):
                 if self._is_stale(gen):
                     logger.debug("流式合成中途打断: gen=%d", gen)
                     break
-                if not pcm:
-                    continue
-                n_chunks += 1
-                cb("chunk", pcm, gen)
+                if len(sentences) > 1:
+                    logger.debug("分句合成 %d/%d: %r", _si + 1, len(sentences), _sent[:24])
+                for pcm in tts.synthesize_stream(_sent, voice=voice):
+                    if self._is_stale(gen):
+                        logger.debug("流式合成中途打断: gen=%d", gen)
+                        break
+                    if not pcm:
+                        continue
+                    n_chunks += 1
+                    cb("chunk", pcm, gen)
+                if self._is_stale(gen):
+                    break
         except Exception as e:
             logger.warning("流式合成失败: %s", e)
             try:

@@ -673,10 +673,27 @@ class QwenTtsProvider(TTSProvider):
             arr = wav.squeeze().float().cpu().numpy()
             return _float_to_pcm16(arr)
 
+        # 2026-09-15：消费端必须带**超时**。
+        # 实测事故：`frames_q.get()` 无超时——若 `outer.generate()` 不再产出
+        # frame 也不抛异常（CUDA 卡住/显存抖动/静默 stall），消费线程会永久
+        # 阻塞在这里；`finally` 里的 `th.join` 永远到不了，整个 TTS 线程池
+        # 被占死 → 后续所有 TTS 都不出声（用户感知为"TTS 不出现"）。
+        # 超时后主动放弃本句并唤醒等待者，把控制权还给上层。
+        _STALL_TIMEOUT_S = 45.0   # 单块最长等待；超时视为生成 stall
+        _stalled = False
         try:
             target = first_chunk_frames
             while True:
-                item = frames_q.get()
+                try:
+                    item = frames_q.get(timeout=_STALL_TIMEOUT_S)
+                except _queue.Empty:
+                    _stalled = True
+                    logger.warning(
+                        "Qwen TTS 流式生成 stall（%.0fs 无新帧，已产出 %d 帧），"
+                        "放弃本句以免占死 TTS 线程池",
+                        _STALL_TIMEOUT_S, len(all_frames),
+                    )
+                    break
                 if item is None:
                     break
                 if item[0, 0].item() == eos_id:
@@ -686,11 +703,18 @@ class QwenTtsProvider(TTSProvider):
                     yield _decode(emitted, len(all_frames))
                     emitted = len(all_frames)
                     target = chunk_frames  # 首块之后恢复正常块大小
+            # stall 时也把已产出的帧解出来——总比一声不出强
             if emitted < len(all_frames):
                 yield _decode(emitted, len(all_frames))
         finally:
+            # worker 是**生产者**（往 frames_q 放帧），不是消费者；
+            # 这里无需唤醒它。th.join 等一会儿，超时则让它随 daemon 收尾。
             th.join(timeout=5)
 
+        if _stalled:
+            raise RuntimeError(
+                f"Qwen TTS 流式生成 stall（{_STALL_TIMEOUT_S:.0f}s 无新帧）"
+            )
         if err_box:
             raise RuntimeError(f"Qwen TTS 流式生成失败: {err_box[0]}")
 

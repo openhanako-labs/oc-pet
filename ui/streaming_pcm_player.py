@@ -132,21 +132,31 @@ if _QT_OK:
             QIODevice.atEnd() 的默认实现是 `bytesAvailable() == 0`——
             对**流式**设备这是错的："暂时没数据"不等于"流结束"。
 
-            实测后果：首块（8 帧 ≈ 0.67s，约一个字）被拉走后缓冲变空，
-            atEnd() 立即变 True → Qt 认为流已结束 → sink 停止；
-            等下一块（可能 6 秒后）到达时，_pump_once 的重挂条件不成立
-            → **用户听到"播了一个字后面就不播了"**。
+            实测后果：首块被拉走后缓冲变空，atEnd() 立即变 True →
+            Qt 认为流已结束 → sink 停止；等下一块（可能 6 秒后）到达时，
+            _pump_once 的重挂条件不成立 → 用户听到"播了一个字就不播了"。
 
             正确语义：只有收到 eof 标记（上游 finish()）且缓冲抽空才算结束。
+
+            ⚠️ **绝不取 self._lock**（2026-09-15 死锁修复）。
+            本方法由 **Qt 音频线程**在持有 Qt 内部锁时高频调用（每次 pull）。
+            若在此取 self._lock，就与主线程形成 ABBA 死锁：
+              音频线程：Qt内部锁 → 等 self._lock
+              主线程  ：self._lock → 等 Qt内部锁（_sink.start/state）
+            实测后果：主线程心跳停 → launcher 判卡死强杀（事故 2026-09-15）。
+
+            无锁实现：`_eof` 是 bool、`_size` 是 int，CPython 下单个赋值/读取
+            本身就是原子的；这里只做一次快照判断，不需要互斥。
+            注意**不要调 self.bytesAvailable()**——那会进 super() 的 Qt 路径，
+            反而把 Qt 内部锁卷进来。
             """
-            with self._lock:
-                if self._eof and self._size == 0:
-                    return True
-                return False
+            if self._eof and self._size == 0:
+                return True
+            return False
 
         def bytesAvailable(self) -> int:  # noqa: N802
-            with self._lock:
-                return self._size + super().bytesAvailable()
+            # 无锁：_size 是 int（原子读），避开音频线程与主线程的锁交叉
+            return self._size + super().bytesAvailable()
 
         def readData(self, maxlen: int) -> bytes:  # noqa: N802
             with self._lock:
@@ -277,12 +287,14 @@ class StreamingPcmPlayer(QObject):
 
     def set_volume(self, vol: float) -> None:
         self._volume = max(0.0, min(1.0, vol))
+        # 锁内只取快照，Qt 调用在锁外（2026-09-15 锁序反转修复）
         with self._lock:
-            if self._sink is not None:
-                try:
-                    self._sink.setVolume(self._volume)
-                except Exception:
-                    logger.debug("streaming_pcm: 音量设置失败", exc_info=True)
+            sink = self._sink
+        if sink is not None:
+            try:
+                sink.setVolume(self._volume)
+            except Exception:
+                logger.debug("streaming_pcm: 音量设置失败", exc_info=True)
 
     def set_prebuffer(self, seconds: float, max_wait_s: float = 8.0) -> None:
         """固定预缓冲时长（秒）。0 = 关闭。
@@ -344,14 +356,21 @@ class StreamingPcmPlayer(QObject):
             logger.info("智能预缓冲已启用：预期音频 %.2fs（首字会晚，换流畅）", sec)
 
     def is_playing(self) -> bool:
+        """是否正在播放。
+
+        ⚠️ 本方法被**每帧口型探测**调用（高频）。绝不能持 `self._lock` 调
+        `sink.state()`——那是 Qt 内部锁，会与音频线程形成锁序反转，
+        主线程会冻死（事故 2026-09-15）。
+        """
         with self._lock:
-            if self._sink is None:
-                return False
-            try:
-                from PySide6.QtMultimedia import QAudio
-                return self._sink.state() != QAudio.State.StoppedState
-            except Exception:
-                return False
+            sink = self._sink
+        if sink is None:
+            return False
+        try:
+            from PySide6.QtMultimedia import QAudio
+            return sink.state() != QAudio.State.StoppedState
+        except Exception:
+            return False
 
     # ── 生命周期（主线程）──
 
@@ -451,10 +470,15 @@ class StreamingPcmPlayer(QObject):
             self._finished = True
 
     def stop(self) -> None:
-        """立即中断播放并释放资源（主线程调用）。"""
+        """立即中断播放并释放资源（主线程调用）。
+
+        ⚠️ `_cleanup()` 在**锁外**调用（2026-09-15）：它内部的 `sink.stop()`
+        会与 Qt 音频线程同步；持 `self._lock` 调用会把主线程卡死
+        （音频线程若在 `readData` 等锁，就互相等待）。
+        """
         with self._lock:
             was = self._active or self._sink is not None
-            self._cleanup()
+        self._cleanup()
         if was:
             try:
                 self.on_end()
@@ -464,52 +488,65 @@ class StreamingPcmPlayer(QObject):
     # ── 内部（主线程）──
 
     def _pump_once(self) -> None:
-        """主线程定时器：有数据就开/续接 sink；播完就收尾。"""
+        """主线程定时器：有数据就开/续接 sink；播完就收尾。
+
+        ⚠️ **Qt 调用一律在锁外**（2026-09-15 死锁修复）。
+        `sink.start/stop/state` 会与 **Qt 音频线程**同步（内部锁），
+        而音频线程又会在 `readData` 里取设备锁。
+        若主线程持 `self._lock` 调这些方法，就形成锁序反转：
+          主线程：self._lock → Qt内部锁
+          音频线程：Qt内部锁 → 设备锁
+        实测后果：主线程心跳停 → launcher 判卡死强杀（事故 2026-09-15）。
+
+        本方法因此只在锁内**取快照**，锁外做所有 Qt 操作。
+        `self._sink/_device` 由主线程独占写，快照不会读到半成品。
+        """
         with self._lock:
             dev = self._device
-            if dev is None:
-                return
-            try:
-                from PySide6.QtMultimedia import QAudio
-            except ImportError:
-                return
-            try:
-                pending = dev.pending()
-                if self._sink is None:
-                    # 首块数据到了 → 判断是否攒够预缓冲再开声卡
-                    if pending > 0:
-                        if self._should_start_playback(dev, pending):
-                            self._open_sink()
-                        # 不够就继续等（下个泵周期再看）
-                    elif dev.is_eof():
-                        # 一直没有数据就结束（空合成）
-                        self._cleanup()
-                        self.on_end()
-                    return
-
-                state = self._sink.state()
-                # 2026-09-14：重挂条件从 "仅 IdleState" 改为 "非 ActiveState"。
-                # 原因：atEnd 误判导致 sink 停止时，状态可能是 StoppedState
-                # （而非 IdleState），旧条件永远不成立 → 后续数据再也接不上。
-                # 只要还有数据且声卡没在跑，就重新 start。
-                if pending > 0 and state != QAudio.State.ActiveState:
-                    try:
-                        self._sink.start(dev)
-                        logger.debug(
-                            "流式播放：重新挂上 sink（state=%s, pending=%d）",
-                            state, pending,
-                        )
-                    except Exception as e:
-                        logger.debug("重挂 sink 失败: %s", e)
-                elif (dev.is_eof() and pending == 0
-                      and state != QAudio.State.ActiveState):
+            sink = self._sink
+        if dev is None:
+            return
+        try:
+            from PySide6.QtMultimedia import QAudio
+        except ImportError:
+            return
+        try:
+            pending = dev.pending()
+            if sink is None:
+                # 首块数据到了 → 判断是否攒够预缓冲再开声卡
+                if pending > 0:
+                    if self._should_start_playback(dev, pending):
+                        self._open_sink()
+                    # 不够就继续等（下个泵周期再看）
+                elif dev.is_eof():
+                    # 一直没有数据就结束（空合成）
                     self._cleanup()
-                    try:
-                        self.on_end()
-                    except Exception:
-                        logger.debug("streaming_pcm: on_end 回调失败", exc_info=True)
-            except Exception:
-                logger.debug("streaming_pcm: 泵循环异常", exc_info=True)
+                    self.on_end()
+                return
+
+            state = sink.state()
+            # 2026-09-14：重挂条件从 "仅 IdleState" 改为 "非 ActiveState"。
+            # 原因：atEnd 误判导致 sink 停止时，状态可能是 StoppedState
+            # （而非 IdleState），旧条件永远不成立 → 后续数据再也接不上。
+            # 只要还有数据且声卡没在跑，就重新 start。
+            if pending > 0 and state != QAudio.State.ActiveState:
+                try:
+                    sink.start(dev)
+                    logger.debug(
+                        "流式播放：重新挂上 sink（state=%s, pending=%d）",
+                        state, pending,
+                    )
+                except Exception as e:
+                    logger.debug("重挂 sink 失败: %s", e)
+            elif (dev.is_eof() and pending == 0
+                  and state != QAudio.State.ActiveState):
+                self._cleanup()
+                try:
+                    self.on_end()
+                except Exception:
+                    logger.debug("streaming_pcm: on_end 回调失败", exc_info=True)
+        except Exception:
+            logger.debug("streaming_pcm: 泵循环异常", exc_info=True)
 
     def _should_start_playback(self, dev, pending_bytes: int) -> bool:
         """是否该开声卡了（预缓冲判断）。

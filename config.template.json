@@ -70,7 +70,8 @@
       "left_context": 25,
       "prebuffer_seconds": 0,
       "prebuffer_max_wait_seconds": 12.0,
-      "smart_prebuffer": false
+      "smart_prebuffer": false,
+      "mode": "sentence"
     }
   },
   "sfx": {
