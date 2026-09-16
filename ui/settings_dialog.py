@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QCheckBox, QSlider, QSpinBox, QDoubleSpinBox, QComboBox,
@@ -399,6 +400,59 @@ class SettingsDialog(QDialog):
         asr_layout.addRow("麦克风设备", self.asr_device)
 
         voice_layout.addWidget(asr_group)
+
+        # ── 声纹识别（2026-09-15 新增）──
+        # 在 ASR 前加一道门卫：非主人声音直接丢弃，避免视频声/他人声误触发。
+        vp_group = QGroupBox("声纹识别（只认主人声音）")
+        vp_layout = QFormLayout(vp_group)
+        vp_layout.setSpacing(10)
+
+        self.voiceprint_enabled = QCheckBox("启用（非主人声音不进入识别）")
+        self.voiceprint_enabled.setChecked(
+            bool(self._config.get("voiceprint", {}).get("enabled", False))
+        )
+        vp_layout.addRow("", self.voiceprint_enabled)
+
+        # 阈值滑块：0.30~0.90，步进 0.01
+        self.voiceprint_threshold = QDoubleSpinBox()
+        self.voiceprint_threshold.setRange(0.30, 0.90)
+        self.voiceprint_threshold.setSingleStep(0.01)
+        self.voiceprint_threshold.setDecimals(2)
+        self.voiceprint_threshold.setValue(
+            float(self._config.get("voiceprint", {}).get("threshold", 0.55))
+        )
+        self.voiceprint_threshold.setToolTip(
+            "相似度低于此值判为非主人。越高越严（可能误拦自己），越低越松（可能漏拦）。"
+            "建议用下方\"校准\"自动测一个。"
+        )
+        vp_layout.addRow("判定阈值", self.voiceprint_threshold)
+
+        # 状态标签
+        self.voiceprint_status = QLabel("")
+        self.voiceprint_status.setWordWrap(True)
+        vp_layout.addRow("状态", self.voiceprint_status)
+
+        # 按钮行
+        vp_btn_row = QHBoxLayout()
+        self.voiceprint_register_btn = QPushButton("录入主人声纹")
+        self.voiceprint_register_btn.setToolTip("录一段你自己的声音（干净、无背景音，3~10 秒）作为主人样本")
+        self.voiceprint_register_btn.clicked.connect(self._on_voiceprint_register)
+        self.voiceprint_calibrate_btn = QPushButton("校准阈值")
+        self.voiceprint_calibrate_btn.setToolTip(
+            "分别录一段\"你的声音\"和一段\"别人的声音\"，自动计算建议阈值"
+        )
+        self.voiceprint_calibrate_btn.clicked.connect(self._on_voiceprint_calibrate)
+        self.voiceprint_test_btn = QPushButton("测试当前阈值")
+        self.voiceprint_test_btn.clicked.connect(self._on_voiceprint_test)
+        vp_btn_row.addWidget(self.voiceprint_register_btn)
+        vp_btn_row.addWidget(self.voiceprint_calibrate_btn)
+        vp_btn_row.addWidget(self.voiceprint_test_btn)
+        vp_btn_row.addStretch()
+        vp_layout.addRow("", vp_btn_row)
+
+        self._refresh_voiceprint_status()
+
+        voice_layout.addWidget(vp_group)
         voice_layout.addStretch()
 
         self.func_sub_tabs.addTab(voice_tab, "语音")
@@ -1331,6 +1385,155 @@ class SettingsDialog(QDialog):
             logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
         self.tts_model.addItems([m for m in models if m])
 
+    # ── 声纹识别（2026-09-15）────────────────────────────
+
+    def _voiceprint_owner_path(self) -> str:
+        from pathlib import Path
+        return str(Path(__file__).resolve().parents[1] / "data" / "voiceprint" / "owner.wav")
+
+    def _refresh_voiceprint_status(self):
+        """刷新声纹状态标签：是否已录入样本 + 模型是否可用。"""
+        try:
+            import os
+            from pathlib import Path
+            owner = self._voiceprint_owner_path()
+            model = Path(__file__).resolve().parents[1] / "data" / "models" / "speaker" / \
+                "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
+            parts = []
+            parts.append("✅ 已录入主人声纹" if os.path.exists(owner) else "⚠️ 未录入主人声纹（点左侧按钮）")
+            parts.append("✅ 声纹模型就绪" if model.exists() else "❌ 声纹模型缺失（需下载）")
+            self.voiceprint_status.setText("　".join(parts))
+        except Exception as e:
+            self.voiceprint_status.setText(f"状态读取失败: {e}")
+
+    def _record_sample(self, title: str, seconds: float = 4.0):
+        """录一段音频并返回 wav 路径；取消/失败返回 None。
+
+        用 sounddevice 直接录，不依赖桌宠主流程——设置面板里自包含。
+        """
+        import tempfile
+        import time as _t
+        import wave
+        try:
+            import numpy as np
+            import sounddevice as sd
+        except Exception as e:
+            QMessageBox.warning(self, "录音不可用", f"sounddevice/numpy 不可用：{e}")
+            return None
+        try:
+            sr = 16000
+            rec = sd.rec(int(seconds * sr), samplerate=sr, channels=1, dtype="float32")
+            QMessageBox.information(
+                self, title,
+                f"请现在开始说话（{seconds:.0f} 秒）……\n说完点确定后等待录制结束。"
+            )
+            sd.wait()
+            audio = rec.flatten()
+            path = os.path.join(tempfile.gettempdir(), f"vp_sample_{int(_t.time()*1000)}.wav")
+            with wave.open(path, "w") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sr)
+                wf.writeframes((audio * 32767).astype(np.int16).tobytes())
+            return path
+        except Exception as e:
+            QMessageBox.warning(self, "录音失败", str(e))
+            return None
+
+    def _on_voiceprint_register(self):
+        """录入主人声纹样本。"""
+        src = self._record_sample("录入主人声纹", seconds=4.0)
+        if not src:
+            return
+        try:
+            from core.speaker_verify import register_owner
+            ok = register_owner(src)
+            if ok:
+                QMessageBox.information(self, "完成", "主人声纹已录入。")
+            else:
+                QMessageBox.warning(self, "失败", "录入失败（详见日志）。")
+        except Exception as e:
+            QMessageBox.warning(self, "失败", f"录入异常：{e}")
+        finally:
+            try:
+                os.remove(src)
+            except Exception:
+                pass
+        self._refresh_voiceprint_status()
+
+    def _on_voiceprint_calibrate(self):
+        """校准：录一段主人声 + 一段他人声，算建议阈值。"""
+        try:
+            from core.speaker_verify import SpeakerVerifier
+        except Exception as e:
+            QMessageBox.warning(self, "不可用", f"声纹模块加载失败：{e}")
+            return
+        owner = self._record_sample("校准·第 1 步：主人声音", seconds=4.0)
+        if not owner:
+            return
+        other = self._record_sample("校准·第 2 步：他人声音（或用手机放视频声）", seconds=4.0)
+        if not other:
+            try:
+                os.remove(owner)
+            except Exception:
+                pass
+            return
+        try:
+            v = SpeakerVerifier(owner_path=owner)
+            sim_self = v.similarity(owner)   # 自比，应接近 1.0
+            sim_other = v.similarity(other)
+            if sim_other is None:
+                QMessageBox.warning(self, "校准失败", "无法计算相似度（模型或音频异常）。")
+                return
+            # 建议阈值：主人声与异人声的中间值（自比不作下限，用他人声+余量）
+            suggested = round((sim_other + 0.15 + 0.95) / 2, 2)
+            suggested = max(0.35, min(0.85, suggested))
+            self.voiceprint_threshold.setValue(suggested)
+            QMessageBox.information(
+                self, "校准完成",
+                f"主人声自比相似度：{sim_self:.3f}\n"
+                f"他人声相似度：{sim_other:.3f}\n\n"
+                f"建议阈值：{suggested:.2f}（已填入，可手动微调）"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "校准异常", str(e))
+        finally:
+            for p in (owner, other):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+
+    def _on_voiceprint_test(self):
+        """测试：录一段音，看当前阈值下是否判为主人。"""
+        try:
+            from core.speaker_verify import SpeakerVerifier
+        except Exception as e:
+            QMessageBox.warning(self, "不可用", f"声纹模块加载失败：{e}")
+            return
+        sample = self._record_sample("测试声纹", seconds=3.0)
+        if not sample:
+            return
+        try:
+            thr = float(self.voiceprint_threshold.value())
+            v = SpeakerVerifier(threshold=thr)
+            sim = v.similarity(sample)
+            if sim is None:
+                QMessageBox.information(self, "测试结果", "无法计算（可能未录入主人声纹或模型缺失）。")
+            else:
+                verdict = "✅ 判为主人" if sim >= thr else "🚫 判为非主人"
+                QMessageBox.information(
+                    self, "测试结果",
+                    f"相似度：{sim:.3f}\n阈值：{thr:.2f}\n结论：{verdict}"
+                )
+        except Exception as e:
+            QMessageBox.warning(self, "测试异常", str(e))
+        finally:
+            try:
+                os.remove(sample)
+            except Exception:
+                pass
+
     def _on_asr_provider_select(self, idx: int):
         """ASR provider 下拉选择 → 自动填充 URL、Key、模型列表"""
         prov_id = self.asr_provider_select.itemData(idx)
@@ -1608,6 +1811,17 @@ class SettingsDialog(QDialog):
         # 麦克风设备（2026-08-22 新增）
         if hasattr(self, "asr_device"):
             c["asr"]["device"] = self.asr_device.currentData() or ""
+
+        # 声纹识别（2026-09-15）
+        if hasattr(self, "voiceprint_enabled"):
+            vp = c.setdefault("voiceprint", {})
+            vp["enabled"] = bool(self.voiceprint_enabled.isChecked())
+            vp["threshold"] = float(self.voiceprint_threshold.value())
+            vp.setdefault(
+                "model_path",
+                "data/models/speaker/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+            )
+            vp.setdefault("owner_sample", "data/voiceprint/owner.wav")
 
         # 记忆注入
         c.setdefault("memory", {})["budget_mode"] = "auto" if self.mem_mode.currentIndex() == 0 else "manual"

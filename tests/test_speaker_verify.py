@@ -100,3 +100,35 @@ def test_verifier_sticky_failure(tmp_path):
     assert v.verify("a.wav") is True
     assert v._failed is True  # 已标记失败
     assert v.verify("b.wav") is True
+
+
+# ── 设置面板声纹逻辑（不弹窗、不碰麦克风）──────────────
+
+
+def test_settings_dialog_has_voiceprint_widgets():
+    """★ 设置面板应包含声纹控件（启用/阈值/三个按钮）。"""
+    import inspect
+    from ui import settings_dialog
+    src = inspect.getsource(settings_dialog.SettingsDialog)
+    assert "voiceprint_enabled" in src
+    assert "voiceprint_threshold" in src
+    assert "_on_voiceprint_register" in src
+    assert "_on_voiceprint_calibrate" in src
+    assert "_on_voiceprint_test" in src
+
+
+def test_settings_dialog_saves_voiceprint_config():
+    """★ _save 应写入 voiceprint.enabled / threshold。"""
+    import inspect
+    from ui import settings_dialog
+    src = inspect.getsource(settings_dialog.SettingsDialog._save)
+    assert "voiceprint" in src
+    assert "enabled" in src and "threshold" in src
+
+
+def test_voiceprint_threshold_range():
+    """阈值控件范围应落在 0.30~0.90（防止误设极端值）。"""
+    import inspect
+    from ui import settings_dialog
+    src = inspect.getsource(settings_dialog.SettingsDialog)
+    assert "setRange(0.30, 0.90)" in src
