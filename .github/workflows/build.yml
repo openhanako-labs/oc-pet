@@ -25,7 +25,11 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+          # 打包用精简清单（requirements-build.txt），不用完整依赖：
+          # 后者含 openai-whisper → torch（CPU 版解压 ~1.5GB），
+          # 会把发布产物撑到 650MB+。被砍项都有代码级降级路径，
+          # 详见 requirements-build.txt 头部说明。
+          pip install -r requirements-build.txt
           pip install pyinstaller
 
       - name: Build with PyInstaller

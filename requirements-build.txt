@@ -1,0 +1,73 @@
+# oc-pet 打包依赖（PyInstaller 构建用）
+#
+# 与 requirements.txt 的区别：
+#   requirements.txt          完整依赖——含本地 ASR / 本地 TTS / 记忆向量化等
+#                             重型可选件（torch 4.2GB、onnxruntime 748MB），
+#                             直接把发布产物撑到 650MB+
+#   本文件                     发布产物用的精简集——保留「开箱即用」的核心功能，
+#                             砍掉体积巨大且代码有降级路径的可选件
+#
+# 被砍掉的（都能后装补回，见文件末尾「补装」段）：
+#   openai-whisper  → torch 4.2GB     本地 ASR 的 CUDA 路径
+#   onnxruntime 748MB                 记忆向量化 / Silero VAD
+#   transformers / tokenizers         上述两者的依赖
+#   funasr / modelscope / cosyvoice   本地 TTS 引擎（默认引擎是 Edge，不受影响）
+#
+# 代码依据：以上每一处 import 都在 try/except 内，缺失即走降级路径
+#   - torch 缺失        → whisper 降级 faster-whisper（CPU）
+#   - onnxruntime 缺失  → 记忆召回降级纯 BM25
+#   - cosyvoice 缺失    → TTS 走 edge / qwen 等其他 provider
+#
+# 安装: pip install -r requirements-build.txt
+
+# ── L1 核心依赖（必须）──
+PySide6~=6.5          # GUI 框架（含 QtMultimedia 音频播放）
+PySide6-Addons~=6.5
+requests~=2.28
+Pillow~=9.0
+PyYAML~=6.0
+websocket-client~=1.8
+
+# ── L2 音频（录音 + 播放 + 口型）──
+sounddevice~=0.4.6
+numpy~=1.24
+scipy~=1.10
+soundfile~=0.12
+pydub~=0.25           # mp3/wav 解码（口型能量分段）
+imageio-ffmpeg~=0.4   # 自带 ffmpeg 二进制
+
+# ── L2 Live2D 渲染 ──
+# PyPI 上最高只有 0.7.0.4，没有 1.x
+live2d-py~=0.7
+
+# ── L3 TTS（语音合成）──
+edge-tts>=7.0         # 默认引擎（免费在线）
+                      # 必须 >=7.0：代码用 Communicate(volume=, boundary=)
+tqdm~=4.65            # CosyVoice 间接依赖（保留，成本低）
+
+# ── L3 ASR（语音输入）──
+pydantic~=2.0
+pypinyin~=0.55        # 音素级口型（文本 → 拼音 → 口型时间轴）
+psutil~=5.9           # 内存检测
+sherpa-onnx>=1.13.0   # 声纹识别（3d-speaker campplus）
+faster-whisper>=1.0   # 本地 ASR 的 CPU 后端（不依赖 torch）
+
+# ── SMTC 媒体感知（Windows）──
+comtypes>=1.4.0       # Windows COM 接口
+
+# ── 其他 ──
+mcp~=1.27.0           # Skyrim MCP 桥接
+
+# ─────────────────────────────────────────────────────────────
+# 补装（用户想启用被砍掉的功能时）
+#
+# 本地 ASR（CUDA 加速）:
+#     pip install openai-whisper
+# 记忆向量化 / VAD:
+#     pip install onnxruntime tokenizers
+# 本地 TTS 引擎（CosyVoice）:
+#     pip install -r requirements_cosyvoice.txt
+#
+# 注：打包产物是 onedir 模式，补装的包需放到产物目录的 _internal/ 下，
+#     或改用源码运行（python main.py）以获得完整依赖。
+# ─────────────────────────────────────────────────────────────
