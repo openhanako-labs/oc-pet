@@ -292,6 +292,17 @@ class SettingsDialog(QDialog):
         self.tts_provider.addItems(["本地 CosyVoice", "MIMO TTS", "API 调用", "微软 Edge (免费)", "Qwen3-TTS 本地"])
         tts_prov_map = {"cosyvoice": 0, "mimo": 1, "api": 2, "edge": 3, "qwen": 4}
         self.tts_provider.setCurrentIndex(tts_prov_map.get(self._config.get("tts", {}).get("provider", "cosyvoice"), 0))
+        # 脏标记（2026-09-16）：只有用户**真的动过**这个下拉，保存时才写全局。
+        #
+        # 起因：用户报“在「桌宠独立配置」改了 TTS，全局也跟着变”。
+        # 根因不是覆盖，而是 _save() **无条件**把本下拉当前值写回全局
+        # （它初始值来自 config，本来不该算用户意图）。
+        # 后果：用户在基础页改独立配置时，功能页这个下拉的值也被一起落盘。
+        self._tts_provider_dirty = False
+        self._tts_edge_voice_dirty = False
+        self.tts_provider.currentIndexChanged.connect(
+            lambda _i: setattr(self, "_tts_provider_dirty", True)
+        )
         tts_layout.addRow("TTS 引擎", self.tts_provider)
 
         # 微软 Edge 音色选择（仅当选中 Edge 引擎时显示）
@@ -304,6 +315,9 @@ class SettingsDialog(QDialog):
         cur_voice = self._config.get("tts", {}).get("edge_voice", DEFAULT_VOICE)
         idx = self.tts_edge_voice.findText(cur_voice)
         self.tts_edge_voice.setCurrentIndex(idx if idx >= 0 else 0)
+        self.tts_edge_voice.currentIndexChanged.connect(
+            lambda _i: setattr(self, "_tts_edge_voice_dirty", True)
+        )
         tts_layout.addRow("Edge 音色", self.tts_edge_voice)
 
         def _toggle_edge_voice():
@@ -1735,11 +1749,18 @@ class SettingsDialog(QDialog):
         c["scale"] = self.scale.value() / 100
         c["mouse_interaction"] = self.mouse_interaction.isChecked()
 
-        # TTS
+        # TTS（全局默认值）
+        #
+        # 2026-09-16：只写用户**动过**的字段。
+        # 原先无条件写 provider / edge_voice，导致“在基础页改独立配置，
+        # 保存时把功能页这个下拉的值也一起落盘”，用户感知为“互相覆盖”。
         c.setdefault("tts", {})["enabled"] = self.tts_enabled.isChecked()
-        c["tts"]["provider"] = ["cosyvoice", "mimo", "api", "edge", "qwen"][self.tts_provider.currentIndex()]
+        if getattr(self, "_tts_provider_dirty", False):
+            c["tts"]["provider"] = ["cosyvoice", "mimo", "api", "edge", "qwen"][self.tts_provider.currentIndex()]
+        elif "provider" not in c["tts"]:
+            c["tts"]["provider"] = "cosyvoice"
         c["tts"]["volume"] = self.tts_volume.value() / 100
-        if hasattr(self, "tts_edge_voice"):
+        if hasattr(self, "tts_edge_voice") and getattr(self, "_tts_edge_voice_dirty", False):
             c["tts"]["edge_voice"] = self.tts_edge_voice.currentText()
 
         # SFX
