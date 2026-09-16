@@ -231,7 +231,7 @@ def test_edge_synthesize_voice_override(monkeypatch, tmp_path):
     captured: dict = {}
 
     class _FakeCommunicate:
-        def __init__(self, text, voice, rate="+0%", pitch="+0Hz", boundary=None):
+        def __init__(self, text, voice, rate="+0%", pitch="+0Hz", volume="+0%", boundary=None):
             captured["text"] = text
             captured["voice"] = voice
 

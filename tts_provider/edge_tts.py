@@ -128,25 +128,26 @@ class EdgeTtsProvider(TTSProvider):
         # P2-7: 显式 voice 参数优先（角色/情绪音色映射），未提供则用本 provider 默认
         eff_voice = voice or self._voice
         
-        # P0: 情感 TTS 参数（emotion → rate/pitch 调整）
-        # 默认：+0% / +0Hz
+        # P0: 情感 TTS 参数（emotion → pitch/volume）
+        #
+        # 2026-09-16 改：旧实现用 emotion 同时改 rate 与 pitch，
+        # 而「改语速」会让听感从"她心情变了"变成"换了一个人说话"。
+        # 现在语速恒定（+0%），情绪只走 pitch/volume，见 emotion_prosody。
         eff_rate = self._rate
         eff_pitch = self._pitch
+        eff_volume = "+0%"
         if emotion:
-            emotion_tts_map = {
-                "happy": ("+15%", "+10Hz"),    # 快一点，音调高一点
-                "sad": ("-20%", "-10Hz"),      # 慢一点，音调低一点
-                "angry": ("+25%", "+15Hz"),    # 很快，音调很高
-                "surprised": ("+30%", "+20Hz"), # 最快，音调最高
-                "thinking": ("-10%", "+0Hz"),  # 稍慢，音调不变
-                "cute": ("+10%", "+20Hz"),     # 稍快，音调高
-            }
-            if emotion in emotion_tts_map:
-                eff_rate, eff_pitch = emotion_tts_map[emotion]
-                logger.debug("情感 TTS 参数: emotion=%s rate=%s pitch=%s", emotion, eff_rate, eff_pitch)
-        
-        # 缓存：同文本+音色+语速+情感复用
-        cache_key = f"edge:{eff_voice}:{eff_rate}:{eff_pitch}:{text}"
+            from .emotion_prosody import add_prosody, prosody_for
+            emo_pitch, emo_vol = prosody_for(emotion)
+            eff_pitch = add_prosody(self._pitch, emo_pitch)
+            eff_volume = emo_vol
+            logger.debug(
+                "情感 TTS 参数: emotion=%s pitch=%s volume=%s (rate 恒定 %s)",
+                emotion, eff_pitch, eff_volume, eff_rate,
+            )
+
+        # 缓存：同文本+音色+语速+音调+音量+情感复用
+        cache_key = f"edge:{eff_voice}:{eff_rate}:{eff_pitch}:{eff_volume}:{text}"
         text_hash = hashlib.md5(cache_key.encode()).hexdigest()[:12]
         output_path = OUTPUT_DIR / f"edge_{text_hash}.mp3"
 
@@ -162,7 +163,7 @@ class EdgeTtsProvider(TTSProvider):
             # 侧车写失败不影响出声（save_words 内部吞异常）。
             async def _synth():
                 comm = edge_tts.Communicate(
-                    text, eff_voice, rate=eff_rate, pitch=eff_pitch,
+                    text, eff_voice, rate=eff_rate, pitch=eff_pitch, volume=eff_volume,
                     boundary="WordBoundary",
                 )
                 words: list[dict] = []

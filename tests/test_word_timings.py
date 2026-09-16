@@ -131,7 +131,7 @@ def test_edge_provider_writes_sidecar(tmp_path, monkeypatch):
     from tts_provider import edge_tts as edge_mod
 
     class _FakeCommunicate:
-        def __init__(self, text, voice, rate=None, pitch=None, boundary=None):
+        def __init__(self, text, voice, rate=None, pitch=None, volume=None, boundary=None):
             assert boundary == "WordBoundary", "必须请求词边界"
             self._text = text
 
@@ -164,7 +164,7 @@ def test_edge_provider_survives_sidecar_failure(tmp_path, monkeypatch):
     from tts_provider import edge_tts as edge_mod
 
     class _FakeCommunicate:
-        def __init__(self, text, voice, rate=None, pitch=None, boundary=None):
+        def __init__(self, text, voice, rate=None, pitch=None, volume=None, boundary=None):
             pass
 
         async def stream(self):
