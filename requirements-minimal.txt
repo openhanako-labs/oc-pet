@@ -13,10 +13,11 @@ PyYAML~=6.0
 websocket-client~=1.8
 
 # ── L2 Live2D 渲染 ──
-live2d-py~=1.0
+# PyPI 上最高只有 0.7.0.4，没有 1.x（~=1.0 会让干净环境 pip install 失败）
+live2d-py~=0.7
 
 # ── L3 TTS 依赖（语音合成）──
-edge-tts~=6.1         # 微软 Edge TTS（免费在线，默认引擎）
+edge-tts>=7.0         # 必须 >=7.0（代码用 Communicate(volume=, boundary=) 与 stream()）
 
 # ── 其他依赖 ──
 pydantic~=2.0
