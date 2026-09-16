@@ -231,12 +231,16 @@ def test_edge_synthesize_voice_override(monkeypatch, tmp_path):
     captured: dict = {}
 
     class _FakeCommunicate:
-        def __init__(self, text, voice, rate="+0%", pitch="+0Hz"):
+        def __init__(self, text, voice, rate="+0%", pitch="+0Hz", boundary=None):
             captured["text"] = text
             captured["voice"] = voice
 
         async def save(self, path):
             Path(path).write_bytes(b"ID3fake")
+
+        async def stream(self):
+            # edge_tts 7.x 的 stream() 产出 audio / WordBoundary 事件
+            yield {"type": "audio", "data": b"ID3fake"}
 
     fake_mod = types.ModuleType("edge_tts")
     fake_mod.Communicate = _FakeCommunicate

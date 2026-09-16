@@ -16,6 +16,8 @@ import math
 import os
 from collections import deque
 
+from tts_provider.word_timings import level_at as word_level_at, load_words
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,6 +59,10 @@ class TTSTtsPlayer:
         self._volume: float = 0.8
         # 分句预合成的排队（enqueue）：当前句播完自动接下一句
         self._queue: deque = deque()
+        # 词级口型：当前音频路径 + 词区间缓存（同一文件不重复读盘）
+        self._current_audio_path = None
+        self._words_cache_for = None
+        self._words_cache = None
         # 事件回调（桌宠主程序连接这些来驱动口型/状态）
         self.on_start: callable = lambda: None       # 开始播放
         self.on_end: callable = lambda: None         # 播放结束
@@ -124,6 +130,9 @@ class TTSTtsPlayer:
             file_url = QUrl.fromLocalFile(os.path.abspath(audio_path))
             self._player.setSource(file_url)
 
+            # 词级口型：记下当前音频路径，current_level() 据此查侧车
+            self._current_audio_path = os.path.abspath(audio_path)
+
             self._player.mediaStatusChanged.connect(self._on_status)
 
             self._player.play()
@@ -189,7 +198,12 @@ class TTSTtsPlayer:
         """口型电平估算（0~1）；未播放时返回 None。
 
         文件式 TTS（Edge/CosyVoice/MiMo/API）走 QMediaPlayer，拿不到 PCM，
-        无法算真实 RMS——用播放位置驱动的正弦包络做**粗略**嘴开合。
+        无法算真实 RMS。两级策略（2026-09-16）：
+
+        1. **词级**：若合成时落了 ``<音频>.words.json`` 侧车（Edge TTS 有），
+           按当前播放位置落在哪个词区间驱动口型——词内开合、词间闭嘴。
+        2. **位置包络**：无侧车时回落正弦包络（至少跟着音频起止开合）。
+
         未播放返回 None（而非 0.0）：0.0 会被渲染器当成"真实静音"，
         嘴会锁死在几乎闭合处；None 才让渲染器正确回退/闭嘴。
         """
@@ -198,7 +212,30 @@ class TTSTtsPlayer:
         pos = self.position_seconds()
         if pos is None:
             return None
+        words = self._word_timings()
+        if words:
+            return word_level_at(words, pos)
         return _envelope_level(pos)
+
+    def _word_timings(self):
+        """当前音频的词区间（``[(start_ms, end_ms), ...]``）；无则 None。
+
+        按路径缓存：分句预合成时每句一个新文件，命中率不高但
+        避免同一文件重复读盘。读失败一律 None（回落包络）。
+        """
+        path = getattr(self, "_current_audio_path", None)
+        if not path:
+            return None
+        if getattr(self, "_words_cache_for", None) == path:
+            return getattr(self, "_words_cache", None)
+        try:
+            words = load_words(path)
+        except Exception:
+            logger.debug("词边界加载失败", exc_info=True)
+            words = None
+        self._words_cache_for = path
+        self._words_cache = words
+        return words
 
     def _on_status(self, status):
         """媒体状态变化回调"""

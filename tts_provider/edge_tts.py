@@ -6,6 +6,10 @@
 音色：微软自带 zh-CN 系列（晓晓 XiaoxiaoNeural 等），不做角色克隆映射。
 可经 config `tts.edge_voice` 覆盖默认音色（设置面板「微软 Edge」引擎下可选）。
 
+词级口型（2026-09-16）：合成时同时抓 WordBoundary，落盘为
+``<mp3>.words.json`` 侧车文件。播放器按播放位置查词区间驱动口型，
+比位置正弦包络精确一档（词与词之间真的闭嘴）。
+
 依赖：edge-tts>=6.1.0（pip install edge-tts）
 """
 from __future__ import annotations
@@ -18,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base import TTSProvider
+from .word_timings import save_words
 
 logger = logging.getLogger(__name__)
 
@@ -151,9 +156,35 @@ class EdgeTtsProvider(TTSProvider):
 
         try:
             # 异步接口：放入新事件循环执行（worker 线程无 Qt 循环，asyncio.run 安全）
+            #
+            # 词级口型（2026-09-16）：用 stream() 而非 save()，
+            # 一边写音频一边收 WordBoundary，落盘为 <mp3>.words.json。
+            # 侧车写失败不影响出声（save_words 内部吞异常）。
             async def _synth():
-                comm = edge_tts.Communicate(text, eff_voice, rate=eff_rate, pitch=eff_pitch)
-                await comm.save(str(output_path))
+                comm = edge_tts.Communicate(
+                    text, eff_voice, rate=eff_rate, pitch=eff_pitch,
+                    boundary="WordBoundary",
+                )
+                words: list[dict] = []
+                with open(output_path, "wb") as f:
+                    async for chunk in comm.stream():
+                        ctype = chunk.get("type")
+                        if ctype == "audio":
+                            f.write(chunk["data"])
+                        elif ctype == "WordBoundary":
+                            # offset/duration 单位 100ns → 毫秒
+                            try:
+                                words.append({
+                                    "o": int(chunk.get("offset", 0)) // 10000,
+                                    "d": int(chunk.get("duration", 0)) // 10000,
+                                    "t": chunk.get("text") or "",
+                                })
+                            except (TypeError, ValueError):
+                                pass
+                if words:
+                    saved = save_words(str(output_path), words)
+                    if saved:
+                        logger.debug("Edge TTS 词边界: %d 词 → %s", len(words), saved)
 
             asyncio.run(_synth())
             if output_path.exists() and output_path.stat().st_size > 0:
