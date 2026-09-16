@@ -57,11 +57,34 @@ def test_none_stream_is_blockable():
 
 @pytest.fixture
 def test_logger():
+    """干净的独立 logger。
+
+    ★ 2026-09-16 CI 修复：CI 的 pytest 启用了日志捕获插件，会给测试
+    logger 挂上 `LogCaptureHandler`。它们不是 `StreamHandler` 的子类，
+    会被 `drop_blocking_stderr_handler` 的 `has_durable` 判据误认为
+    “已有文件日志”——于是本该不摘的场景摘掉了，断言失败。
+    本地跑不出来是因为本地 pytest 未启用该插件。
+    这里在建立与清理时都彻底清空 handlers。
+    """
     lg = logging.getLogger("ocpet.test.log_setup")
     lg.handlers.clear()
     lg.propagate = False
     yield lg
     lg.handlers.clear()
+
+
+def _only(logger, *handlers):
+    """把 logger 的 handlers 精确设为给定集合。
+
+    ★ CI 修复（2026-09-16）：pytest 的日志捕获插件会在测试运行时
+    往 logger 上挂 `LogCaptureHandler`（非 StreamHandler 子类）。
+    它会被被测函数的“已有文件日志”判据误认，导致行为与本地不一致。
+    每个用例开头调用本函数，确保起始状态确定。
+    """
+    logger.handlers.clear()
+    for h in handlers:
+        logger.addHandler(h)
+    return logger
 
 
 @pytest.fixture
@@ -75,7 +98,7 @@ def pipe_pair():
 def test_no_durable_handler_means_no_removal(test_logger, pipe_pair):
     """只有 stderr handler、无文件 handler 时不得摘——否则日志彻底丢失。"""
     _, pipe = pipe_pair
-    test_logger.addHandler(logging.StreamHandler(pipe))
+    _only(test_logger, logging.StreamHandler(pipe))
 
     assert drop_blocking_stderr_handler(test_logger, stderr=pipe) == 0
     assert len(test_logger.handlers) == 1
@@ -86,8 +109,7 @@ def test_pipe_stderr_handler_is_removed(test_logger, pipe_pair, tmp_path):
 
     _, pipe = pipe_pair
     fh = RotatingFileHandler(tmp_path / "a.log", encoding="utf-8")
-    test_logger.addHandler(logging.StreamHandler(pipe))
-    test_logger.addHandler(fh)
+    _only(test_logger, logging.StreamHandler(pipe), fh)
 
     assert drop_blocking_stderr_handler(test_logger, stderr=pipe) == 1
 
@@ -103,8 +125,7 @@ def test_file_stderr_handler_is_kept(test_logger, tmp_path):
     from logging.handlers import RotatingFileHandler
 
     with open(tmp_path / "err.log", "w", encoding="utf-8") as err_fh:
-        test_logger.addHandler(logging.StreamHandler(err_fh))
-        test_logger.addHandler(RotatingFileHandler(tmp_path / "a.log", encoding="utf-8"))
+        _only(test_logger, logging.StreamHandler(err_fh), RotatingFileHandler(tmp_path / "a.log", encoding="utf-8"))
 
         assert drop_blocking_stderr_handler(test_logger, stderr=err_fh) == 0
         assert len(test_logger.handlers) == 2
@@ -117,8 +138,7 @@ def test_removal_is_reported_to_the_surviving_handler(test_logger, pipe_pair, tm
     _, pipe = pipe_pair
     log_path = tmp_path / "a.log"
     fh = RotatingFileHandler(log_path, encoding="utf-8")
-    test_logger.addHandler(logging.StreamHandler(pipe))
-    test_logger.addHandler(fh)
+    _only(test_logger, logging.StreamHandler(pipe), fh)
 
     drop_blocking_stderr_handler(test_logger, stderr=pipe)
     test_logger.warning("should land in file")
@@ -135,8 +155,7 @@ def test_nothing_written_to_pipe_after_removal(test_logger, pipe_pair, tmp_path)
 
     r, pipe = pipe_pair
     fh = RotatingFileHandler(tmp_path / "a.log", encoding="utf-8")
-    test_logger.addHandler(logging.StreamHandler(pipe))
-    test_logger.addHandler(fh)
+    _only(test_logger, logging.StreamHandler(pipe), fh)
 
     drop_blocking_stderr_handler(test_logger, stderr=pipe)
 
@@ -168,8 +187,7 @@ def test_app_keeps_running_when_pipe_is_full(test_logger, tmp_path):
     pipe = os.fdopen(w, "w")
     try:
         fh = RotatingFileHandler(tmp_path / "a.log", encoding="utf-8")
-        test_logger.addHandler(logging.StreamHandler(pipe))
-        test_logger.addHandler(fh)
+        _only(test_logger, logging.StreamHandler(pipe), fh)
 
         # 先把管道灌满，制造「无人读 → 写就阻塞」的现场
         os.set_blocking(w, False)

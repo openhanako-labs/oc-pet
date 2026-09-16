@@ -183,6 +183,15 @@ def test_mouth_set_level_source_rejects_non_callable():
 
 
 def _miku_ids():
+    """读 miku 模型的参数 id 集合。
+
+    ★ 2026-09-16 CI 修复：Live2D 模型二进制因版权原因**不随仓库分发**
+    （见 .gitignore：`characters/*/live2d/*` 排除，仅 profile.json 入库）。
+    CI 克隆下来没有这个文件，原先是 FileNotFoundError 直接失败。
+    这里改为 skip——本地有模型时照常验证，CI 上优雅跳过。
+    """
+    if not MIKU_CDI3.is_file():
+        pytest.skip(f"缺 Live2D 模型文件（版权原因不入库）: {MIKU_CDI3.name}")
     j = json.loads(MIKU_CDI3.read_text(encoding="utf-8"))
     return {p["Id"] for p in j["Parameters"]}
 

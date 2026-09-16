@@ -194,7 +194,17 @@ def test_music_resolve_url_and_file(tmp_path):
 # ── P2-5 休息提醒状态机 ─────────────────────────────────
 
 def _fixed_config(**overrides):
+    """固定配置：默认关闭深夜倍率，让纯累积逻辑测试与时区无关。
+
+    ★ 2026-09-16 CI 修复：原先这些测试用固定时间戳 `t0 = 1700000000.0`，
+    但 `is_late_night()` 走 `datetime.fromtimestamp()`（**本地时区**）。
+    该时间戳在 UTC 是 22:13（深夜）、在 UTC+8 是 06:13（不深夜）——
+    于是 CI（UTC）上阈值翻 3 倍，纯累积测试全挂。
+    深夜倍率有自己的专项测试（`test_break_reminder_late_night_multiplier`），
+    这里默认关掉。
+    """
     cfg = dict(DEFAULT_WORK_REMINDER_CONFIG)
+    cfg.update(late_night_multiplier=1.0)
     cfg.update(overrides)
     return cfg
 
@@ -248,12 +258,24 @@ def test_break_reminder_snooze_keeps_accumulated():
     assert tr.should_remind(t0 + 71)["due"] is False  # 进入冷却
 
 
+def _local_ts(year=2023, month=11, day=15, hour=0, minute=0):
+    """构造一个**本地时区**的时间戳（时区无关）。
+
+    ★ 2026-09-16 CI 修复：原先用 `1700000000.0 + N*3600` 这种固定
+    时间戳算“几点”，但 `is_late_night()` 按**本地时区**取 hour——
+    同一个时间戳在 UTC 与 UTC+8 是不同的钟点，CI 与本地结果相反。
+    这里显式用本地时区构造，测试在哪里跑都一样。
+    """
+    from datetime import datetime
+    return datetime(year, month, day, hour, minute).timestamp()
+
+
 def test_break_reminder_late_night_multiplier():
     tr = WorkReminderTracker(_fixed_config(
         after_minutes=1.0, late_night_hour=22, late_night_end_hour=6,
         late_night_multiplier=3.0, cooldown_minutes=0,
     ))
-    t_late = 1700000000.0 + 23 * 3600  # 23:00 深夜
+    t_late = _local_ts(hour=23)  # 本地 23:00 → 深夜
     assert is_late_night(t_late) is True
     tr.update(True, t_late)
     tr.update(True, t_late + 70)        # 累计 70s
@@ -263,7 +285,7 @@ def test_break_reminder_late_night_multiplier():
 
 
 def test_break_reminder_daytime_not_late_night():
-    t_day = 1700000000.0 + 9 * 3600  # 9:00
+    t_day = _local_ts(hour=9)  # 本地 9:00
     assert is_late_night(t_day) is False
 
 

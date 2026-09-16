@@ -87,6 +87,13 @@ def test_read_server_info_missing_token(monkeypatch, tmp_path):
 
 
 def test_discover_plugins_static():
+    """扫 `~/.hanako/plugins`。
+
+    ★ 2026-09-16 CI 修复：这是**用户本机目录**，CI 干净环境不存在，
+    原先断言 count>0 直接失败。本地有插件时照常验证。
+    """
+    if not hc.PLUGINS_DIR.is_dir():
+        pytest.skip(f"无用户插件目录: {hc.PLUGINS_DIR}")
     r = hc._discover_plugins()
     assert r["count"] > 0
     assert all("id" in it for it in r["items"])
@@ -110,7 +117,13 @@ def test_discover_mcp_reads_config():
 
 
 def test_discover_skills_handles_missing_skill_md():
-    """★ 实测例外：92 个目录中 expert/ 没有 SKILL.md，必须容错跳过。"""
+    """★ 实测例外：92 个目录中 expert/ 没有 SKILL.md，必须容错跳过。
+
+    ★ 2026-09-16 CI 修复：扫 `~/.hanako/skills`（用户本机目录），
+    CI 干净环境不存在 → skip。
+    """
+    if not hc.SKILLS_DIR.is_dir():
+        pytest.skip(f"无用户技能目录: {hc.SKILLS_DIR}")
     r = hc._discover_skills()
     assert r["count"] > 0
     for it in r["items"]:

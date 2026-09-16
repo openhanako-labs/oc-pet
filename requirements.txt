@@ -34,6 +34,9 @@ tqdm~=4.65            # CosyVoice 间接依赖
 
 # ── L3 ASR 依赖（语音识别）──
 pydantic~=2.0
+pypinyin~=0.55        # 音素级口型（文本 → 拼音 → 口型时间轴）；缺失时回退振幅驱动
+psutil~=5.9           # 内存检测（记忆向量化预算）；缺失时自动降级
+sherpa-onnx>=1.13.0   # 声纹识别（3d-speaker campplus）；缺失时门卫放行
 
 # ── L4 可选依赖（高级功能）──
 onnxruntime>=1.17.0   # 记忆向量化（缺失时自动降级纯 BM25）
