@@ -114,6 +114,12 @@ class MimoTtsProvider(TTSProvider):
                     audio_bytes = base64.b64decode(audio_data)
                     output_path.write_bytes(audio_bytes)
                     logger.info("MIMO TTS done: %s (%d bytes)", output_path.name, len(audio_bytes))
+                    # 口型时间轴：MiMo 不给词边界 → 通用层算能量分段
+                    try:
+                        from .audio_timings import ensure_timings
+                        ensure_timings(str(output_path))
+                    except Exception:
+                        logger.debug("MIMO TTS: 口型时间轴生成失败", exc_info=True)
                     return str(output_path)
                 else:
                     logger.warning("MIMO TTS: no audio.data in response")

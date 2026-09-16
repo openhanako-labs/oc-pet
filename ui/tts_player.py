@@ -198,10 +198,11 @@ class TTSTtsPlayer:
         """口型电平估算（0~1）；未播放时返回 None。
 
         文件式 TTS（Edge/CosyVoice/MiMo/API）走 QMediaPlayer，拿不到 PCM，
-        无法算真实 RMS。两级策略（2026-09-16）：
+        无法算真实 RMS。三级策略（2026-09-16）：
 
-        1. **词级**：若合成时落了 ``<音频>.words.json`` 侧车（Edge TTS 有），
-           按当前播放位置落在哪个词区间驱动口型——词内开合、词间闭嘴。
+        1. **时间轴**：若合成时落了 ``<音频>.words.json``（Edge 词边界）
+           或 ``<音频>.segments.json``（能量分段，任何 provider 都能生成），
+           按当前播放位置落在哪个区间驱动口型——有声开合、静音闭嘴。
         2. **位置包络**：无侧车时回落正弦包络（至少跟着音频起止开合）。
 
         未播放返回 None（而非 0.0）：0.0 会被渲染器当成"真实静音"，
@@ -218,10 +219,16 @@ class TTSTtsPlayer:
         return _envelope_level(pos)
 
     def _word_timings(self):
-        """当前音频的词区间（``[(start_ms, end_ms), ...]``）；无则 None。
+        """当前音频的口型时间轴（``[(start_ms, end_ms), ...]``）；无则 None。
 
-        按路径缓存：分句预合成时每句一个新文件，命中率不高但
-        避免同一文件重复读盘。读失败一律 None（回落包络）。
+        两级来源（2026-09-16）：
+
+        1. ``<音频>.words.json`` —— provider 原生词边界（Edge TTS）
+        2. ``<音频>.segments.json`` —— 能量分段（任何 provider 都能生成，
+           见 ``tts_provider/audio_timings.py``）
+
+        两者形状相同，播放器不必区分。按路径缓存，同一文件不重复读盘。
+        读失败一律 None（回落正弦包络）。
         """
         path = getattr(self, "_current_audio_path", None)
         if not path:
@@ -230,8 +237,11 @@ class TTSTtsPlayer:
             return getattr(self, "_words_cache", None)
         try:
             words = load_words(path)
+            if not words:
+                from tts_provider.audio_timings import load_segments
+                words = load_segments(path)
         except Exception:
-            logger.debug("词边界加载失败", exc_info=True)
+            logger.debug("口型时间轴加载失败", exc_info=True)
             words = None
         self._words_cache_for = path
         self._words_cache = words

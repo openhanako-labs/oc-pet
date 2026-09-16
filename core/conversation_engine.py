@@ -1351,12 +1351,11 @@ class ConversationEngine:
             logger.debug("conversation_engine: 非致命异常(已静默吞掉)", exc_info=True)
 
         # 3. TTS 合成 + 回调：提交到专用线程池，避免同步合成卡住消息队列（P1-4）
-        # 把合成与回传从 _run 主循环解耦，_run 可立即处理下一条消息。
-        instruct_map = {
-            "happy": "开心", "sad": "难过", "angry": "生气",
-            "cute": "可爱", "thinking": "思考",
-        }
-        instruct = instruct_map.get(emotion, "")
+        # 把合成与回传从 _run 主循环解耦，_run 可立即返回下一条消息。
+        # 2026-09-16：情绪提示收进 emotion_prosody（原先两处各自内联一份 5 项表，
+        # 缺 surprised/neutral，且新情绪只能改代码——现统一为单一来源）。
+        from tts_provider.emotion_prosody import instruct_for
+        instruct = instruct_for(emotion)
         try:
             self._tts_executor.submit(
                 self._synth_and_reply, reply, emotion, anim, character,
@@ -1798,11 +1797,9 @@ class ConversationEngine:
         if not text or not text.strip() or text.strip() in ("…", "..."):
             return
         character_id = character_id or self._character_id
-        instruct_map = {
-            "happy": "开心", "sad": "难过", "angry": "生气",
-            "cute": "可爱", "thinking": "思考",
-        }
-        instruct = instruct_map.get(emotion, "")
+        # 情绪提示统一来源（原先与 _speak 路径各自内联一份，已合并）
+        from tts_provider.emotion_prosody import instruct_for
+        instruct = instruct_for(emotion)
         try:
             self._tts_executor.submit(
                 self._synth_only, text, emotion, character_id, instruct, on_audio,

@@ -154,3 +154,48 @@ def test_add_prosody_unparseable_returns_delta():
 ])
 def test_is_valid_prosody(val, ok):
     assert ep.is_valid_prosody(val) is ok
+
+
+# ── instruct 提示（Qwen / MiMo / CosyVoice 通用）─────
+
+
+@pytest.mark.parametrize("emo", ["happy", "sad", "angry", "cute", "surprised", "thinking"])
+def test_instruct_for_covers_renderer_emotions(emo):
+    """渲染器的情绪都要有 instruct（原先 conversation_engine 的表只有 5 项，缺 surprised）。"""
+    hint = ep.instruct_for(emo)
+    assert hint, f"{emo} 缺 instruct"
+
+
+def test_instruct_neutral_is_empty():
+    """中性不该塞额外指令——引擎默认表现通常已足够。"""
+    assert ep.instruct_for("neutral") == ""
+
+
+def test_instruct_unknown_is_empty():
+    assert ep.instruct_for("totally_made_up") == ""
+    assert ep.instruct_for("") == ""
+
+
+def test_instruct_never_mentions_speed():
+    """★ 硬约束：instruct 里绝不能出现"快/慢"这类改语速的词。"""
+    banned = ("快", "慢", "语速", "speed", "faster", "slower")
+    for emo in ep._INSTRUCT:
+        hint = ep.instruct_for(emo)
+        for word in banned:
+            assert word not in hint, f"{emo} 的 instruct 提到了语速词 {word!r}: {hint}"
+
+
+def test_instruct_resolves_aliases():
+    """别名应能落到 instruct（joy → happy 等）。"""
+    assert ep.instruct_for("joy") == ep.instruct_for("happy")
+    assert ep.instruct_for("furious") == ep.instruct_for("angry")
+    assert ep.instruct_for("shy") == ep.instruct_for("cute")
+
+
+def test_conversation_engine_uses_shared_instruct():
+    """★ 接线检查：conversation_engine 不得再内联 instruct_map。"""
+    import inspect
+    from core.conversation_engine import ConversationEngine
+    src = inspect.getsource(ConversationEngine)
+    assert "instruct_map" not in src, "内联表必须已移除（两处重复，缺 surprised）"
+    assert "instruct_for" in src, "应改用共享的 instruct_for"

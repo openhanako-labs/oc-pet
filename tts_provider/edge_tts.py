@@ -23,7 +23,6 @@ from typing import Optional
 
 from .base import TTSProvider
 from .word_timings import save_words
-
 logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = Path.home() / ".hanako" / "pets" / "tts_cache"
@@ -161,12 +160,12 @@ class EdgeTtsProvider(TTSProvider):
             # 词级口型（2026-09-16）：用 stream() 而非 save()，
             # 一边写音频一边收 WordBoundary，落盘为 <mp3>.words.json。
             # 侧车写失败不影响出声（save_words 内部吞异常）。
-            async def _synth():
+            async def _synth() -> list[dict]:
                 comm = edge_tts.Communicate(
                     text, eff_voice, rate=eff_rate, pitch=eff_pitch, volume=eff_volume,
                     boundary="WordBoundary",
                 )
-                words: list[dict] = []
+                collected: list[dict] = []
                 with open(output_path, "wb") as f:
                     async for chunk in comm.stream():
                         ctype = chunk.get("type")
@@ -175,22 +174,25 @@ class EdgeTtsProvider(TTSProvider):
                         elif ctype == "WordBoundary":
                             # offset/duration 单位 100ns → 毫秒
                             try:
-                                words.append({
+                                collected.append({
                                     "o": int(chunk.get("offset", 0)) // 10000,
                                     "d": int(chunk.get("duration", 0)) // 10000,
                                     "t": chunk.get("text") or "",
                                 })
                             except (TypeError, ValueError):
                                 pass
-                if words:
-                    saved = save_words(str(output_path), words)
-                    if saved:
-                        logger.debug("Edge TTS 词边界: %d 词 → %s", len(words), saved)
+                return collected
 
-            asyncio.run(_synth())
+            words = asyncio.run(_synth())
             if output_path.exists() and output_path.stat().st_size > 0:
                 logger.info("Edge TTS done: %s (%d bytes)",
                             output_path.name, output_path.stat().st_size)
+                # 口型时间轴：有词边界写词边界，没有则让通用层算能量分段
+                try:
+                    from .audio_timings import ensure_timings
+                    ensure_timings(str(output_path), words)
+                except Exception:
+                    logger.debug("Edge TTS: 口型时间轴生成失败", exc_info=True)
                 self._ready = True
                 return str(output_path)
             logger.warning("Edge TTS: 合成结果为空文件")

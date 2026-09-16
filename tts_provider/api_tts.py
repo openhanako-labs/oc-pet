@@ -91,6 +91,12 @@ class ApiTtsProvider(TTSProvider):
                 # 直接写音频内容
                 output_path.write_bytes(resp.content)
                 logger.info("API TTS done: %s (%d bytes)", output_path.name, len(resp.content))
+                # 口型时间轴：API 不给词边界 → 通用层算能量分段
+                try:
+                    from .audio_timings import ensure_timings
+                    ensure_timings(str(output_path))
+                except Exception:
+                    logger.debug("API TTS: 口型时间轴生成失败", exc_info=True)
                 return str(output_path)
             else:
                 logger.warning("API TTS error: %d %s", resp.status_code, resp.text[:200])

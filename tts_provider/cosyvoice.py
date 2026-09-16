@@ -545,6 +545,12 @@ class CosyVoiceProvider(TTSProvider):
         logger.info("TTS done (%s%s): %s", resp.get("mode"),
                     f", spk={resp['spk']}" if resp.get("spk") else "",
                     output_path.name)
+        # 口型时间轴：CosyVoice 不给词边界 → 通用层算能量分段
+        try:
+            from .audio_timings import ensure_timings
+            ensure_timings(str(output_path))
+        except Exception:
+            logger.debug("CosyVoice: 口型时间轴生成失败", exc_info=True)
         return resp.get("path") or str(output_path)
 
     def _sweep_cache(self, max_age: float) -> None:

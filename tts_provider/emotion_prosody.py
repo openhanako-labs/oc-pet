@@ -1,25 +1,25 @@
-"""情绪 → TTS prosody 映射（语气层）。
+"""情绪 → TTS 引擎提示（语气层，全引擎通用）。
 
-借自 Amadeus-for-Hana 的做法，核心是那条硬规矩：
+各引擎接受的情绪表达方式不同，本模块把它们统一到一套词汇表：
 
-    **语速绝对不能变。只允许通过 pitch / volume 改变语气语调。**
+| 引擎 | 接受形式 | 本模块提供 |
+|---|---|---|
+| Edge TTS | SSML prosody（pitch/volume） | ``prosody_for()`` |
+| Qwen / MiMo / CosyVoice | ``instruct`` 自然语言 | ``instruct_for()`` |
+| OpenAI 兼容 API | 仅 speed | （不硬塞——speed 会改语速） |
+
+**共同硬规矩**：
+
+    **语速绝对不能变。只允许通过 pitch / volume / 语气描述改变语气。**
 
 为什么：语速是"这个人说话的样子"里最稳的特征。一改语速，听感从
 "她心情变了"变成"换了一个人在说话"——情绪调节反而破坏角色一致性。
 
-所以这里的 rate 一律 `+0%`，只用 pitch（音高）和 volume（响度）做区分：
+调用方::
 
-- **pitch**：情绪的能量高低。开心/惊讶上扬，难过/失落下沉。
-- **volume**：情绪的外放程度。生气/兴奋更响，低落/温柔更轻。
-
-适用范围：所有走 edge-tts 的音色。``<mstts:express-as>`` style 仅
-``ja-JP-NanamiNeural`` 支持（Azure 官方语言支持表），中文音色没有
-可用 style，因此本表**只输出 prosody**，不做 style 注入。
-
-用法::
-
-    from tts_provider.emotion_prosody import prosody_for
-    pitch, volume = prosody_for("happy")     # ('+8Hz', '+6%')
+    from tts_provider.emotion_prosody import prosody_for, instruct_for
+    pitch, volume = prosody_for("happy")   # Edge 用
+    hint = instruct_for("happy")           # Qwen / MiMo / CosyVoice 用
 """
 from __future__ import annotations
 
@@ -135,3 +135,53 @@ def is_valid_prosody(value: str) -> bool:
 def rate_for(emotion: str) -> str:
     """恒返回 ``'+0%'`` —— 存在的唯一理由是让"语速不变"可被显式断言。"""
     return "+0%"
+
+
+# ── instruct 提示（Qwen / MiMo / CosyVoice 的公共入口）──
+#
+# 这些引擎走自然语言指令而非数值 prosody。指令里**绝不能提语速**
+# （“说快一点”会让听感变成另一个人），只描述语气与音色质感。
+#
+# 用词注意：避开“快/慢”字，哪怕“轻快”“稍慢”这种词也可能被模型
+# 当成语速指令（测试会抳）。
+_INSTRUCT: dict[str, str] = {
+    "neutral":   "用平常的语气自然地说",
+    "happy":     "用明朗、上扬的语气说，声音里带点笑意",
+    "cute":      "用柔软、亲昵的语气说，声音放轻一些",
+    "surprised": "用略带惊讶的语气说，语调上扬",
+    "thinking":  "用平稳、沉思的语气说，语气放松",
+    "sad":       "用低沉、放轻的语气说，声音里带点疲惫",
+    "angry":     "用加重、压低的语气说，字字分明",
+    "missing":   "用温柔而略显牵挂的语气说",
+    "working":   "用专注、干脆的语气说",
+}
+
+# 别名 → instruct 表的键（与 prosody 表共用同一套归一逻辑）
+_INSTRUCT_FALLBACK: dict[str, str] = {
+    "excited": "happy", "joy": "happy", "joyful": "happy",
+    "soft": "cute", "gentle": "cute", "shy": "cute",
+    "annoyed": "angry", "frustrated": "angry", "furious": "angry",
+    "curious": "thinking", "confused": "thinking", "calm": "thinking",
+    "tired": "sad", "sleepy": "sad", "lonely": "sad",
+    "worried": "missing", "anxious": "missing",
+    "busy": "working", "eager": "working",
+}
+
+
+def instruct_for(emotion: str) -> str:
+    """情绪 → 自然语言语气指令。未知情绪返回空串（不干扰引擎默认行为）。
+
+    空串是**故意的**：引擎对 ``instruct`` 为空时的默认表现往往已经不错，
+    强行塞一句 generic 的"自然地说话"反而可能拉低质量。
+
+    neutral 也返回空串——中性不需要额外指令。
+    """
+    key = (emotion or "").strip().lower()
+    if not key or key == "neutral":
+        return ""
+    if key in _INSTRUCT:
+        return _INSTRUCT[key]
+    mapped = _ALIASES.get(key) or _INSTRUCT_FALLBACK.get(key)
+    if mapped and mapped != "neutral":
+        return _INSTRUCT.get(mapped, "")
+    return ""
