@@ -18,12 +18,16 @@ sounddevice~=0.4.6
 numpy~=1.24
 scipy~=1.10
 soundfile~=0.12
+pydub~=0.25          # mp3/wav 解码（口型能量分段用；缺失时回落 soundfile/ffmpeg）
+imageio-ffmpeg~=0.4  # 自带 ffmpeg 二进制（pydub/音视频转换用；缺失时需系统 PATH 有 ffmpeg）
 
 # ── L2 Live2D 渲染 ──
 live2d-py~=1.0
 
 # ── L3 TTS 依赖（语音合成）──
-edge-tts~=6.1         # 微软 Edge TTS（免费在线，默认引擎）
+edge-tts>=7.0         # 微软 Edge TTS（免费在线，默认引擎）
+                      # 必须 >=7.0：代码用 Communicate(volume=, boundary=) 与 stream()
+                      # （词级口型靠 WordBoundary），6.x 无这些参数
 tqdm~=4.65            # CosyVoice 间接依赖
 
 # ── L3 ASR 依赖（语音识别）──

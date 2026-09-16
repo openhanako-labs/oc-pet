@@ -44,6 +44,14 @@ hiddenimports = [
     'PySide6.QtNetwork',
     'PySide6.QtXml',
     'pkg_resources',   # 部分依赖（如 openai 等）需要
+    # 音频解码（口型能量分段 / 音视频转换）：
+    # pydub 在 import 时才探测 ffmpeg，imageio_ffmpeg 带二进制且靠运行时
+    # 定位——两者都容易被 PyInstaller 漏掉，显式声明。
+    'pydub',
+    'pydub.utils',
+    'imageio_ffmpeg',
+    'soundfile',
+    'numpy',
 ]
 
 # ── 排除模块 / Excluded modules ──

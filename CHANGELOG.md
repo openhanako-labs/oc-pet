@@ -2,6 +2,100 @@
 
 所有重要变更都会记录在此文件中。
 
+## [0.13.0] - 2026-09-16
+
+这一版把**口型与语气**从「只有 Edge 能用」推到「全引擎通用」，
+并解决了桌宠长期寄生在主 agent 上的三个可见症状。
+
+### 口型：从「嘴一直匀速动」到「跟词跟声」
+
+原先文件式 TTS（Edge / CosyVoice / MiMo / API）走 QMediaPlayer 拿不到 PCM，
+口型只能用播放位置驱动的**正弦包络**——嘴全程匀速开合，句读处也不闭，看着假。
+
+三级来源，逐级回退：
+
+1. **音素级**（`feat(lip)`）文本 → 拼音 → 口型时间轴
+2. **词级**（新增 `tts_provider/word_timings.py`）Edge TTS 的 `WordBoundary`
+   落盘为 `<音频>.words.json`——词内开合、**词间归零（真的闭嘴）**
+3. **能量分段**（新增 `tts_provider/audio_timings.py`）**任何 provider 都能用**：
+   分帧 RMS → 自适应阈值（峰值×0.12）→ 合并近邻 → 滤短段，
+   落盘 `<音频>.segments.json`
+
+实测（Edge 合成「好的，我知道了。」）：
+
+```
+能量分段 [(240,560), (940,1560)]   ← 正确切出「好的，」与「我知道了。」
+0.60s → 0.0000（停顿处闭嘴）       ← 旧正弦包络此处是 0.1350（一直在动）
+分析耗时 149ms
+```
+
+解码三级兜底：soundfile → pydub → ffmpeg 子进程。
+**侧车缺失/损坏一律回落原包络，绝不因口型增强影响出声。**
+
+### 语气：情绪只改音高与响度，不改语速
+
+新增 `tts_provider/emotion_prosody.py`。核心是一条硬规矩：
+
+> **语速绝对不能变。只允许 pitch / volume / 语气描述改变语气。**
+
+理由：语速是「这个人说话的样子」里最稳的特征。一改语速，听感从
+「她心情变了」变成**「换了一个人在说话」**。
+
+旧实现恰好踩坑：`emotion_tts_map` 同时改 rate 与 pitch
+（`happy: +15%` / `angry: +25%` / `surprised: +30%`——最不该变声的时候变得最厉害），
+且只覆盖 6 种情绪（渲染器用 7 种，`cute` 一直漏着）。
+
+实测（同文本五种情绪）：neutral/sad/angry/surprised 时长均 2.136s、
+happy 2.160s——**时长几乎相同 → 语速确实未变**。
+
+### 桌宠专属 agent：规则不再污染用户消息
+
+**症状**：会话标题变成 `[pet-output-rules] 1. 回复简短自然…`；
+历史里存着带规则的原文；桌宠语气跑偏。
+
+**根因**：规则包在 `text` 里发给 Hanako，而标题从第一条 user message 生成。
+
+**协议调查**：WS 的 `prompt` 消息只透传 `text`/`displayMessage`/`uiContext`/
+`sessionFileRefs`；内部 API 的 `context.system`（进 system prompt）WS 层不转发；
+`uiContext` 只用于 annotations。→ 规则只能走 agent 的 `AGENTS.md`。
+
+**落地**：新增 `~/.hanako/agents/ophelia-pet/`，其中 `AGENTS.md` / `identity.md`
+**符号链接**到本仓库 `persona/`——内容源在桌宠仓库可用 git 管，
+Hana 每次读盘无缓存，改源文件即刻生效（无需重启）。
+输出规则移出 `text`（留 `dialog.inject_output_rules_in_text` 回退开关）。
+
+### 声纹门卫：只认主人的声音
+
+新增 `core/speaker_verify.py`（3d-speaker campplus，CPU 推理不吃显存），
+ASR 前判是否为主人，拦截视频声/他人声。**失败放行是硬不变量**——
+声纹是过滤器不是关卡。设置面板「功能 → 语音」新增声纹分组
+（启用开关 / 阈值 0.30~0.90 / 录入主人声纹 / 校准 / 测试）。
+
+### 修复
+
+- **流式 TTS 卡死**：`frames_q.get()` 加 45s 超时；`StreamingPcmPlayer`
+  的 Qt 调用全部移出 `self._lock`（根治 ABBA 死锁）
+- **全局 TTS 被独立配置的保存动作改写**：`_save()` 原先无条件写全局 TTS，
+  用户在「桌宠独立配置」改东西时功能页那个下拉的值也被一起落盘。
+  改为脏标记——只写用户真动过的字段
+- **4 处运行时崩溃**：`chat_thinking_dots` 少一个下划线（思考动画一画就炸）、
+  `apply_glass_shadow`/`QApplication` 漏 import、`harness_adapter` 未定义名
+- **Live2D Cubism 2 导入**：认 `.model.json`、剥包装目录、`agent_id` 从模型名推断
+- **`tmp_file_to_cleanup` 作用域**：zip 校验失败路径必炸的 `NameError`
+
+### 依赖
+
+- `edge-tts` 改为 `>=7.0`（代码用 `Communicate(volume=, boundary=)` 与 `stream()`，6.x 无这些参数）
+- 新增 `pydub~=0.25`、`imageio-ffmpeg~=0.4`（口型能量分段的 mp3 解码）
+- `oc_pet.spec` 显式声明 `pydub` / `imageio_ffmpeg` / `soundfile` / `numpy` 隐藏导入
+
+### 测试
+
+1083 passed（新增 `test_word_timings` / `test_audio_timings` /
+`test_emotion_prosody` / `test_speaker_verify` / `test_settings_tts_isolation`）。
+
+---
+
 ## [未发布] - 2026-09-11
 
 ### 新增：窗口贴合扫描缓存（启动提速）
