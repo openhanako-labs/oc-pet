@@ -17,7 +17,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QPushButton, QLabel, QLineEdit, QHeaderView, QSplitter, QTextEdit,
-    QWidget
+    QWidget, QApplication
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont

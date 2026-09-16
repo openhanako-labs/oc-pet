@@ -231,40 +231,80 @@ class CharacterPackageManager:
 
         logger.info("正在安装角色包: %s", pet_path)
         install_target: Optional[Path] = None
+        # 2026-09-15: 提前初始化——原实现赋值在 raise 之后，
+        # 一旦校验失败进入 except，引用未定义变量会抛 NameError
+        # （掩盖真实错误：用户看到的是 NameError 而非"格式不对"）。
+        tmp_file_to_cleanup: Optional[Path] = None
 
         try:
             # 2026-09-08: 检查是否需要预处理（live2d zip 没有 manifest）
             with zipfile.ZipFile(pet_path, "r") as zf:
                 has_manifest = MANIFEST_NAME in zf.namelist()
-                
+
                 if not has_manifest:
-                    # 尝试识别 live2d 模型 zip（包含 .model3.json）
-                    model_files = [f for f in zf.namelist() if f.endswith(".model3.json")]
+                    # 尝试识别 live2d 模型 zip。
+                    # 2026-09-15: 补上 Cubism 2 的 .model.json（
+                    # 此前只认 .model3.json，导致 kurisu 这类旧格式模型
+                    # 被误判为"无效压缩包"）。注意排除 .model3.json——
+                    # 它同样以 .model.json 结尾。
+                    model_files = [
+                        f for f in zf.namelist()
+                        if f.endswith(".model3.json") or (
+                            f.endswith(".model.json") and not f.endswith(".model3.json")
+                        )
+                    ]
                     if not model_files:
                         raise PackageValidationError(
-                            f"无效的压缩包: 缺少 {MANIFEST_NAME} 且未找到 .model3.json"
+                            f"无效的压缩包: 缺少 {MANIFEST_NAME} 且未找到 .model3.json / .model.json"
                         )
-                    
-                    # 自动创建 manifest（从文件名推断 agent_id）
-                    zip_name = pet_path.stem  # 不带扩展名的文件名
-                    agent_id = re.sub(r'[^A-Za-z0-9_-]', '_', zip_name)[:50] or 'live2d_character'
-                    
+
+                    # 2026-09-15: agent_id 优先从**模型文件名**推断，
+                    # 而非 zip 文件名——导入的 zip 常带随机后缀
+                    # （如 kurisu_mu3j9dca_b794b7db），用它会生成脏目录名。
+                    # kurisu.model.json -> kurisu
+                    _mbase = os.path.basename(model_files[0])
+                    for _suf in (".model3.json", ".model.json"):
+                        if _mbase.endswith(_suf):
+                            _mbase = _mbase[: -len(_suf)]
+                            break
+                    zip_name = pet_path.stem  # 原始文件名（仅作回退/描述）
+                    agent_id = re.sub(r'[^A-Za-z0-9_-]', '_', _mbase)[:50] or 'live2d_character'
+
+                    # 2026-09-15: 剥掉单层包装目录。live2d zip 常把模型放在
+                    # <name>/ 这样的子目录里（kurisu/kurisu.model.json），
+                    # 但格式检测（factory.detect_format）与渲染器
+                    # （live2d_renderer）只认**角色目录顶层**和 live2d/ 子目录
+                    # 下的模型文件——不剥则导入成功也加载不出来。
+                    _names = [n for n in zf.namelist() if not n.endswith('/')]
+                    _prefix = ""
+                    if _names:
+                        _parts = _names[0].split('/')
+                        if len(_parts) > 1:
+                            _cand = _parts[0] + '/'
+                            if all(n.startswith(_cand) for n in _names):
+                                _prefix = _cand
+
                     # 创建临时 zip 文件，添加必要的文件
                     import tempfile
-                    import os
                     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_zip:
                         tmp_zip_path = tmp_zip.name
-                        
-                    # 复制原 zip 文件到临时 zip
+
+                    # 复制原 zip 文件到临时 zip（剥包装目录）
                     with zipfile.ZipFile(tmp_zip_path, "a") as tmp_zf:
-                        # 添加原 zip 文件的所有内容
                         with zipfile.ZipFile(pet_path, "r") as orig_zf:
                             for item in orig_zf.infolist():
-                                tmp_zf.writestr(item, orig_zf.read(item.filename))
-                        
+                                new_name = item.filename
+                                if _prefix and new_name.startswith(_prefix):
+                                    new_name = new_name[len(_prefix):]
+                                if not new_name:
+                                    continue
+                                if new_name.endswith('/'):
+                                    continue
+                                tmp_zf.writestr(new_name, orig_zf.read(item.filename))
+
                         # 添加 manifest.json
                         manifest_data = {
-                            "name": zip_name,
+                            "name": agent_id,
                             "agent_id": agent_id,
                             "version": "1.0.0",
                             "description": f"Live2D model imported from {pet_path.name}",
@@ -272,13 +312,16 @@ class CharacterPackageManager:
                             "author": ""
                         }
                         tmp_zf.writestr(MANIFEST_NAME, json.dumps(manifest_data, ensure_ascii=False, indent=2))
-                        
-                        # 仅生成外观定义 model.json(指向 .model3.json)。
+
+                        # 仅生成外观定义 model.json(指向模型文件)。
                         # 人设(identity/awareness)一律由对应 Hanako agent 提供,
                         # 此处不再伪造占位人设文件——避免"外观包"与"人格包"被强行绑死。
+                        _mp = model_files[0]
+                        if _prefix and _mp.startswith(_prefix):
+                            _mp = _mp[len(_prefix):]
                         tmp_zf.writestr("model.json", json.dumps({
                             "type": "live2d",
-                            "model_path": model_files[0]
+                            "model_path": _mp
                         }, ensure_ascii=False, indent=2))
                     
                     # 使用临时 zip 文件继续安装
@@ -288,7 +331,9 @@ class CharacterPackageManager:
                 zf.close()
             
             # 从 zip 文件安装
-            tmp_file_to_cleanup = pet_path if not has_manifest else None
+            # 2026-09-15: 若走了 live2d 预处理，pet_path 已换成临时 zip，需清理。
+            if not has_manifest:
+                tmp_file_to_cleanup = pet_path
             with zipfile.ZipFile(pet_path, "r") as zf:
                 # 读取 manifest
                 manifest_text = zf.read(MANIFEST_NAME).decode("utf-8")

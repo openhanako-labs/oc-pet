@@ -150,7 +150,7 @@ class HanakoPetAdapter:
 
         logger.info(
             "HanakoPetAdapter ready | agent=%s | model=%s | api=%s | prompt_len=%d",
-            agent_id, self._model, self._base_url[:40] + "..." if self._base_url else "N/A",
+            self.agent_id, self._model, self._base_url[:40] + "..." if self._base_url else "N/A",
             len(self._system_prompt),
         )
 

@@ -101,11 +101,11 @@ class ChatThinkingDots(QWidget):
         base = QColor(*glow_rgb(self._theme))
         base.setAlpha(255)
         diameter = DOT_RADIUS * 2
-        y_base = float(self.height() - diameter) / 2.0 + DOT_PEAK_LIFT
+        y_base = float(self.height() - diameter) / 2.0 + _DOT_PEAK_LIFT
         for i in range(DOT_COUNT):
             phase = (self._phase - i * DOT_STAGGER) % 1.0
             alpha = self._dot_alpha(phase)
-            lift = DOT_PEAK_LIFT * ((alpha - _DOT_FLOOR_ALPHA) / (1.0 - _DOT_FLOOR_ALPHA))
+            lift = _DOT_PEAK_LIFT * ((alpha - _DOT_FLOOR_ALPHA) / (1.0 - _DOT_FLOOR_ALPHA))
             color = QColor(base)
             color.setAlphaF(alpha)
             p.setPen(Qt.NoPen)

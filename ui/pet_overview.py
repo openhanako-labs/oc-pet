@@ -15,6 +15,9 @@ from PySide6.QtGui import QFont
 
 from ui.theme import get_default, rgb, rgba
 from ui.panel_window import PanelWindow
+# 2026-09-15: 补漏 import——_on_theme_changed 调用 apply_glass_shadow，
+# 但本文件从未导入它（切主题时 NameError 崩溃）。
+from ui.theme.design_system import apply_glass_shadow
 
 logger = logging.getLogger(__name__)
 

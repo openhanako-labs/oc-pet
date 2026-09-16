@@ -41,7 +41,7 @@ from .proactive import ProactiveScheduler
 from .media import MediaPerception, MediaEvent
 from .screen_observer_process import ScreenObserverProcess
 from core.service_health import get_health_monitor, HealthMonitor
-from core.autonomy_panel import get_autonomy_panel
+from core.autonomy_panel import get_autonomy_panel, AutonomyPanel
 
 logger = logging.getLogger(__name__)
 
