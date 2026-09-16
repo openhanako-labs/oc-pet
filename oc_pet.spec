@@ -57,8 +57,82 @@ hiddenimports = [
 # ── 排除模块 / Excluded modules ──
 # main.py 在 `--sandbox` 分支中条件导入 sandbox_runner，但该文件在本仓库中
 # 不存在（已被 .gitignore 忽略），打包时显式排除避免 missing-module 警告与误打包。
+#
+# ── Qt 模块裁剪（2026-09-16）──
+# 背景：PySide6 全家桶装了一百多个 Qt DLL（共 628MB），而本程序只用 6 个模块：
+#     QtCore / QtGui / QtWidgets / QtMultimedia / QtOpenGLWidgets / QtSvg
+# 其中 Qt6WebEngineCore.dll 单文件 195MB，完全用不到。
+#
+# 原则：只排**明确无关**的——即代码里零 import、且不被已用模块间接依赖的。
+# 已用模块的依赖链（不能排）：
+#     QtWidgets → QtGui → QtCore
+#     QtMultimedia → QtNetwork / ffmpeg(avcodec 等)
+#     QtOpenGLWidgets → QtOpenGL / QtGui
+# 保守起见不碰 QtQuick/Qml（QtMultimedia 的 QML 后端可能间接引用）。
 excludes = [
     'sandbox_runner',
+    # ── 浏览器引擎（195MB，零使用）──
+    'PySide6.QtWebEngineCore',
+    'PySide6.QtWebEngineWidgets',
+    'PySide6.QtWebEngineQuick',
+    'PySide6.QtWebChannel',
+    'PySide6.QtWebView',
+    'PySide6.QtWebSockets',
+    # ── 3D / 图表 / 数据可视化（零使用）──
+    'PySide6.Qt3DCore',
+    'PySide6.Qt3DRender',
+    'PySide6.Qt3DInput',
+    'PySide6.Qt3DLogic',
+    'PySide6.Qt3DAnimation',
+    'PySide6.Qt3DExtras',
+    'PySide6.QtCharts',
+    'PySide6.QtDataVisualization',
+    'PySide6.QtGraphs',
+    'PySide6.QtGraphsWidgets',
+    # ── 设计器 / 文档 / 打印（零使用）──
+    'PySide6.QtDesigner',
+    'PySide6.QtUiTools',
+    'PySide6.QtPdf',
+    'PySide6.QtPdfWidgets',
+    'PySide6.QtHelp',
+    'PySide6.QtPrintSupport',
+    # ── 杂项（零使用）──
+    'PySide6.QtBluetooth',
+    'PySide6.QtNfc',
+    'PySide6.QtPositioning',
+    'PySide6.QtLocation',
+    'PySide6.QtSensors',
+    'PySide6.QtSerialPort',
+    'PySide6.QtSerialBus',
+    'PySide6.QtRemoteObjects',
+    'PySide6.QtScxml',
+    'PySide6.QtStateMachine',
+    'PySide6.QtSql',
+    'PySide6.QtTest',
+    'PySide6.QtTextToSpeech',
+    'PySide6.QtVirtualKeyboard',
+    'PySide6.QtSpatialAudio',
+    'PySide6.QtHttpServer',
+    'PySide6.QtNetworkAuth',
+    'PySide6.QtConcurrent',
+    'PySide6.QtDBus',
+    # ── 开发/测试工具（零使用）──
+    'PySide6.scripts',
+    'shiboken6_generator',
+    # ── 被 requirements-build.txt 砍掉的可选件（保留排除防误打包）──
+    'torch',
+    'whisper',
+    'onnxruntime',
+    'transformers',
+    'funasr',
+    'modelscope',
+    'cosyvoice',
+    'matplotlib',
+    'tkinter',
+    'IPython',
+    'jupyter',
+    'pandas',
+    'pytest',
 ]
 
 a = Analysis(
