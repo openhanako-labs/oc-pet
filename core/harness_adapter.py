@@ -191,6 +191,25 @@ class HanakoPetAdapter:
         """输出规则全文（含当前角色可用动作清单）。"""
         return self._OUTPUT_RULES + self._build_action_prompt()
 
+    def _inject_rules_in_text(self) -> bool:
+        """是否把输出规则注入用户消息正文。
+
+        默认 **False**（2026-09-16 起）：规则改由 agent 的 AGENTS.md 承担，
+        进 system 层，用户消息保持干净——会话标题与历史不再被规则污染。
+
+        回退开关：config 里 ``dialog.inject_output_rules_in_text = true``
+        可恢复旧行为（给未配置 AGENTS.md 的 agent 兜底）。
+        """
+        try:
+            cfg = getattr(self, "_config", None)
+            if isinstance(cfg, dict):
+                dlg = cfg.get("dialog") or {}
+                if isinstance(dlg, dict) and dlg.get("inject_output_rules_in_text"):
+                    return True
+        except Exception:
+            logger.debug("harness_adapter: 读取 inject_output_rules_in_text 失败", exc_info=True)
+        return False
+
     def _needs_output_rules(self, source: str) -> bool:
         """该来源的回复是否会展示给用户 —— 决定要不要教它用标签。
 
@@ -658,12 +677,16 @@ class HanakoPetAdapter:
                 raise HanakoUnavailableBeforeSend("无法准备 Hanako Session") from e
 
         # 拼装 text：
-        # 1) 输出规则（2026-09-10 接线）——Hanako 通道原本不携带标签契约，
-        #    导致模型从不输出 [emotion:]/[action:]/[expression:]/[duration:]，
-        #    全部落到兜底表。与下方 [pet-context] 同构，便于 Hanako 侧识别。
-        # 2) extra_context（Hanako 自己管记忆，inject_memory 被忽略）
+        # 2026-09-16：输出规则**不再注入 text**。
+        # 根因：规则以 [pet-output-rules] 包在用户消息前面，Hanako 侧
+        #   - 会话标题从第一条 user message 生成 → 标题被规则污染
+        #   - 历史里存的是带规则的原文 → 上下文里规则像"用户说过的话"
+        # 现在规则改由 agent 的 AGENTS.md 承担（进 system 层，见
+        #   ~/.hanako/agents/ophelia-pet/AGENTS.md，软链到本仓库 persona/）。
+        # 这里只发干净的用户消息，标题/历史从此干净。
+        # 兜底：若调用方显式要求（如本地直连路径），仍可注入。
         text = message.strip()
-        if self._needs_output_rules(source):
+        if self._needs_output_rules(source) and self._inject_rules_in_text():
             text = (
                 f"[pet-output-rules]\n{self._output_rules()}\n[/pet-output-rules]\n\n"
                 + text

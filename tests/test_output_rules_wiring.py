@@ -112,27 +112,49 @@ def test_display_sources_get_rules(source):
 #  端到端：Hanako 通道真的把规则发出去了
 # ══════════════════════════════════════════════════════════════
 
-def test_hanako_path_carries_output_rules():
-    """核心断言：用户消息经 Hanako 通道发送时，text 必须带表达契约。"""
+def test_hanako_path_does_not_pollute_user_text():
+    """★ 2026-09-16 新契约：规则**不再**进用户消息正文。
+
+    根因：规则以 [pet-output-rules] 包在用户消息前，Hanako 侧会
+      1. 从第一条 user message 生成会话标题 → 标题被规则污染
+      2. 把带规则的原文存进历史 → 规则像“用户说过的话”干扰上下文
+    现在规则由 agent 的 AGENTS.md 承担（system 层）。
+    """
     a = _adapter()
     a.chat_via_hanako("举个手?")
 
     sent = a._session_manager.sent_texts[0]
+    assert "[pet-output-rules]" not in sent, "规则不得再污染用户消息"
+    assert "[feel:" not in sent, "标签契约不得出现在 text 里"
+    assert sent.strip() == "举个手?", "text 应只剩干净的用户消息"
+
+
+def test_inject_rules_fallback_switch_restores_old_behavior():
+    """回退开关：dialog.inject_output_rules_in_text=true 时恢复旧行为。"""
+    a = _adapter()
+    a._config = {"dialog": {"inject_output_rules_in_text": True}}
+    a.chat_via_hanako("举个手?")
+
+    sent = a._session_manager.sent_texts[0]
     assert "[pet-output-rules]" in sent
-    assert "[feel:" in sent, "主标签必须在通道里"
-    assert "举个手?" in sent, "原消息必须保留"
-    assert sent.rstrip().endswith("举个手?"), "规则应在消息之前"
+    assert "[feel:" in sent
+    assert sent.rstrip().endswith("举个手?")
+
+
+def test_inject_rules_defaults_off_without_config():
+    """未配 _config 时默认不注入（新行为）。"""
+    a = _adapter()
+    assert a._inject_rules_in_text() is False
 
 
 def test_hanako_path_keeps_pet_context():
-    """原有的 [pet-context] 注入不能被接线改坏。"""
+    """原有的 [pet-context] 注入不能被改坏（规则改了，上下文通道照旧）。"""
     a = _adapter()
     a.chat_via_hanako("在吗", extra_context="[窗口] VSCode")
 
     sent = a._session_manager.sent_texts[0]
     assert "[pet-context]" in sent
     assert "VSCode" in sent
-    assert "[pet-output-rules]" in sent
     assert sent.rstrip().endswith("在吗")
 
 
