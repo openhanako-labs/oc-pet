@@ -62,6 +62,30 @@ def _asr_language() -> str:
         return "zh"
 
 
+def _voiceprint_enabled() -> bool:
+    """声纹门卫是否启用（默认关）。启用后 ASR 前先判是否为主人。"""
+    try:
+        from config import load_config
+        return bool((load_config().get("voiceprint", {}) or {}).get("enabled", False))
+    except Exception:
+        return False
+
+
+def _voiceprint_gate(wav_path: str) -> bool:
+    """声纹门卫：返回 True 放行。未启用/不可用/失败一律放行（不阻断语音输入）。"""
+    if not _voiceprint_enabled():
+        return True
+    try:
+        from core.speaker_verify import verify_speaker
+        ok = verify_speaker(wav_path)
+        if not ok:
+            logger.info("voice_input: 声纹门卫拦截（非主人）: %s", wav_path)
+        return ok
+    except Exception as e:
+        logger.warning("voice_input: 声纹门卫异常，放行: %s", e)
+        return True
+
+
 def _get_whisper_model():
     """懒加载 Whisper 模型（尊重 config 的 asr.backend）。
 
@@ -253,6 +277,12 @@ class VoiceInput:
             self._cleanup(tmp_path)
             return ""
 
+        # 声纹门卫（2026-09-15）：ASR 前先判是否为主人，非主人直接丢弃
+        if not _voiceprint_gate(tmp_path):
+            self._on_status("")
+            self._cleanup(tmp_path)
+            return ""
+
         try:
             logger.info("Calling ASR transcribe: %s", tmp_path)
             text = self._asr.transcribe(tmp_path, language=_asr_language())
@@ -284,6 +314,11 @@ class VoiceInput:
         self._on_status("语音识别中...")
         if not self._asr:
             self._on_status("ASR 模型未加载")
+            self._cleanup(tmp_path)
+            return ""
+        # 声纹门卫（持续监听模式同样适用）
+        if not _voiceprint_gate(tmp_path):
+            self._on_status("")
             self._cleanup(tmp_path)
             return ""
         try:

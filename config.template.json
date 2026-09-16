@@ -201,6 +201,12 @@
     "sensevoice_model": "iic/SenseVoiceSmall",
     "vad_backend": "auto"
   },
+  "voiceprint": {
+    "enabled": false,
+    "threshold": 0.55,
+    "model_path": "data/models/speaker/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+    "owner_sample": "data/voiceprint/owner.wav"
+  },
   "character_package": "default",
   "render_format": "sprite",
   "_note": "miku / shizuku 为「需自备模型的占位角色」：仓库仅含 pet.json 与 README，不含任何模型素材。切换前请先按对应角色目录的 README 自行下载/放置模型文件；缺少模型时桌宠会提示「需下载模型」且不会加载（避免白屏或崩溃）。默认桌宠为内置精灵图 月薪喵(yuexinmiao)，开箱即用。",
