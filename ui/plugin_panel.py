@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import logging
+import re
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -28,6 +29,7 @@ from ui.panel_window import PanelWindow
 logger = logging.getLogger(__name__)
 
 HANAKO_PLUGINS = Path.home() / ".hanako" / "plugins"
+HANAKO_APPS = Path.home() / ".hanako" / "apps"
 
 
 def _build_style(theme: str) -> str:
@@ -163,7 +165,16 @@ class PluginPanel(PanelWindow):
         super().mouseReleaseEvent(event)
 
     def _scan_plugins(self) -> list[dict]:
-        """扫描 Hanako 插件目录"""
+        """扫描 Hanako 插件：V1 plugins + V2 apps（2026-09-17 补后者）。
+
+        V2 的发现机制与 V1 不同——不能读 `contributes.tools`（官方 schema
+        不承认该字段），而是**直接枚举 tools/ 目录**。见 tool_registry
+        的 _scan_apps_dir 同源说明。
+        """
+        return self._scan_v1_plugins() + self._scan_v2_apps()
+
+    def _scan_v1_plugins(self) -> list[dict]:
+        """扫描 V1 插件（~/.hanako/plugins，读 contributes.tools）。"""
         plugins = []
         if not HANAKO_PLUGINS.exists():
             return plugins
@@ -199,12 +210,17 @@ class PluginPanel(PanelWindow):
                     if tool_file.exists():
                         try:
                             content = tool_file.read_text("utf-8")
-                            # 简单提取 name 和 description
-                            for line in content.split("\n")[:20]:
-                                if "export const name" in line:
-                                    tool_name = line.split("=")[-1].strip().strip("';\"")
-                                if "export const description" in line:
-                                    tool_desc = line.split("=")[-1].strip().strip("';\"")[:60]
+                            # 正则提取（不用 split("=")——值里可能含 =，会截断）
+                            _mn = re.search(
+                                r"export\s+const\s+name\s*=\s*['\"]([^'\"]+)['\"]", content
+                            )
+                            _md = re.search(
+                                r"export\s+const\s+description\s*=\s*['\"]([^'\"]*)['\"]", content
+                            )
+                            if _mn:
+                                tool_name = _mn.group(1)
+                            if _md:
+                                tool_desc = _md.group(1)[:60]
                         except Exception:
                             logger.debug("plugin_panel: 非致命异常(已静默吞掉)", exc_info=True)
                     tools.append({"name": tool_name, "desc": tool_desc, "source": src})
@@ -220,6 +236,67 @@ class PluginPanel(PanelWindow):
                 logger.warning("Failed to parse plugin %s: %s", d.name, e)
 
         return plugins
+
+    def _scan_v2_apps(self) -> list[dict]:
+        """扫描 V2 Apps（~/.hanako/apps）——**直接枚举 tools/ 目录**。
+
+        为什么不能读 manifest：V2 官方 schema 不承认 `contributes.tools`
+        （实测 V2 manifest 的 contributes 只有 cards/settings/ui），
+        Hana 靠「tools/ 目录存在」发现工具。
+
+        容错：无 manifest / 非 v2 / 无 tools 目录 → 跳过。
+        """
+        apps = []
+        if not HANAKO_APPS.exists():
+            return apps
+        for d in sorted(HANAKO_APPS.iterdir()):
+            if not d.is_dir():
+                continue
+            manifest = d / "manifest.json"
+            if not manifest.exists():
+                continue
+            try:
+                m = json.loads(manifest.read_text("utf-8"))
+                if m.get("manifestVersion") != 2:
+                    continue
+                tools_dir = d / "tools"
+                if not tools_dir.is_dir():
+                    continue
+                tools = []
+                for f in sorted(tools_dir.iterdir()):
+                    if not f.is_file() or f.suffix not in (".js", ".mjs", ".ts"):
+                        continue
+                    tool_name, tool_desc = f.stem, ""
+                    try:
+                        content = f.read_text("utf-8", errors="replace")
+                        # 用正则提取（不用 split("=")——值里可能含 =，会截断）
+                        m_n = re.search(
+                            r"export\s+const\s+name\s*=\s*['\"]([^'\"]+)['\"]", content
+                        )
+                        m_d = re.search(
+                            r"export\s+const\s+description\s*=\s*['\"]([^'\"]*)['\"]", content
+                        )
+                        if m_n:
+                            tool_name = m_n.group(1)
+                        if m_d:
+                            tool_desc = m_d.group(1)[:60]
+                    except Exception:
+                        logger.debug("plugin_panel: 工具文件解析失败 %s", f.name)
+                    tools.append({"name": tool_name, "desc": tool_desc,
+                                  "source": f"tools/{f.name}"})
+                if not tools:
+                    continue
+                apps.append({
+                    "id": m.get("id", d.name),
+                    "name": m.get("name", d.name),
+                    "desc": m.get("description", ""),
+                    "tools": tools,
+                    "path": str(d),
+                    "kind": "app",
+                })
+            except Exception as e:
+                logger.warning("Failed to parse app %s: %s", d.name, e)
+        return apps
 
     def _populate_tree(self):
         """填充插件树"""

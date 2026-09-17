@@ -21,6 +21,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 HANAKO_PLUGINS = Path.home() / ".hanako" / "plugins"
+HANAKO_APPS = Path.home() / ".hanako" / "apps"
 LOCAL_PLUGINS = Path(__file__).parent.parent / "plugins"
 
 # 外部 Hanako 插件触发词集中声明（单一来源）。
@@ -116,7 +117,12 @@ class ToolRegistry:
         except Exception as e:
             logger.warning("Plugin tools config check failed: %s", e)
             return
-        # 扫描 Hanako 全局插件 + oc-pet 本地插件
+        # 扫描 Hanako 全局插件 + V2 Apps + oc-pet 本地插件
+        #
+        # 2026-09-17：补上 V2 Apps（原只扫 V1 plugins，漏掉 11 个工具）。
+        # V2 的发现机制与 V1 **不同**：官方 schema 不承认 `contributes.tools`
+        # 字段（实测 V2 manifest 的 contributes 只有 cards/settings/ui），
+        # Hana 靠「tools/ 目录存在」发现工具。故 V2 走独立扫描路径。
         plugin_dirs = []
         if HANAKO_PLUGINS.exists():
             plugin_dirs.append(HANAKO_PLUGINS)
@@ -124,12 +130,16 @@ class ToolRegistry:
             plugin_dirs.append(LOCAL_PLUGINS)
             logger.info("Local plugins dir: %s", LOCAL_PLUGINS)
 
-        if not plugin_dirs:
+        if not plugin_dirs and not HANAKO_APPS.exists():
             logger.warning("No plugin dirs found")
             return
 
         for base_dir in plugin_dirs:
             self._scan_dir(base_dir)
+
+        # V2 Apps：按 tools/ 目录发现（不读 contributes.tools）
+        if HANAKO_APPS.exists():
+            self._scan_apps_dir(HANAKO_APPS)
 
         logger.info("Tool registry: %d tools from plugins", len(self._tools))
 
@@ -223,6 +233,56 @@ class ToolRegistry:
 
             except Exception as e:
                 logger.warning("Failed to parse plugin %s: %s", plugin_dir.name, e)
+
+    def _scan_apps_dir(self, apps_dir: Path):
+        """扫描 V2 Apps（~/.hanako/apps）。
+
+        **与 `_scan_dir` 的关键差异**：V2 不能读 `contributes.tools`——
+        官方 schema 不承认该字段（实测 V2 manifest 的 contributes 只有
+        cards/settings/ui 等），Hana 靠「tools/ 目录存在」发现工具。
+        故这里**直接枚举 tools/*.js**，解析每个文件的导出声明。
+
+        容错：
+        - 无 manifest.json → 跳过（不是合法 App）
+        - manifestVersion != 2 → 跳过（v1 已由 _scan_dir 处理，避免重复）
+        - 无 tools/ 目录 → 跳过（该 App 没有工具，如纯卡片型）
+        - 单文件解析失败 → 跳过该文件，不影响其他
+        """
+        for app_dir in sorted(apps_dir.iterdir()):
+            if not app_dir.is_dir():
+                continue
+            manifest = app_dir / "manifest.json"
+            if not manifest.exists():
+                continue
+            try:
+                m = json.loads(manifest.read_text("utf-8"))
+            except Exception as e:
+                logger.warning("Failed to parse app manifest %s: %s", app_dir.name, e)
+                continue
+            # 只处理 v2；v1 的 manifest 若出现在 apps/ 下则跳过（由 _scan_dir 负责）
+            if m.get("manifestVersion") != 2:
+                continue
+            tools_dir = app_dir / "tools"
+            if not tools_dir.is_dir():
+                continue
+            app_id = m.get("id") or app_dir.name
+            for f in sorted(tools_dir.iterdir()):
+                if not f.is_file() or f.suffix not in (".js", ".mjs", ".ts"):
+                    continue
+                try:
+                    tool_def = self._parse_tool_file(f, app_id)
+                except Exception as e:
+                    logger.debug("解析 App 工具文件失败 (%s): %s", f.name, e)
+                    continue
+                if tool_def is None:
+                    continue
+                # 外部触发词（与 V1 同一套单一来源）
+                if tool_def.name in _EXTERNAL_TOOL_TRIGGERS:
+                    tool_def.triggers = _EXTERNAL_TOOL_TRIGGERS[tool_def.name]
+                # 避免重名覆盖（v1/v2 可能有同名工具）
+                if tool_def.name in self._tools:
+                    tool_def.name = f"{app_id}.{tool_def.name}"
+                self._tools[tool_def.name] = tool_def
 
     def _resolve_tool_source(self, plugin_dir: Path, name: str) -> Optional[Path]:
         """无 source 字段时，按工具名在 tools/ 下定位同名脚本文件。
