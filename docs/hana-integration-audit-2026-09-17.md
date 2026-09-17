@@ -235,4 +235,69 @@ def hanako_home() -> Path:
 | `test_utility_model_routing.py` | 15 | user 不切；内部来源切且还原；mtime 刷新 |
 | `test_asr_preferences_source.py` | 6 | Hana speechRecognition 被读；.env 可覆盖 |
 
-全量：`1177 passed, 1 skipped`
+同时修正 3 个旧测试对已删除的 `HANAKO_HOME` 常量的依赖
+（`test_ishiki_fallback.py`、`test_bugfix6_item_b_memory.py`、
+`test_vision_config_chain.py`）。
+
+全量：**1189 passed, 1 skipped**
+
+---
+
+## 七、追加发现：子 agent 与对话共用模型（2026-09-17 下午）
+
+### 现象
+
+派去执行本排查的子 agent（GLaDOS）在完成任务前失败。
+会话文件最后三条记录：
+
+```
+stopReason: "error"
+errorMessage: "429: inference exceeds tpm/rpm limit"
+```
+
+三次重试（07:16:54 → 07:17:18 → 07:17:47）均撞限流，然后放弃。
+
+### 根因：与对话共用 `models.chat`
+
+子 agent 会话的 `model_change` 记录：
+
+```json
+{"type":"model_change","provider":"日日新",
+ "modelId":"sensenova-6.8-flash-lite"}
+```
+
+与 ophelia 的 `models.chat` 完全一致。
+
+查 Hana bundle：**没有任何子 agent 专用模型字段**——
+`subagent_model` / `subagentModel` / `subagent_role_model` 均 0 次命中。
+
+**推断**（未直接验证）：子 agent 继承父 agent 的对话模型，无独立槽位。
+
+### 影响
+
+```
+用户对话   ┐
+子 agent   ├─→ 同一份 sensenova 配额
+后台任务   ┘（已于今日摘走，见第五节）
+```
+
+即：**委派子 agent 会与用户对话抢配额**。今天这次失败是活证据——
+子 agent 递归列目录（输出大量文件清单，上下文膨胀）+ 同时段用户对话，
+两者叠加触发限流。
+
+### 待办
+
+- 验证「子 agent 继承父模型」这个推断（可用小任务看 `model_change`）
+- 若属实，考虑：子 agent 是否也应走 `utility_model`，或至少给
+  子 agent 加配额退避（当前重试 3 次即放弃，间隔太短）
+
+---
+
+## 八、附：本次排查的元教训
+
+排查者死于被排查的病症。
+
+这不是修辞——它说明**诊断行为本身会消耗被诊断的资源**。
+委派子 agent 去查 429，子 agent 因 429 而死；
+如果要继续用委派方式查配额问题，得先给子 agent 一条不抢配额的通道，
+或者限制其读取量（本次失败的直接诱因之一是它一次列了整个目录树）。
