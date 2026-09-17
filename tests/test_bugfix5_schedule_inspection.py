@@ -102,9 +102,33 @@ def test_schedule_reads_deferred_tasks(hanako_home):
     assert len(pending) == 1
     assert pending[0]["session_id"] == "sess_abc_12345678"
     ctx = s.format_for_prompt()
-    assert "345678" in ctx  # sessionId 尾 8 位
-    assert "（pending）" in ctx
+    # 2026-09-17：不再列 sessionId 尾 8 位（对桌宠无信息量且占 token），
+    # 改为只报去重后的数量。
+    assert "[延迟任务]" in ctx
+    assert "有 1 个任务待处理" in ctx
+    assert "345678" not in ctx, "内部任务哈希不应注入 prompt"
     assert "87654321" not in ctx  # 非 pending 不列
+
+
+def test_schedule_deferred_dedups_same_session(hanako_home):
+    """同一 session 的多个 pending 任务 → 只算一个（去重）。
+
+    实测日志（2026-09-16）出现过 63e26735 连报两行：同一 session 有两条
+    待处理任务，逐条列就会重复。
+    """
+    _write(hanako_home, ".ephemeral/deferred-tasks.json", {
+        "terminal:a": {"status": "pending", "delivered": False,
+                       "sessionId": "sess_abc_12345678"},
+        "terminal:b": {"status": "pending", "delivered": False,
+                       "sessionId": "sess_abc_12345678"},
+        "terminal:c": {"status": "pending", "delivered": False,
+                       "sessionId": "sess_def_87654321"},
+    })
+    s = SchedulePerception(agent_id="aimis")
+    s.refresh()
+    assert len(s.get_pending_deferred()) == 3, "原始条目仍为 3"
+    ctx = s.format_for_prompt()
+    assert "有 2 个任务待处理" in ctx, f"按 session 去重后应为 2: {ctx!r}"
 
 
 def test_schedule_reads_plugin_schedules(hanako_home):
@@ -248,7 +272,9 @@ def test_inspection_deferred_new_pending(hanako_home):
     })
     insp = InspectionPerception(SchedulePerception(agent_id="aimis"))
     hits = insp.tick(now=now)
-    assert "有 1 个延迟任务待处理" in "\n".join(hits)
+    # 2026-09-17：报增量而非总数——检测的是新增，文案也说新增，
+    # 避免与 SchedulePerception 的「有 N 个任务待处理」撞车。
+    assert "新增 1 个延迟任务" in "\n".join(hits)
     # 同一批 pending 未变 → 下一个巡检周期（过 5 分钟）不再重复
     assert insp.tick(now=now + INSPECTION_INTERVAL_SECONDS + 1) == []
 
@@ -287,7 +313,7 @@ def test_inspection_format_for_prompt(hanako_home):
     assert insp.tick(now=now)
     ctx = insp.format_for_prompt()
     assert "[任务巡检]" in ctx
-    assert "有 1 个延迟任务待处理" in ctx
+    assert "新增 1 个延迟任务" in ctx
 
 
 def test_inspection_files_missing_tolerant(hanako_home):

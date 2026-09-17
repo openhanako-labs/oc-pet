@@ -227,11 +227,25 @@ class SchedulePerception:
 
         pending = self.get_pending_deferred()
         if pending:
-            lines = ["[延迟任务]"]
-            for item in pending:
-                sid = item.get("session_id", "")
-                tail = sid[-8:] if sid else item.get("key", "")[-8:]
-                lines.append(f"- [延迟任务] {tail}（pending）")
+            # 2026-09-17：不再逐条列 sessionId 尾 8 位。
+            #
+            # 旧输出长这样（实测注入日志，201 字符）：
+            #     [延迟任务]
+            #     - [延迟任务] b4bfdc93（pending）
+            #     - [延迟任务] 63e26735（pending）
+            #     - [延迟任务] 63e26735（pending）   ← 同一 session 出现两次
+            #     - [延迟任务] 5e2db650（pending）
+            #
+            # 问题有三：
+            #   1. 那串 8 位哈希是内部任务标识，桌宠既不能点也不能查，
+            #      对「现在该做什么」零信息量，纯粹占 token
+            #   2. 同一 session 的多个 pending 任务会输出重复行
+            #   3. 它和 [任务巡检] 的「有 N 个延迟任务待处理」说的是同一件事
+            #
+            # 改为：去重后只报数量。
+            sessions = {item.get("session_id") or item.get("key", "") for item in pending}
+            n = len(sessions)
+            lines = ["[延迟任务]", f"- 有 {n} 个任务待处理"]
             parts.append("\n".join(lines))
 
         plugin_scheds = self.get_plugin_schedules()

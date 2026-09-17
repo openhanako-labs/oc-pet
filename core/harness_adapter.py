@@ -682,7 +682,10 @@ class HanakoPetAdapter:
         #   - 会话标题从第一条 user message 生成 → 标题被规则污染
         #   - 历史里存的是带规则的原文 → 上下文里规则像"用户说过的话"
         # 现在规则改由 agent 的 AGENTS.md 承担（进 system 层，见
-        #   ~/.hanako/agents/ophelia-pet/AGENTS.md，软链到本仓库 persona/）。
+        #   ~/.hanako/agents/ophelia/AGENTS.md——桌宠读的就是主 agent 这一份）。
+        # 2026-09-17：曾短暂用过专属 agent `ophelia-pet` + 仓库内 `persona/`
+        # 软链方案，用户明确表示“只是同步人设，不是新增助手”，已退场并删除
+        # persona/（它当时已无人引用）。
         # 这里只发干净的用户消息，标题/历史从此干净。
         # 兜底：若调用方显式要求（如本地直连路径），仍可注入。
         text = message.strip()

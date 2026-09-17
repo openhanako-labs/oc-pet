@@ -208,9 +208,17 @@ class InspectionPerception:
             return []
         # 只标记「新增」的为已见，已解决又再次出现者仍会被再次播报
         self._seen_deferred.update(new_pending)
-        count = len(pending_keys)
+        # 2026-09-17：报**增量**，不报总数。
+        #
+        # 原实现：检测的是 new_pending（新增），却报 len(pending_keys)（总数）——
+        # 检测与文案不自洽；且与 SchedulePerception.format_for_prompt() 的
+        # 「有 N 个任务待处理」撞车（同一个 context 块里两条说同一件事）。
+        # 现在分工明确：
+        #   schedule  → 当前状态（每轮都注入）
+        #   inspection → 事件（新增才报，30 分钟节流）
+        count = len(new_pending)
         # 节流 key 用 pending（同一批 pending 30 分钟内不重复）
-        return [("pending", f"有 {count} 个延迟任务待处理")]
+        return [("pending", f"新增 {count} 个延迟任务")]
 
     def _check_notifications(self, now: float) -> list[tuple[str, str]]:
         """（可选）notifications.json 新增条目 → 播报其文案；文件不存在则跳过。"""
