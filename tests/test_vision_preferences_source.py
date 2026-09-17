@@ -76,7 +76,7 @@ def test_reads_hana_preferences_vision_model(tmp_path, monkeypatch):
          "vision_auxiliary_enabled": True},
         CATALOG,
     )
-    monkeypatch.setattr(ec.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("HANA_HOME", str(tmp_path / ".hanako"))
 
     cfg = ec._read_hana_preferences_vision()
     assert cfg["model"] == "agnes-2.5-flash", f"应读到设置页选定的模型: {cfg!r}"
@@ -102,7 +102,7 @@ def test_preferences_takes_priority_over_agent_config(tmp_path, monkeypatch):
         "models:\n  vision:\n    id: agnes-3.0-flash\n    provider: agnes\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(ec.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("HANA_HOME", str(tmp_path / ".hanako"))
 
     cfg = ec.get_vision_config("testagent")
     assert cfg["model"] == "agnes-2.5-flash", (
@@ -119,7 +119,7 @@ def test_disabled_aux_means_not_configured(tmp_path, monkeypatch):
          "vision_auxiliary_enabled": False},
         CATALOG,
     )
-    monkeypatch.setattr(ec.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("HANA_HOME", str(tmp_path / ".hanako"))
 
     assert ec._read_hana_preferences_vision() == {}, "关掉视觉辅助应返回空"
 
@@ -127,7 +127,7 @@ def test_disabled_aux_means_not_configured(tmp_path, monkeypatch):
 def test_missing_or_malformed_returns_empty(tmp_path, monkeypatch):
     """preferences 缺失/字段畸形 → 空 dict（调用方继续降级）。"""
     ec = _reload_env_config()
-    monkeypatch.setattr(ec.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("HANA_HOME", str(tmp_path / ".hanako"))
 
     # 完全无 preferences.json
     assert ec._read_hana_preferences_vision() == {}
@@ -149,7 +149,7 @@ def test_unknown_provider_returns_empty(tmp_path, monkeypatch):
         {"vision_model": {"id": "m", "provider": "ghost"}},
         CATALOG,
     )
-    monkeypatch.setattr(ec.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("HANA_HOME", str(tmp_path / ".hanako"))
     assert ec._read_hana_preferences_vision() == {}
 
 
@@ -157,7 +157,7 @@ def test_fallback_chain_still_works(tmp_path, monkeypatch):
     """preferences 无配置时，仍能回退到 catalog 的 agnes（不破坏原行为）。"""
     ec = _reload_env_config()
     _setup_home(tmp_path, {}, CATALOG)  # preferences 里没有 vision_model
-    monkeypatch.setattr(ec.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("HANA_HOME", str(tmp_path / ".hanako"))
 
     cfg = ec.get_vision_config("")
     assert cfg.get("model"), f"应回退到 catalog agnes: {cfg!r}"

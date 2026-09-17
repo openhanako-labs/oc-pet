@@ -26,7 +26,8 @@ def _touch(home: Path, rel: str, text: str):
 
 @pytest.fixture()
 def hanako_home(tmp_path, monkeypatch):
-    monkeypatch.setattr(hc, "HANAKO_HOME", tmp_path)
+    # 2026-09-17：改用 HANA_HOME 环境变量（hanako_context 不再用模块级常量）
+    monkeypatch.setenv("HANA_HOME", str(tmp_path))
     return tmp_path
 
 

@@ -25,7 +25,13 @@ from core.hanako_context import HanakoContext
 
 @pytest.fixture()
 def hanako_home(tmp_path, monkeypatch):
-    monkeypatch.setattr(hc, "HANAKO_HOME", tmp_path)
+    """把 Hana 数据目录指到 tmp_path。
+
+    2026-09-17：改用 HANA_HOME 环境变量而非 patch 模块常量——
+    `core/hanako_context.py` 不再用模块级 `HANAKO_HOME`（那会在 import
+    时锁死路径），改成 `hanako_home()` 每次解析，与 Hana 官方逻辑一致。
+    """
+    monkeypatch.setenv("HANA_HOME", str(tmp_path))
     return tmp_path
 
 

@@ -17,6 +17,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from hanako_home import hanako_home
+
 logger = logging.getLogger(__name__)
 
 ENV_PATH = Path(__file__).parent / ".env"
@@ -54,7 +56,7 @@ _load_env()
 
 def _read_catalog_provider(provider_id: str) -> dict:
     """从 Hanako provider-catalog.json 读取指定 provider 配置"""
-    catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+    catalog_path = hanako_home() / "provider-catalog.json"
     if not catalog_path.exists():
         return {}
     try:
@@ -110,12 +112,80 @@ def get_tts_api_config() -> dict:
 
 
 def get_asr_api_config() -> dict:
-    """获取 ASR API 配置"""
-    return {
-        "base_url": os.environ.get("ASR_BASE_URL", "").strip(),
-        "api_key": os.environ.get("ASR_API_KEY", "").strip(),
-        "model": os.environ.get("ASR_MODEL", "whisper-1").strip(),
-    }
+    """获取 ASR（语音识别）配置。
+
+    优先级（2026-09-17 新增第 2 级）：
+      1. .env 的 ASR_*（显式覆盖）
+      2. **Hana preferences 的 `speechRecognition.defaultModel`**
+         —— Hana 设置页可配，用户改完应生效
+      3. 空（调用方自行处理）
+
+    为什么加第 2 级：原实现只读 .env，而 Hana 设置页已有
+    `speechRecognition` 字段（实测 `{"enabled": true,
+    "defaultModel": {"provider": "openai", "id": "whisper-1"}}`）。
+    用户在 Hana 侧换了语音识别模型，oc-pet 毫无反应。
+
+    注：Hana 的 `speechRecognition.enabled=false` 时视为未配置
+    （用户在 Hana 侧关掉了语音识别）。
+    """
+    base_url = os.environ.get("ASR_BASE_URL", "").strip()
+    api_key = os.environ.get("ASR_API_KEY", "").strip()
+    model = os.environ.get("ASR_MODEL", "").strip()
+    if base_url and api_key:
+        return {"base_url": base_url, "api_key": api_key, "model": model or "whisper-1"}
+
+    # 回退：Hana 设置页的语音识别模型
+    hana_asr = _read_hana_speech_recognition()
+    if hana_asr:
+        return hana_asr
+
+    return {"base_url": "", "api_key": "", "model": model or "whisper-1"}
+
+
+def _read_hana_speech_recognition() -> dict:
+    """读 Hana preferences 的 `speechRecognition`（语音识别模型）。
+
+    结构（实测）：
+        "speechRecognition": {"enabled": true,
+                              "defaultModel": {"provider": "openai",
+                                               "id": "whisper-1"}}
+
+    Returns:
+        {"base_url", "api_key", "model"} 或空 dict。
+    """
+    try:
+        pref_path = hanako_home() / "user" / "preferences.json"
+        if not pref_path.exists():
+            return {}
+        import json as _json
+        prefs = _json.loads(pref_path.read_text(encoding="utf-8")) or {}
+        sr = prefs.get("speechRecognition")
+        if not isinstance(sr, dict):
+            return {}
+        if sr.get("enabled") is False:
+            return {}
+        ref = sr.get("defaultModel")
+        if not isinstance(ref, dict):
+            return {}
+        provider_id = str(ref.get("provider") or "").strip()
+        model_id = str(ref.get("id") or "").strip()
+        if not provider_id or not model_id:
+            return {}
+        provider_cfg = _read_catalog_provider(provider_id)
+        if not provider_cfg or not provider_cfg.get("api_key"):
+            logger.debug(
+                "speechRecognition.defaultModel 指向 provider=%s，但 catalog 里无凭证",
+                provider_id,
+            )
+            return {}
+        return {
+            "base_url": provider_cfg.get("base_url", ""),
+            "api_key": provider_cfg.get("api_key", ""),
+            "model": model_id,
+        }
+    except Exception as e:
+        logger.debug("读 preferences.speechRecognition 失败（忽略）: %s", e)
+        return {}
 
 
 # ── Hanako WebSocket 客户端配置 ──────────────────────────────
@@ -137,7 +207,7 @@ def get_hanako_config() -> dict:
     # 自动从 server-info.json 读取 token（如果环境变量为空）
     if not api_token:
         try:
-            _si = Path.home() / ".hanako" / "server-info.json"
+            _si = hanako_home() / "server-info.json"
             if _si.exists():
                 import json as _json
                 api_token = _json.loads(_si.read_text("utf-8")).get("token", "")
@@ -186,7 +256,7 @@ def _read_agent_model_config(agent_id: str, slot: str) -> dict:
     except Exception:
         return {}
     try:
-        cfg_path = Path.home() / ".hanako" / "agents" / agent_id / "config.yaml"
+        cfg_path = hanako_home() / "agents" / agent_id / "config.yaml"
         if not cfg_path.exists():
             return {}
         cfg = _yaml.safe_load(cfg_path.read_text("utf-8")) or {}
@@ -211,6 +281,88 @@ def _read_agent_model_config(agent_id: str, slot: str) -> dict:
         return {}
 
 
+def _read_hana_preferences_model(field: str) -> dict:
+    """从 Hana 全局 preferences 读一个模型字段（utility / vision / utility_large）。
+
+    字段名与 preferences.json 的对应关系（Hana bundle 的映射表）：
+        utility       → utility_model
+        utility_large → utility_large_model
+        vision        → vision_model
+
+    格式 `{"id": ..., "provider": ...}`（与 models.chat 同构）——
+    去 provider-catalog.json 取 base_url / api_key。
+
+    2026-09-17：oc-pet 此前完全不读这些字段。用户已在 Hana 设置页配好
+    `utility_model`，但屏幕增强/主动对话/记忆抽取/反思仍用对话模型，
+    和用户对话抢同一份配额（429 的主要来源）。
+
+    Args:
+        field: preferences 里的字段名（如 "utility_model"）。
+
+    Returns:
+        完整配置 dict；未配置/不可用返回 {}。
+    """
+    if not field:
+        return {}
+    try:
+        pref_path = hanako_home() / "user" / "preferences.json"
+        if not pref_path.exists():
+            return {}
+        import json as _json
+        prefs = _json.loads(pref_path.read_text(encoding="utf-8")) or {}
+        ref = prefs.get(field)
+        if not isinstance(ref, dict):
+            return {}
+        provider_id = str(ref.get("provider") or "").strip()
+        model_id = str(ref.get("id") or "").strip()
+        if not provider_id or not model_id:
+            return {}
+        provider_cfg = _read_catalog_provider(provider_id)
+        if not provider_cfg or not provider_cfg.get("api_key"):
+            logger.debug(
+                "preferences.%s 指向 provider=%s，但 catalog 里无凭证",
+                field, provider_id,
+            )
+            return {}
+        return {
+            "base_url": provider_cfg.get("base_url", ""),
+            "api_key": provider_cfg.get("api_key", ""),
+            "model": model_id,
+        }
+    except Exception as e:
+        logger.debug("读 preferences.%s 失败（忽略）: %s", field, e)
+        return {}
+
+
+def get_utility_config() -> dict:
+    """获取「后台任务模型」配置（屏幕增强 / 主动对话 / 记忆抽取 / 反思）。
+
+    优先级：
+      1. **Hana preferences 的 `utility_model`**（设置页可配，默认来源）
+      2. .env 的 UTILITY_*（高级覆盖）
+      3. 空 dict —— 调用方回退到对话模型（保持旧行为）
+
+    为什么单独一套：这四个后台任务原先与用户对话共用 models.chat，
+    实测造成 429 限流（屏幕感知占 73% LLM 调用）。
+    Hana 已为这类用途提供 utility_model 字段。
+
+    Returns:
+        {"base_url": ..., "api_key": ..., "model": ...} 或空 dict
+    """
+    # 1) Hana preferences
+    cfg = _read_hana_preferences_model("utility_model")
+    if cfg:
+        return cfg
+    # 2) .env 覆盖
+    base_url = os.environ.get("UTILITY_BASE_URL", "").strip()
+    api_key = os.environ.get("UTILITY_API_KEY", "").strip()
+    model = os.environ.get("UTILITY_MODEL", "").strip()
+    if base_url and api_key:
+        return {"base_url": base_url, "api_key": api_key, "model": model}
+    # 3) 未配置 —— 调用方回退对话模型
+    return {}
+
+
 def _read_hana_preferences_vision() -> dict:
     """从 Hana 的全局 preferences 读 `vision_model`（设置页那个下拉框）。
 
@@ -229,7 +381,7 @@ def _read_hana_preferences_vision() -> dict:
         完整配置 dict；未配置/不可用返回 {}。
     """
     try:
-        pref_path = Path.home() / ".hanako" / "user" / "preferences.json"
+        pref_path = hanako_home() / "user" / "preferences.json"
         if not pref_path.exists():
             return {}
         import json as _json
@@ -237,28 +389,10 @@ def _read_hana_preferences_vision() -> dict:
         # 用户显式关掉了视觉辅助 → 视为未配置
         if prefs.get("vision_auxiliary_enabled") is False:
             return {}
-        ref = prefs.get("vision_model")
-        if not isinstance(ref, dict):
-            return {}
-        provider_id = str(ref.get("provider") or "").strip()
-        model_id = str(ref.get("id") or "").strip()
-        if not provider_id or not model_id:
-            return {}
-        provider_cfg = _read_catalog_provider(provider_id)
-        if not provider_cfg or not provider_cfg.get("api_key"):
-            logger.debug(
-                "preferences.vision_model 指向 provider=%s，但 catalog 里无凭证",
-                provider_id,
-            )
-            return {}
-        return {
-            "base_url": provider_cfg.get("base_url", ""),
-            "api_key": provider_cfg.get("api_key", ""),
-            "model": model_id,
-        }
     except Exception as e:
-        logger.debug("读 preferences.vision_model 失败（忽略）: %s", e)
+        logger.debug("读 preferences.json 失败（忽略）: %s", e)
         return {}
+    return _read_hana_preferences_model("vision_model")
 
 
 def get_vision_config(agent_id: str = "") -> dict:

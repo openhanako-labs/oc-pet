@@ -1,0 +1,72 @@
+feat(hana): 配置读取统一走 Hana 权威来源 + 排查报告
+
+## 起因
+
+用户指出：屏幕感知用的模型不是 Hana 设置页那个下拉框选的。
+查证发现 oc-pet 自造了三套与 Hana 平行的配置读取，导致
+「用户改了设置页没反应」。
+
+## 本次改动
+
+### 1. 视觉模型默认读 Hana 设置页（单一来源）
+
+    1. preferences.json 的 vision_model   ← 设置页那个下拉框（默认）
+    2. .env 的 VISION_*                    ← 高级覆盖
+    3. agent config.yaml 的 models.vision  ← 旧约定，兼容保留
+    4. catalog 的 agnes                    ← 最终回退
+
+实测：agnes-3.0-flash（oc-pet 回退链）→ agnes-2.5-flash（设置页选的）
+
+### 2. 后台任务走 Hana 的 utility_model（治 429）
+
+五个内部来源（screen_enrich / proactive / idle / memory_extract /
+memory_reflect）此前与用户对话共用 models.chat，抢同一份配额
+（屏幕感知占 LLM 调用 73%）。
+
+Hana 已配 utility_model=deepseek-v4-flash，oc-pet 此前不读。
+现在 `_using_utility_model(source)` 按来源临时切换，退出必还原。
+
+关键不变式：user 来源**永远**不切（否则用户消息由小模型回答）。
+
+### 3. utility 配置动态刷新
+
+`_refresh_utility_cfg()` 用 preferences.json 的 mtime 做失效检测。
+此前只在 __init__ 读一次，改设置页要重启桌宠；
+而视觉配置（screen.py）是每次截屏都读——两条链行为不一致。
+
+### 4. HANA_HOME：数据目录不再写死（P0 结构性）
+
+oc-pet 有 18 处读 Hana 数据，全部写死 `Path.home()/'.hanako'`。
+Hana 官方逻辑是 `HANA_HOME` 环境变量优先。
+
+新增 `hanako_home.py`，已替换 10 处（env_config 5、harness_adapter 3、
+hanako_context 2 并删掉模块级常量）。其余 8 处见报告，建议后续统一。
+
+本机 HANA_HOME 恰好等于默认值，所以此前没暴露——但这是巧合。
+
+### 5. ASR 读 Hana 的 speechRecognition
+
+`get_asr_api_config()` 原只读 .env，无回退链。
+Hana 已有 `speechRecognition.defaultModel`，用户在设置页换了没反应。
+
+## 排查报告
+
+`docs/hana-integration-audit-2026-09-17.md`
+
+结论：根因是共性缺陷而非孤立 bug。三个共同特征——
+自造字段名、自写路径解析、只读一次。
+唯一做对的是 `hana_catalog.py`（先问 Hana API，失败才自己扫），
+应作为其他地方的模板。
+
+## 测试
+
+新增 33 例，全量 1189 passed, 1 skipped。
+
+| 文件 | 例数 | 钉死的 |
+|---|---|---|
+| test_hanako_home.py | 6 | HANA_HOME 优先 + 哨兵防写死 |
+| test_vision_preferences_source.py | 6 | preferences 优先于 agent config |
+| test_utility_model_routing.py | 15 | user 不切；切后必还原；mtime 刷新 |
+| test_asr_preferences_source.py | 6 | Hana speechRecognition 被读 |
+
+同时修正 3 个旧测试对已删除的 `HANAKO_HOME` 常量的依赖。

@@ -18,9 +18,12 @@ import logging
 import re
 from pathlib import Path
 
+from hanako_home import hanako_home
+
 logger = logging.getLogger(__name__)
 
-HANAKO_HOME = Path.home() / ".hanako"
+# 注：不再用模块级常量固化路径（那会在 import 时锁死，且写死 ~/.hanako
+# 会忽略 HANA_HOME 环境变量）。改用 hanako_home() 每次解析。
 
 
 def _read_file(path: Path) -> str:
@@ -48,7 +51,7 @@ class HanakoContext:
             # 内置角色从项目目录读取
             self._agent_dir = Path(__file__).parent.parent / "characters" / agent_id
         else:
-            self._agent_dir = HANAKO_HOME / "agents" / agent_id
+            self._agent_dir = hanako_home() / "agents" / agent_id
         self._provider_catalog = self._load_provider_catalog()
 
     # ── 角色设定 ──
@@ -165,7 +168,7 @@ class HanakoContext:
 
     def _load_provider_catalog(self) -> dict:
         """加载 provider-catalog.json"""
-        path = HANAKO_HOME / "provider-catalog.json"
+        path = hanako_home() / "provider-catalog.json"
         try:
             if path.exists():
                 return json.loads(path.read_text("utf-8"))

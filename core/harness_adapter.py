@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import collections
+import contextlib
 import json
 import logging
 import re
@@ -67,6 +68,28 @@ class HanakoPetAdapter:
         # 记忆预算: 优先使用用户配置，否则按模型 context 的 1% 计算
         from config import load_config
         config = load_config()
+
+        # 2026-09-17：后台任务专用模型（Hana preferences 的 utility_model）。
+        #
+        # 五个内部来源（screen_enrich / proactive / idle / memory_extract /
+        # memory_reflect）此前与用户对话共用 models.chat —— 实测造成 429
+        # 限流（屏幕感知占 73% LLM 调用，与用户消息同时段抢配额）。
+        #
+        # Hana 设置页已有 utility_model 字段专供这类用途，oc-pet 此前不读。
+        # 未配置时为空 dict → chat_direct 回退对话模型（保持旧行为）。
+        #
+        # 动态生效：_refresh_utility_cfg 用 preferences.json 的 mtime 做失效
+        # 检测，用户改完设置页立即生效，不用重启桌宠（与 screen.py 的
+        # 视觉配置行为对齐——那条是每次截屏都读）。
+        self._utility_cfg: dict = {}
+        self._utility_cfg_mtime = "__unset__"
+        self._refresh_utility_cfg()
+        if self._utility_cfg:
+            logger.info(
+                "后台任务模型（utility_model）: %s",
+                self._utility_cfg.get("model"),
+            )
+
         memory_config = config.get('memory', {})
         
         user_budget = memory_config.get('budget_chars', 0)
@@ -124,8 +147,8 @@ class HanakoPetAdapter:
     def _load_default_from_catalog(self):
         """builtin 角色没有 Hanako agent，从 provider catalog 读默认模型"""
         import json
-        from pathlib import Path
-        catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+        from hanako_home import hanako_home
+        catalog_path = hanako_home() / "provider-catalog.json"
         try:
             data = json.loads(catalog_path.read_text("utf-8"))
             providers = data.get("providers", {})
@@ -187,6 +210,21 @@ class HanakoPetAdapter:
         "memory_extract", "memory_reflect", "screen_enrich",
     })
 
+    # 走后台任务模型（utility_model）的来源 —— 与上面那个集合**不同**。
+    #
+    # 这里关心的是“谁在消耗对话配额”，而非“输出给谁看”：
+    #   - screen_enrich / memory_extract / memory_reflect：机器读的，高频
+    #   - proactive / idle：给用户看的，但**不是用户主动发起的**，
+    #     且由定时器触发（屏幕感知、闲置），实测占调用量大头
+    #   - user：用户真实对话，**永远**用 models.chat
+    #
+    # 2026-09-17：这五个来源原先全部与用户对话共用 models.chat，
+    # 与用户消息抢同一份配额（429 的主因）。现在改走 Hana 的 utility_model。
+    _UTILITY_SOURCES = frozenset({
+        "memory_extract", "memory_reflect", "screen_enrich",
+        "proactive", "idle",
+    })
+
     def _output_rules(self) -> str:
         """输出规则全文（含当前角色可用动作清单）。"""
         return self._OUTPUT_RULES + self._build_action_prompt()
@@ -217,6 +255,71 @@ class HanakoPetAdapter:
         注入「必须嵌入情绪标签」会污染它们。其余（user/proactive/idle/...）都要。
         """
         return source not in self._NON_DISPLAY_SOURCES
+
+    def _refresh_utility_cfg(self) -> None:
+        """重新读 utility_model —— 用 preferences.json 的 mtime 做失效检测。
+
+        为什么要动态读：视觉配置（screen.py）是每次截屏都调
+        `get_vision_config()`，用户改完 Hana 设置页**立即生效**。
+        而 utility 配置若只在 __init__ 读一次，用户改完要重启桌宠才生效
+        —— 两条链行为不一致，用户会以为“又改了没反应”。
+
+        mtime 检测而非每次读盘：后台任务调用频繁（屏幕增强每几秒一次），
+        每次读 JSON 是浪费；stat 一次的开销可以忽略。
+        """
+        try:
+            from hanako_home import hanako_home
+            pref_path = hanako_home() / "user" / "preferences.json"
+            mtime = str(pref_path.stat().st_mtime_ns) if pref_path.exists() else "missing"
+        except Exception:
+            mtime = "error"
+        if mtime == getattr(self, "_utility_cfg_mtime", None):
+            return  # 文件未变，沿用缓存
+        try:
+            from env_config import get_utility_config
+            new_cfg = get_utility_config() or {}
+        except Exception as e:
+            logger.debug("读 utility_model 失败（回退对话模型）: %s", e)
+            new_cfg = {}
+        old_model = (getattr(self, "_utility_cfg", None) or {}).get("model")
+        self._utility_cfg = new_cfg
+        self._utility_cfg_mtime = mtime
+        new_model = new_cfg.get("model")
+        if new_model != old_model:
+            logger.info(
+                "后台任务模型变更: %s → %s",
+                old_model or "（对话模型）", new_model or "（对话模型）",
+            )
+
+    @contextlib.contextmanager
+    def _using_utility_model(self, source: str):
+        """内部来源临时切换到后台任务模型（utility_model）。
+
+        2026-09-17：屏幕增强 / 主动对话 / 记忆抽取 / 反思四个内部来源
+        此前与用户对话共用 models.chat，与用户消息抢同一份配额
+        （429 的主因）。现在这四个来源改走 Hana 的 utility_model。
+
+        安全：
+        - 只对 `_UTILITY_SOURCES` 里的来源生效（不碰用户对话）
+        - 未配置 utility_model → 不动（保持旧行为）
+        - 异常 / 退出时**一定**还原（用 try/finally）
+        - 嵌套调用安全（保存/还原而非重写）
+        """
+        # 每次进入时刷新（mtime 未变则零开销）——保证用户改设置页即时生效
+        self._refresh_utility_cfg()
+        cfg = getattr(self, "_utility_cfg", None) or {}
+        # 只对定时器/机器触发的内部来源生效；user 来源永远用对话模型
+        if not cfg or source not in self._UTILITY_SOURCES:
+            yield
+            return
+        saved = (self._base_url, self._api_key, self._model)
+        try:
+            self._base_url = cfg.get("base_url") or self._base_url
+            self._api_key = cfg.get("api_key") or self._api_key
+            self._model = cfg.get("model") or self._model
+            yield
+        finally:
+            self._base_url, self._api_key, self._model = saved
 
     def chat_direct(self, message: str, inject_memory: bool = True, extra_context: str = "", tools: list = None, source: str = "user") -> tuple:
         """直接调用 LLM API（不走 Hanako WS） - 原 chat() 的完整实现
@@ -282,25 +385,31 @@ class HanakoPetAdapter:
             _max_retries = 3
             _retry_delay = 1.0
             resp = None
-            for _attempt in range(_max_retries):
-                try:
-                    resp = self._call_api(messages, tools=tools)
-                    break  # 成功，跳出重试
-                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as _retry_e:
-                    if _attempt < _max_retries - 1:
-                        logger.warning("LLM 调用失败 (attempt %d/%d): %s, %.1fs 后重试",
-                                      _attempt + 1, _max_retries, type(_retry_e).__name__, _retry_delay)
-                        _t.sleep(_retry_delay)
-                        _retry_delay *= 2  # 指数退避
-                    else:
-                        raise  # 最后一次失败，抛出异常走 except 块
+            # 内部来源走后台任务模型（utility_model）；user 不切。
+            # 上下文包住整个重试循环，以便日志记录**实际生效**的模型名
+            # （若只包 _call_api，退出后 self._model 已还原，日志会写错）。
+            _effective_model = self._model
+            with self._using_utility_model(source):
+                _effective_model = self._model
+                for _attempt in range(_max_retries):
+                    try:
+                        resp = self._call_api(messages, tools=tools)
+                        break  # 成功，跳出重试
+                    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as _retry_e:
+                        if _attempt < _max_retries - 1:
+                            logger.warning("LLM 调用失败 (attempt %d/%d): %s, %.1fs 后重试",
+                                          _attempt + 1, _max_retries, type(_retry_e).__name__, _retry_delay)
+                            _t.sleep(_retry_delay)
+                            _retry_delay *= 2  # 指数退避
+                        else:
+                            raise  # 最后一次失败，抛出异常走 except 块
             _elapsed = _t.monotonic() - _t0
             # BugFix #4：显式记录慢 LLM 调用（>8s），便于区分"模型 inference 慢"
             # 与"prompt/build_context 拖慢"（用户体感"思考中卡 27s"的根因排查）。
             if _elapsed > 8.0:
                 logger.warning(
                     "LLM 调用偏慢: %.1fs | model=%s | prompt_tokens≈%d | source=%s",
-                    _elapsed, self._model,
+                    _elapsed, _effective_model,
                     sum(len(m.get("content") or "") for m in messages), source,
                 )
 
@@ -484,8 +593,11 @@ class HanakoPetAdapter:
 
         # 流式调用 API
         try:
-            for chunk in self._call_api_stream(messages, tools=tools):
-                yield chunk
+            # 内部来源（proactive/idle/...）走后台任务模型（utility_model）；
+            # user 来源不切（见 _UTILITY_SOURCES 注释）。
+            with self._using_utility_model(source):
+                for chunk in self._call_api_stream(messages, tools=tools):
+                    yield chunk
         except Exception as e:
             logger.error("流式 API 调用失败: %s", e)
             yield "（嗯…让我缓一下）", "neutral", None
@@ -964,7 +1076,7 @@ class HanakoPetAdapter:
             
             # 检查两个位置
             char_dir_builtin = Path(__file__).parent.parent / "characters" / self._agent_id
-            char_dir_custom = Path.home() / ".hanako" / "agents" / self._agent_id / "pet"
+            char_dir_custom = hanako_home() / "agents" / self._agent_id / "pet"
             
             appearance_info = []
             

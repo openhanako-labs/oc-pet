@@ -63,7 +63,14 @@ def test_agent_model_config_reads_vision_slot(tmp_path, monkeypatch):
         "}}",
         encoding="utf-8",
     )
-    monkeypatch.setattr(ec.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("HANA_HOME", str(home))
+    # 2026-09-17：preferences 的 vision_model 优先级高于 agent config，
+    # 本用例测的是「第 3 级降级」（旧约定 models.vision）。
+    # 故把视觉辅助关掉，确保走到 agent config 这一级。
+    (home / "user").mkdir(parents=True, exist_ok=True)
+    (home / "user" / "preferences.json").write_text(
+        '{"vision_auxiliary_enabled": false}', encoding="utf-8"
+    )
 
     vision = ec._read_agent_model_config("testagent", "vision")
     assert vision["model"] == "vision-model", f"应读 vision 槽: {vision!r}"
@@ -85,7 +92,7 @@ def test_agent_model_config_missing_returns_empty(tmp_path, monkeypatch):
         "models:\n  chat:\n    id: x\n    provider: p1\n", encoding="utf-8"
     )
     (home / "provider-catalog.json").write_text('{"providers": {}}', encoding="utf-8")
-    monkeypatch.setattr(ec.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("HANA_HOME", str(home))
 
     assert ec._read_agent_model_config("noagent", "vision") == {}, "无 vision 槽应返回空"
     assert ec._read_agent_model_config("ghost", "vision") == {}, "agent 不存在应返回空"
