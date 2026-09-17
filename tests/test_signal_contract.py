@@ -49,13 +49,22 @@ def _pet_sources() -> str:
     搬家后信号声明与 connect 可能出现在 mixin 里，
     合并扫描才能覆盖两种布局。
     """
-    parts = [_read("pet.py")]
+    return "\n".join(_all_sources().values())
+
+
+def _all_sources() -> dict:
+    """{相对路径: 源码文本}，含 pet.py 与全部 pet_mixins。
+
+    单独返回映射（而非合并文本）是为了报错时能指出连接在哪个文件。
+    """
+    out = {"pet.py": _read("pet.py")}
     mixin_dir = os.path.join(ROOT, "pet_mixins")
     if os.path.isdir(mixin_dir):
         for fn in sorted(os.listdir(mixin_dir)):
             if fn.endswith(".py"):
-                parts.append(open(os.path.join(mixin_dir, fn), encoding="utf-8").read())
-    return "\n".join(parts)
+                rel = f"pet_mixins/{fn}"
+                out[rel] = _read(rel)
+    return out
 
 
 # ── 当前契约快照（重构前后必须一致）──────────────────────────────────────────
@@ -100,7 +109,83 @@ CRITICAL_CONNECTIONS = {
     "pet_set_mode_signal": "_do_pet_set_mode",
     "bubble_signal": "_show_bubble_impl",
     "tool_progress_signal": "_do_tool_progress",
+    # 下面两条也是 Signal → 槽（非定时器），一并归入关键集
+    "idle_chatter_signal": "_do_idle_chatter",
+    "focus_ui_signal": "_on_focus_ui_changed",
 }
+
+# ── QTimer.timeout → 槽（内部定时器）────────────────────────────────────
+#
+# 这 16 个定时器驱动桌宠的「心跳」：拖拽轮询 / 统一 tick / 动效 / 气泡超时 /
+# 情绪过期 / 休息提醒 / 前台检测 / presence / 鼠标追踪 / 连击重置 /
+# 抚摸回退 / 单击延迟 / 帧动画 / 状态气泡节流 / 思考超时。
+#
+# 搬漏一个的表现：「某个功能不刷新」——不报错、不崩溃，但那个行为永远静止。
+# 比跨线程回调好查（行为可观察），但仍属静默失效，故一并钉死。
+#
+# 键：定时器属性名（去 self. 前缀）；值：槽名（lambda 记为 "<lambda>"）。
+EXPECTED_TIMER_CONNECTIONS = {
+    "_drag_poll_timer": "_drag_poll_tick",
+    "_unified_timer": "_unified_tick",
+    "_motion_timer": "<lambda>",
+    "_hanako_poll_timer": "_hanako_monitor.tick",
+    "_bubble_timer": "_clear_hanako_bubble",
+    "_emotion_expiry_timer": "_on_emotion_expired",
+    "_break_timer": "_break_check",
+    "_foreground_timer": "_foreground_tick",
+    "_presence_timer": "_presence_tick",
+    "_mouse_tracker_timer": "_mouse_tracker.tick",
+    "_pet_combo_timer": "_reset_pet_combo",
+    "_pet_revert_timer": "_pet_revert",
+    "_click_timer": "_fire_pending_click",
+    "_anim_timer": "_anim_tick",
+    "_think_timeout": "_on_think_timeout",
+}
+
+# ── 控件/外部对象信号 → 槽（UI 交互入口）────────────────────────────
+#
+# 这些是「用户碰得到的东西」：聊天输入框回车 / 发送按钮 / 托盘菜单 /
+# 右键菜单 / 主题切换 / 互动卡片按钮 / 聊天面板提交。
+# 搬漏一个的表现：那个交互彻底没反应（用户立刻能发现，但仍是静默的
+# ——代码层无报错）。
+#
+# 键：发射者（去 self. 前缀）；值：(信号名, 槽名) 列表。
+# 同一发射者可能有多个信号（如 _chat_panel 有两个）。
+EXPECTED_WIDGET_CONNECTIONS = {
+    "_chat_panel": [
+        ("message_submitted", "_on_chat_panel_submit"),
+        ("close_requested", "_close_chat_panel"),
+    ],
+    "input_field": [("returnPressed", "_send_message")],
+    "send_btn": [("clicked", "_send_message")],
+    "_tray": [("activated", "_on_tray_activated")],
+    "mgr": [("theme_changed", "_refresh_window_theme")],
+    "_interaction_card": [
+        ("action_clicked", "_on_interaction_card_action"),
+        ("dismiss_requested", "<lambda>"),
+    ],
+    "panel": [("card_action", "_on_interaction_card_action")],
+    "win": [
+        ("game_finished", "_on_mini_game_finished"),
+        ("close_requested", "<lambda>"),
+    ],
+}
+
+# QAction.triggered → 槽（托盘菜单 / 右键菜单项）。
+#
+# 这些发射者是局部变量（vis / passthrough / quit_a / a），无法按属性名索引，
+# 因此只断言「数量」与「关键项存在」。
+# 关键项：托盘菜单的显示/穿透/退出——丢一个用户就少一个入口。
+EXPECTED_ACTION_SLOTS = {
+    "_toggle_visibility",
+    "_toggle_passthrough",
+    "close",
+}
+MIN_ACTION_CONNECTIONS = 4  # 实测 4 条（含 2 个 lambda 右键菜单项）
+
+# customContextMenuRequested → 槽（右键菜单）。
+# 与 QAction.triggered 不同：它是「请求菜单」的信号，不是菜单项本身。
+EXPECTED_CONTEXT_MENU_SLOT = "_show_context_menu"
 
 # 20 个 _init_* 方法（搬家后仍须存在，可由 mixin 提供）
 EXPECTED_INIT_METHODS = [
@@ -281,17 +366,142 @@ def test_nested_init_methods_exist():
     assert not missing, f"缺失嵌套 _init_* 方法: {missing}"
 
 
-# ── 四、防止回退 ────────────────────────────────────────────────────────────
+# ── 四、定时器 / 控件 / 动作连接（补全安全绳）─────────────────────────────
+
+
+def _slot_name(slot: str) -> str:
+    """规范化槽名：剥掉前导 `self.`，保留剩余点号链。
+
+    `self._drag_poll_tick`      → `_drag_poll_tick`
+    `self._hanako_monitor.tick` → `_hanako_monitor.tick`
+    `<lambda>`                  → `<lambda>`
+    """
+    return slot[5:] if slot.startswith("self.") else slot
+
+
+def _all_connections() -> list:
+    r"""收集全部 `xxx.connect(yyy)` → [(文件, 行号, 发射者, 槽)]。
+
+    槽可能是 lambda（`connect(lambda: ...)`）——此时槽名记为 `<lambda>`。
+    不能只用 `\w` 匹配，否则 lambda 会整条漏掉。
+
+    槽保留完整点号链（如 `_hanako_monitor.tick`），不截末段——
+    截了会丢失「哪个对象的方法」这个信息。
+    """
+    out = []
+    pat = re.compile(r"([\w\.]+)\.connect\(\s*(lambda|[\w\.]+)")
+    for f, src in _all_sources().items():
+        for m in pat.finditer(src):
+            ln = src[: m.start()].count("\n") + 1
+            slot = m.group(2)
+            out.append((f, ln, m.group(1), "<lambda>" if slot == "lambda" else slot))
+    return out
+
+
+def test_timer_connections_present():
+    """16 个内部定时器的 timeout → 槽 全部存在。
+
+    这些是桌宠的「心跳」。搬漏一个的表现：「某个功能不刷新」
+    ——不报错、不崩溃，但那个行为永远静止。
+    """
+    conns = {}
+    for _f, _ln, sig, slot in _all_connections():
+        if sig.endswith(".timeout"):
+            # 发射者取点号链末段（`self._bubble_timer` → `_bubble_timer`）；
+            # 槽保留完整链（`self._hanako_monitor.tick` → `_hanako_monitor.tick`）
+            conns[sig.split(".")[-2]] = _slot_name(slot)
+
+    missing = []
+    for timer, slot in EXPECTED_TIMER_CONNECTIONS.items():
+        if timer not in conns:
+            missing.append(f"{timer}.timeout 未连接")
+        elif conns[timer] != slot:
+            missing.append(f"{timer}.timeout -> {conns[timer]}，预期 {slot}")
+    assert not missing, "定时器连接缺失/错位:\n  " + "\n  ".join(missing)
+
+
+def test_widget_connections_present():
+    """控件/外部对象信号 → 槽 全部存在（UI 交互入口）。
+
+    发射者可能是 `self.xxx`（属性）或局部变量（mgr / panel / win）。
+    两种都要能识别：前者取点号链末段，后者就是变量名本身。
+    """
+    conns = {}
+    for _f, _ln, sig, slot in _all_connections():
+        parts = sig.split(".")
+        if len(parts) >= 2:
+            # self._chat_panel.message_submitted → (_chat_panel, message_submitted)
+            # mgr.theme_changed                 → (mgr, theme_changed)
+            conns[(parts[-2], parts[-1])] = _slot_name(slot)
+
+    missing = []
+    for emitter, sigs in EXPECTED_WIDGET_CONNECTIONS.items():
+        for signame, slot in sigs:
+            key = (emitter, signame)
+            if key not in conns:
+                missing.append(f"{emitter}.{signame} 未连接")
+            elif conns[key] != slot:
+                missing.append(f"{emitter}.{signame} -> {conns[key]}，预期 {slot}")
+    assert not missing, "控件连接缺失/错位:\n  " + "\n  ".join(missing)
+
+
+def test_context_menu_connection_present():
+    """右键菜单请求信号必须连到菜单构建槽。"""
+    conns = {}
+    for _f, _ln, sig, slot in _all_connections():
+        conns[sig.split(".")[-1]] = _slot_name(slot)
+    assert conns.get("customContextMenuRequested") == EXPECTED_CONTEXT_MENU_SLOT, (
+        f"customContextMenuRequested -> {conns.get('customContextMenuRequested')}，"
+        f"预期 {EXPECTED_CONTEXT_MENU_SLOT}"
+    )
+
+
+def test_action_triggered_connections_present():
+    """QAction.triggered → 槽 的关键项存在（托盘菜单入口）。
+
+    发射者是局部变量（vis / passthrough / quit_a），无法按属性名索引，
+    故只断言「关键槽存在」+「总数不少于实测值」。
+
+    注：右键菜单走的是 `customContextMenuRequested`（不是 triggered），
+    其槽由 test_widget_connections_present 覆盖。
+    """
+    slots = set()
+    n = 0
+    for _f, _ln, sig, slot in _all_connections():
+        if sig.endswith(".triggered"):
+            n += 1
+            slots.add(_slot_name(slot).split(".")[-1])
+
+    missing = EXPECTED_ACTION_SLOTS - slots
+    assert not missing, f"QAction 关键槽缺失（菜单入口丢了）: {missing}"
+    assert n >= MIN_ACTION_CONNECTIONS, (
+        f"QAction.triggered 连接数 {n} < 实测下限 {MIN_ACTION_CONNECTIONS}"
+    )
+
+
+def test_total_connection_count_not_regressed():
+    """连接总数不得减少。
+
+    重构前实测 51 条。搬家只应「移动」连接，不应「删除」。
+    减少说明有连接在搬家中丢失。
+    """
+    n = len(_all_connections())
+    assert n >= 51, (
+        f"连接总数 {n} < 基线 51——搬家中丢了连接（每条都是一条功能生命线）"
+    )
+
+
+# ── 五、防止回退 ────────────────────────────────────────────────────────────
 
 
 def test_pet_py_does_not_regrow():
     """pet.py 不得继续膨胀（搬家是减法，不是加法）。
 
-    当前 3839 行。本断言是软上限：允许 ±50 行浮动，
+    重构后基线 3456 行（原 3839）。本断言是软上限：允许 ±50 行浮动，
     超过说明新增接线又堆回了 pet.py。
     """
     n = len(_read("pet.py").splitlines())
-    assert n < 3900, (
-        f"pet.py 已 {n} 行（基线 3839）。新增接线应放进对应 mixin，"
+    assert n < 3550, (
+        f"pet.py 已 {n} 行（基线 3456）。新增接线应放进对应 mixin，"
         f"而不是继续堆进 pet.py。"
     )

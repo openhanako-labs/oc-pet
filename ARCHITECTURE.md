@@ -87,12 +87,19 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin,
 
 ### 安全绳（重构的前提）
 
-`tests/test_signal_contract.py` 在重构**之前**写好，钉死：
-- 18 个 Signal 声明及参数签名
-- 45 条 `connect` 中的 16 条关键跨线程连接（信号 → 槽）
-- 20 个 `_init_*` 方法存在且可通过 MRO 访问
-- `__init__` 调用顺序
-- pet.py 行数软上限
+`tests/test_signal_contract.py`（13 例）在重构**之前**写好，钉死：
+
+| 类别 | 数量 | 搬漏的表现 |
+|---|---|---|
+| Signal 声明及参数签名 | 18 | 跨线程解包出错 |
+| 关键跨线程连接（Signal→槽） | 18 | 回调静默失效 |
+| **QTimer.timeout → 槽** | 15 | 「某个功能不刷新」 |
+| **控件信号 → 槽** | 11 | 「那个交互没反应」 |
+| QAction.triggered → 槽 | 4 | 菜单入口丢失 |
+| `_init_*` 存在且可达 | 20 | 初始化链断裂 |
+| `__init__` 调用顺序 | 16 | 初始化依赖错序 |
+| pet.py 行数上限 | — | 接线又堆回 pet.py |
+| **连接总数不减少** | ≥51 | 任何一条丢了 |
 
 **为什么必须**：纯搬家重构的最大风险是搬漏一条连接——那会让某个回调
 静默失效（不报错、不崩溃，只是功能再也不响应），现有测试抓不到。
