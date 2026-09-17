@@ -22,10 +22,12 @@ from typing import Optional
 
 from .tool_registry import ToolDef
 
+from hanako_home import hanako_home
+
 logger = logging.getLogger(__name__)
 
-HANAKO_PLUGINS = Path.home() / ".hanako" / "plugins"
-HANAKO_DATA = Path.home() / ".hanako"
+HANAKO_PLUGINS = hanako_home() / "plugins"
+HANAKO_DATA = hanako_home()
 
 
 class ToolExecutor:

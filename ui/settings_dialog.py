@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from config import load_config, save_config
+from hanako_home import hanako_home
 from ui.theme.palette import rgb, rgba
 from ui.theme.theme_manager import get_default
 logger = logging.getLogger(__name__)
@@ -239,7 +240,7 @@ class SettingsDialog(QDialog):
                 try:
                     from pathlib import Path
                     discovered = []
-                    agents_dir = Path.home() / ".hanako" / "agents"
+                    agents_dir = hanako_home() / "agents"
                     if agents_dir.is_dir():
                         discovered = sorted(d.name for d in agents_dir.iterdir() if d.is_dir())
                     for dname in discovered:
@@ -1305,7 +1306,7 @@ class SettingsDialog(QDialog):
         """
         import json
         from pathlib import Path
-        catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+        catalog_path = hanako_home() / "provider-catalog.json"
         llm_models = []
         provider_map = {}
         provider_configs = {}
@@ -1352,7 +1353,7 @@ class SettingsDialog(QDialog):
         try:
             from pathlib import Path
             import json
-            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+            catalog_path = hanako_home() / "provider-catalog.json"
             data = json.loads(catalog_path.read_text("utf-8"))
             prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
             for m in prov_models:
@@ -1387,7 +1388,7 @@ class SettingsDialog(QDialog):
         try:
             from pathlib import Path
             import json
-            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+            catalog_path = hanako_home() / "provider-catalog.json"
             data = json.loads(catalog_path.read_text("utf-8"))
             prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
             for m in prov_models:
@@ -1570,7 +1571,7 @@ class SettingsDialog(QDialog):
         try:
             from pathlib import Path
             import json
-            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+            catalog_path = hanako_home() / "provider-catalog.json"
             data = json.loads(catalog_path.read_text("utf-8"))
             prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
             for m in prov_models:
@@ -1597,7 +1598,7 @@ class SettingsDialog(QDialog):
         try:
             from pathlib import Path
             import json
-            catalog_path = Path.home() / ".hanako" / "provider-catalog.json"
+            catalog_path = hanako_home() / "provider-catalog.json"
             data = json.loads(catalog_path.read_text("utf-8"))
             prov_models = data.get("providers", {}).get(prov_id, {}).get("models", [])
             for m in prov_models:

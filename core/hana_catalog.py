@@ -45,7 +45,9 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-HANAKO_HOME = Path.home() / ".hanako"
+from hanako_home import hanako_home
+
+HANAKO_HOME = hanako_home()
 SERVER_INFO = HANAKO_HOME / "server-info.json"
 PLUGINS_DIR = HANAKO_HOME / "plugins"
 APPS_DIR = HANAKO_HOME / "apps"

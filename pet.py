@@ -3010,8 +3010,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             logger.warning("discover_agents 失败: %s", e)
         # 回退：直接扫目录
         try:
-            from pathlib import Path
-            home = Path.home() / ".hanako" / "agents"
+            from hanako_home import hanako_home
+            home = hanako_home() / "agents"
             if home.exists():
                 return [{"id": d.name, "name": d.name} for d in home.iterdir() if d.is_dir()]
         except Exception:

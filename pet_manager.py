@@ -25,7 +25,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-HANAKO_HOME = Path.home() / ".hanako"
+from hanako_home import hanako_home
+
+HANAKO_HOME = hanako_home()
 AGENTS_DIR = HANAKO_HOME / "agents"
 PROJECT_DIR = Path(__file__).parent.resolve()
 CHARACTERS_DIR = PROJECT_DIR / "characters"

@@ -19,10 +19,11 @@ import requests
 
 from .base import TTSProvider
 from env_config import get_tts_api_config
+from hanako_home import hanako_home
 
 logger = logging.getLogger(__name__)
 
-OUTPUT_DIR = Path.home() / ".hanako" / "pets" / "tts_cache"
+OUTPUT_DIR = hanako_home() / "pets" / "tts_cache"
 
 
 

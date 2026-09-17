@@ -179,16 +179,19 @@ Hana 侧 `tts` 出现 153 次，但没找到形如 `tts_model` 的 preferences �
 
 | 序 | 修什么 | 影响面 | 风险 | 状态 |
 |---|---|---|---|---|
-| 1 | `hanako_home()` helper + 18 处替换 | 全部文件读取 | 低（默认值不变，行为等价） | ✅ 已修（见第五节） |
+| 1 | `hanako_home()` helper + 全部替换 | 全部文件读取 | 低（默认值不变，行为等价） | ✅ 已修（25 处全改） |
 | 2 | ASR 读 Hana `speechRecognition` | 语音识别 | 低 | ✅ 已修 |
 | 3 | 统一动态性（所有配置用 mtime 或每次读） | 全部配置 | 中 | ✅ utility 已修，其余待查 |
 | 4 | 确认 Hana 是否有 TTS 配置入口 | TTS | 待查 | ⏸ 未定论 |
+
+> **修正**：第一节写「18 处」是 grep 漏了 `tts_provider/` 和 `ui/` 子目录，
+> 实际全项目 **25 处**。已全部替换（见下）。
 
 ---
 
 ## 五、本次已修
 
-### 1. `hanako_home()` helper（P0）
+### 1. `hanako_home()` helper（P0）—— 25 处全改
 
 新增 `hanako_home.py`，提供：
 
@@ -199,19 +202,34 @@ def hanako_home() -> Path:
     return Path(env) if env else Path.home() / ".hanako"
 ```
 
-已替换的模块：
+已替换的模块（**25 处，全覆盖**）：
 
-| 文件 | 替换处数 |
-|---|---|
-| `env_config.py` | 5（含今天新加的 3 处） |
-| `core/harness_adapter.py` | 3 |
-| `core/hanako_context.py` | 2（并删除模块级 `HANAKO_HOME` 常量） |
+| 文件 | 处数 | 改法 |
+|---|---|---|
+| `env_config.py` | 5 | 函数调用 |
+| `core/harness_adapter.py` | 3 | 函数调用 |
+| `core/hanako_context.py` | 2 | 删模块级常量，改函数调用 |
+| `pet_manager.py` | 1 | 常量值改 helper |
+| `core/hana_catalog.py` | 1 | 同上 |
+| `core/tool_executor.py` | 2 | 同上 |
+| `core/tool_registry.py` | 2 | 同上 |
+| `core/perception/schedule.py` | 1 | 同上（**被 `inspection.py` 跨模块引用，保留常量名**） |
+| `core/startup_check.py` | 1 | 局部变量（注意避开自遮蔽） |
+| `core/capability_registry.py` | 1 | 函数调用 |
+| `core/conversation_engine.py` | 1 | 函数调用 |
+| `pet.py` | 1 | 函数调用 |
+| `ui/plugin_panel.py` | 2 | 常量值改 helper |
+| `ui/character_card.py` | 1 | 常量值改 helper |
+| `ui/settings_dialog.py` | 6 | 函数调用 |
+| `tts_provider/` 5 个文件 | 5 | 常量值/返回值改 helper |
 
-**其余 12 处未改**（`pet_manager.py` / `pet.py` / `hana_catalog.py` /
-`tool_executor.py` / `tool_registry.py` / `startup_check.py` / `schedule.py` /
-`capability_registry.py` / `conversation_engine.py`）——
-它们的功能当前不受影响（`HANA_HOME` == 默认值），但仍是隐患。
-**建议后续统一替换。**
+**保留常量名而非直接删**：`schedule.HANAKO_HOME` 被 `inspection.py`
+跨模块引用，`tool_executor.HANAKO_DATA` 等同理。改成
+`HANAKO_HOME = hanako_home()` 兼容所有引用点。
+
+**防回归**：`test_hanako_home.py` 加两道哨兵——
+① 已知 19 个模块逐个检查；② 全项目 rglob 扫描（能抓到新增文件）。
+后者就是因为今天只查已知模块而漏了 `tts_provider/` 和 `ui/`。
 
 ### 2. ASR 读 Hana `speechRecognition`（P1）
 

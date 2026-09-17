@@ -34,12 +34,14 @@ from PySide6.QtWidgets import (
 
 from ui.panel_widget import PanelWidget
 
+from hanako_home import hanako_home
+
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CHARACTERS_DIR = PROJECT_ROOT / "characters"
 DEFAULT_MEMORY_DIR = Path.home() / ".oc-pet" / "memory"
-DEFAULT_HANAKO_HOME = Path.home() / ".hanako"
+DEFAULT_HANAKO_HOME = hanako_home()
 
 AVATAR_NAMES = ("avatar.png", "avatar.jpg", "avatar.jpeg",
                 "portrait.png", "icon.png")

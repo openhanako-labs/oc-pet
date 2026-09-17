@@ -68,23 +68,78 @@ def test_matches_hana_official_logic(monkeypatch, tmp_path):
 
 
 def test_consumers_use_helper():
-    """静态检查：读取 Hana 数据的关键模块应引用 helper，而非写死路径。
+    """静态检查：读取 Hana 数据的模块应引用 helper，而非写死路径。
 
     这是防回归的哨兵——新增写死的 `Path.home() / ".hanako"` 会被抓到。
+
+    2026-09-17 扩展：原只查 2 个文件，后排查发现全项目实际有 25 处
+    （报告里写 18 处是 grep 漏了 tts_provider/ 和 ui/ 子目录）。
+    现已全部替换，哨兵扩到所有曾出问题的模块。
     """
     import io
     import re
 
     root = Path(__file__).resolve().parent.parent
     # 这些模块负责读 Hana 数据，必须用 helper
-    must_use = ["env_config.py", "core/hanako_context.py"]
+    must_use = [
+        "env_config.py",
+        "core/hanako_context.py",
+        "core/hana_catalog.py",
+        "core/tool_executor.py",
+        "core/tool_registry.py",
+        "core/startup_check.py",
+        "core/capability_registry.py",
+        "core/conversation_engine.py",
+        "core/perception/schedule.py",
+        "pet_manager.py",
+        "pet.py",
+        "ui/plugin_panel.py",
+        "ui/character_card.py",
+        "ui/settings_dialog.py",
+        "tts_provider/api_tts.py",
+        "tts_provider/cosyvoice.py",
+        "tts_provider/edge_tts.py",
+        "tts_provider/mimo_tts.py",
+        "tts_provider/qwen_tts.py",
+    ]
+    offenders = []
     for rel in must_use:
         fp = root / rel
         if not fp.exists():
             continue
         src = io.open(fp, encoding="utf-8").read()
-        hardcoded = re.findall(r'Path\.home\(\)\s*/\s*"\.hanako"', src)
-        assert not hardcoded, (
-            f"{rel} 里仍有写死的 Path.home()/'.hanako'（{len(hardcoded)} 处）——"
-            f" 应改用 hanako_home()"
-        )
+        if re.search(r'Path\.home\(\)\s*/\s*"\.hanako"', src):
+            offenders.append(rel)
+    assert not offenders, (
+        f"以下模块仍有写死的 Path.home()/'.hanako'，应改用 hanako_home()：{offenders}"
+    )
+
+
+def test_whole_project_has_no_hardcoded_path():
+    """全项目扫描：除 hanako_home.py 自身的 fallback 外，不得有写死路径。
+
+    比上面那个哨兵更严——它只查已知模块，这个查全项目，
+    能抓到新增文件里的写死路径（今天就是因为只查已知模块而漏了
+    tts_provider/ 和 ui/ 子目录）。
+    """
+    import io
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    pattern = re.compile(r'Path\.home\(\)\s*/\s*"\.hanako"')
+    offenders = []
+    for fp in root.rglob("*.py"):
+        s = str(fp)
+        if "__pycache__" in s or "\\.venv" in s or "\\tests\\" in s:
+            continue
+        if fp.name == "hanako_home.py":
+            continue  # helper 自身的 fallback 是正当的
+        try:
+            src = io.open(fp, encoding="utf-8").read()
+        except Exception:
+            continue
+        if pattern.search(src):
+            offenders.append(str(fp.relative_to(root)))
+    assert not offenders, (
+        f"全项目仍有写死的 Path.home()/'.hanako'：{offenders}"
+    )

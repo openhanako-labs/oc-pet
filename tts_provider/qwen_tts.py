@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base import TTSProvider
+from hanako_home import hanako_home
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ logger = logging.getLogger(__name__)
 def _resolve_output_dir() -> Path:
     """定位 TTS 缓存目录；HOME 不可用（极少见的环境）时兜底到临时目录。"""
     try:
-        return Path.home() / ".hanako" / "pets" / "tts_cache"
+        return hanako_home() / "pets" / "tts_cache"
     except Exception:
         logger.debug("qwen_tts: 非致命异常(已静默吞掉)", exc_info=True)
     try:

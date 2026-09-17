@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base import TTSProvider
+from hanako_home import hanako_home
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ def _resolve_output_dir() -> Path:
     模块导入期绝不能因此崩掉。
     """
     try:
-        return Path.home() / ".hanako" / "pets" / "tts_cache"
+        return hanako_home() / "pets" / "tts_cache"
     except Exception:
         logger.debug("cosyvoice: 非致命异常(已静默吞掉)", exc_info=True)
     try:

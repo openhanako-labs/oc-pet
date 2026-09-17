@@ -20,8 +20,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-HANAKO_PLUGINS = Path.home() / ".hanako" / "plugins"
-HANAKO_APPS = Path.home() / ".hanako" / "apps"
+from hanako_home import hanako_home
+
+HANAKO_PLUGINS = hanako_home() / "plugins"
+HANAKO_APPS = hanako_home() / "apps"
 LOCAL_PLUGINS = Path(__file__).parent.parent / "plugins"
 
 # 外部 Hanako 插件触发词集中声明（单一来源）。

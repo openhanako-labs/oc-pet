@@ -993,9 +993,9 @@ class ConversationEngine:
         - Hana 全局插件：`~/.hanako/plugins`
         - oc-pet 本地插件：项目内 `plugins/`
         """
-        from pathlib import Path
+        from hanako_home import hanako_home
         return [
-            Path.home() / ".hanako" / "plugins",
+            hanako_home() / "plugins",
             Path(__file__).resolve().parent.parent / "plugins",
         ]
 

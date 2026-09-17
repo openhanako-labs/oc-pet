@@ -18,14 +18,15 @@ import asyncio
 import hashlib
 import logging
 import time
-from pathlib import Path
 from typing import Optional
 
 from .base import TTSProvider
 from .word_timings import save_words
+from hanako_home import hanako_home
+
 logger = logging.getLogger(__name__)
 
-OUTPUT_DIR = Path.home() / ".hanako" / "pets" / "tts_cache"
+OUTPUT_DIR = hanako_home() / "pets" / "tts_cache"
 
 # 缓存 TTL：超过 1 天的 mp3 可清理；每 10 分钟最多扫一次，避免每次合成都遍历目录
 CACHE_TTL = 24 * 3600

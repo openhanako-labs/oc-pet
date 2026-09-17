@@ -46,6 +46,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Callable, Any
 
+from hanako_home import hanako_home
+
 logger = logging.getLogger(__name__)
 
 # 中文字符（用于能力关键词的"边界"判断，避免中文子串碰撞误匹配，
@@ -306,7 +308,7 @@ class CapabilityRouter:
         直接传给本地 play 工具会被当成不存在的本地路径，产生"空播/错播"。
         """
         playlist_path = (
-            Path.home() / ".hanako" / "plugin-data" / "hanako-audio-player" / "playlist.json"
+            hanako_home() / "plugin-data" / "hanako-audio-player" / "playlist.json"
         )
         if not playlist_path.exists():
             logger.warning("play_music: 音乐库不存在 %s", playlist_path)

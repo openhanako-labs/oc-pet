@@ -18,10 +18,11 @@ from typing import Optional
 import requests
 
 from .base import TTSProvider
+from hanako_home import hanako_home
 
 logger = logging.getLogger(__name__)
 
-OUTPUT_DIR = Path.home() / ".hanako" / "pets" / "tts_cache"
+OUTPUT_DIR = hanako_home() / "pets" / "tts_cache"
 
 # MIMO 预置音色
 MIMO_VOICES = ["mimo_default", "default_zh", "default_en"]

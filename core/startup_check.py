@@ -17,6 +17,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from hanako_home import hanako_home
+
 log = logging.getLogger(__name__)
 
 # ── 检查结果 ──
@@ -87,25 +89,25 @@ def _project_root() -> Path:
 
 def check_hanako_home() -> CheckResult:
     """检查 Hanako 是否可连"""
-    hanako_home = Path.home() / ".hanako"
-    if not hanako_home.exists():
+    home = hanako_home()
+    if not home.exists():
         return CheckResult(
             "Hanako 可连？",
             False,
-            f"~/.hanako/ 目录不存在（{hanako_home}）",
+            f"~/.hanako/ 目录不存在（{home}）",
             "安装 Hanako: git clone https://github.com/liliMozi/openhanako && cd openhanako && python main.py"
         )
-    if not hanako_home.is_dir():
+    if not home.is_dir():
         return CheckResult("Hanako 可连？", False, "路径存在但不是目录", "检查 ~/.hanako 是否正确")
-    if not os.access(hanako_home, os.W_OK):
+    if not os.access(home, os.W_OK):
         return CheckResult(
             "Hanako 可连？",
             False,
-            f"~/.hanako/ 不可写（{hanako_home}）",
+            f"~/.hanako/ 不可写（{home}）",
             "修复权限: chmod +w ~/.hanako"
         )
     # 检查 agents 目录
-    agents_dir = hanako_home / "agents"
+    agents_dir = home / "agents"
     if agents_dir.exists() and agents_dir.is_dir():
         agents = list(agents_dir.iterdir())
         if not agents:

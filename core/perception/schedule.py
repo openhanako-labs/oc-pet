@@ -21,9 +21,11 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+from hanako_home import hanako_home
+
 logger = logging.getLogger(__name__)
 
-HANAKO_HOME = Path.home() / ".hanako"
+HANAKO_HOME = hanako_home()
 
 
 def _get_default_studio_id(hanako_home: Path | None = None) -> str | None:

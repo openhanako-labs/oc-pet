@@ -26,10 +26,12 @@ from PySide6.QtGui import QFont
 from ui.theme import get_default, rgb, rgba, THEME_COLORS
 from ui.panel_window import PanelWindow
 
+from hanako_home import hanako_home
+
 logger = logging.getLogger(__name__)
 
-HANAKO_PLUGINS = Path.home() / ".hanako" / "plugins"
-HANAKO_APPS = Path.home() / ".hanako" / "apps"
+HANAKO_PLUGINS = hanako_home() / "plugins"
+HANAKO_APPS = hanako_home() / "apps"
 
 
 def _build_style(theme: str) -> str:
