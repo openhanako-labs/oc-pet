@@ -59,15 +59,42 @@ def clean_bubble_text(text: str) -> str:
     text = re.sub(r'<[^>]+>', ' ', text)
     # 去 markdown 格式（标题、加粗、列表、引用）
     text = re.sub(r'^[\s*#>-]+', '', text, flags=re.MULTILINE)
-    # 去 MOOD/thinking/tool/status 等元信息
-    text = re.sub(r'\b(?:MOOD|mood|thinking|tool|status)[:：]?[^\n。！？!?]*', ' ', text, flags=re.IGNORECASE)
+    # 去方括号协议标签：`[mood:xxx]` / `[feel:v,a]` / `[do:xxx]` 及模型自创变体，
+    # 以及方括号形式的 mood 内省块（`[Vibe: xxx]` / `[Sparks: xxx]`）。
+    #
+    # 2026-09-17：必须在下面的「元信息剥离」**之前**做。
+    # 根因：模型会输出 `[mood:被冷落] 你倒是说点什么啊——…吧。`，而下面的
+    # MOOD 正则从 "mood:" 一路吃到句末标点，只留下一个孤立的 "[" 和 "。"，
+    # 气泡上就显示成 `[ 。`（实测 2026-09-16 12:37 / 12:43 两条）。
+    # 先把整对标签消费掉，就不会留下半截括号残渣。
+    #
+    # 方括号 Vibe 块也要在这里剥：`clean_bubble_text` 是独立的清洗入口
+    # （hanako_monitor 的文件回退路径直接调它，不经过 parse_emotion），
+    # 只靠上面的纯文本行剥离会漏掉带方括号的形式。
+    text = re.sub(
+        r'\[\s*(?:mood|feel|do|emotion|expression|action|duration|message|vibe|sparks|reflections|will)\s*[:=][^\]]*\]',
+        ' ', text, flags=re.IGNORECASE,
+    )
+    # 去 MOOD/thinking/tool/status 等元信息。
+    #
+    # 2026-09-17：冒号从可选改为**必需**。原 `[:：]?` 配合 `[^\n。！？!?]*`
+    # 会在正文里出现这些词时把整句吃到句末标点：
+    #   "你 mood 看起来不错。" → "你 。"
+    # 这类词当标签用时一定带冒号（"mood: 被冷落"），要求冒号即可区分。
+    text = re.sub(r'\b(?:MOOD|mood|thinking|tool|status)\s*[:：][^\n。！？!?]*', ' ', text, flags=re.IGNORECASE)
     # 去 emotion 标签（如 [emotion: curious]）—— 这是 LLM 内部情绪标记，
     # 应被解析为表情/动画，不应出现在气泡文本中。
     text = re.sub(r'\[\s*emotion\s*[:=]\s*[^\]\n]+\]\s*', ' ', text, flags=re.IGNORECASE)
     # 去引号和括号
     text = re.sub(r'[{}\\]"\'`]', ' ', text)
+    # 去掉残留的孤立方括号（上面元信息剥离吃掉了标签内容，可能只剩半截 "["）。
+    text = re.sub(r'(?:^|\s)[\[\]{}()]+(?=\s|$)', ' ', text)
     # 压缩空白
     text = re.sub(r'\s+', ' ', text).strip()
+    # 清洗后只剩标点/括号的残渣（如 "[ 。"）→ 视为空，不上气泡。
+    # 判据：去掉空白、方括号和常见中英标点后什么都不剩。
+    if not re.sub(r'[\s\[\]()（）【】{}。，、,.!?！？~…—－-]', '', text):
+        return ""
     return text
 
 

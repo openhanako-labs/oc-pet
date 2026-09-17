@@ -24,7 +24,7 @@ from PySide6.QtGui import (
 )
 from config import (CHARACTER_INFO, EXPRESSION_MAP, get_transition_style,
                     load_config, save_config, async_config_saver)
-from core.hanako_monitor import HanakoMonitor, compact_bubble_text
+from core.hanako_monitor import HanakoMonitor, clean_bubble_text, compact_bubble_text
 from core.idle_chatter import IdleChatter
 
 from motion.behavior import BehaviorParams, BEHAVIOR_MODES
@@ -3330,12 +3330,24 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._stop_all_tts()
 
         # 计算要显示的文本
+        #
+        # 2026-09-17：不再无条件 `compact_bubble_text(reply) or reply`。
+        # 清洗后为空有两种截然不同的原因：
+        #   a) 回复里真的只有协议标签、没有正文（如模型只输出 `[feel:0.3,0.2]`）
+        #   b) 清洗逻辑把正文也吃掉了（元信息正则越界，历史 bug）
+        # 两种都不应该回退到原始文本——回退会把标签原样上屏，或留下 `[ 。` 残渣。
+        # 判据用 clean_bubble_text：它返回空，就说明去掉标签/标点后确实没东西可显示。
         display_text = ""
         if reply and reply.strip() and reply.strip() not in ("\u2026", "..."):
             try:
-                display_text = compact_bubble_text(reply) or reply
+                display_text = compact_bubble_text(reply)
             except Exception:
                 display_text = reply
+            if not display_text:
+                try:
+                    display_text = reply if clean_bubble_text(reply) else ""
+                except Exception:
+                    display_text = reply
 
         # 是否有即将播放的音频（有则延到 on_tts_start 显示）
         will_play = bool(
