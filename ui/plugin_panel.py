@@ -203,24 +203,16 @@ class PluginPanel(PanelWindow):
                     if not isinstance(t, dict):
                         continue
                     src = t.get("source", "")
-                    # 尝试读取工具的 name/description
+                    # 2026-09-17：解析逻辑抽到 core/js_tool_parser.py（单一实现）
                     tool_file = d / src
                     tool_name = os.path.splitext(src)[0].split("/")[-1]
                     tool_desc = ""
                     if tool_file.exists():
                         try:
-                            content = tool_file.read_text("utf-8")
-                            # 正则提取（不用 split("=")——值里可能含 =，会截断）
-                            _mn = re.search(
-                                r"export\s+const\s+name\s*=\s*['\"]([^'\"]+)['\"]", content
-                            )
-                            _md = re.search(
-                                r"export\s+const\s+description\s*=\s*['\"]([^'\"]*)['\"]", content
-                            )
-                            if _mn:
-                                tool_name = _mn.group(1)
-                            if _md:
-                                tool_desc = _md.group(1)[:60]
+                            from core.js_tool_parser import parse_tool_summary
+                            _s = parse_tool_summary(tool_file)
+                            tool_name = _s["name"]
+                            tool_desc = _s["description"][:60]
                         except Exception:
                             logger.debug("plugin_panel: 非致命异常(已静默吞掉)", exc_info=True)
                     tools.append({"name": tool_name, "desc": tool_desc, "source": src})
@@ -263,26 +255,10 @@ class PluginPanel(PanelWindow):
                 if not tools_dir.is_dir():
                     continue
                 tools = []
-                for f in sorted(tools_dir.iterdir()):
-                    if not f.is_file() or f.suffix not in (".js", ".mjs", ".ts"):
-                        continue
-                    tool_name, tool_desc = f.stem, ""
-                    try:
-                        content = f.read_text("utf-8", errors="replace")
-                        # 用正则提取（不用 split("=")——值里可能含 =，会截断）
-                        m_n = re.search(
-                            r"export\s+const\s+name\s*=\s*['\"]([^'\"]+)['\"]", content
-                        )
-                        m_d = re.search(
-                            r"export\s+const\s+description\s*=\s*['\"]([^'\"]*)['\"]", content
-                        )
-                        if m_n:
-                            tool_name = m_n.group(1)
-                        if m_d:
-                            tool_desc = m_d.group(1)[:60]
-                    except Exception:
-                        logger.debug("plugin_panel: 工具文件解析失败 %s", f.name)
-                    tools.append({"name": tool_name, "desc": tool_desc,
+                from core.js_tool_parser import iter_tool_files, parse_tool_summary
+                for f in iter_tool_files(tools_dir):
+                    s = parse_tool_summary(f)
+                    tools.append({"name": s["name"], "desc": s["description"][:60],
                                   "source": f"tools/{f.name}"})
                 if not tools:
                     continue

@@ -155,16 +155,17 @@ def test_panel_scan_includes_v2_apps():
     assert all(a.get("kind") == "app" for a in v2)
 
 
-def test_panel_tool_name_parsed_by_regex():
-    """工具名用正则提取，不用 split(\"=\")。
+def test_panel_uses_shared_parser():
+    """工具名解析走共享实现，不再内联正则。
 
-    原实现 `line.split(\"=\")[-1]` 在值含 = 的行上会截断，
-    且对 `export const name = \"mail_accounts\";` 这类行会丢前缀。
+    2026-09-17：解析逻辑抽到 `core/js_tool_parser.py`。
+    本断言防止再次内联分叉（历史上三处各写一份，已出过行为不一致：
+    `split("=")` 把 `mail_accounts` 解析成 `accounts`）。
     """
     import inspect
 
     from ui import plugin_panel
 
     src = inspect.getsource(plugin_panel.PluginPanel._scan_v2_apps)
-    assert "re.search" in src, "应用正则提取工具名"
-    assert 'split("=")[-1]' not in src, "不应再用 split(\"=\") 解析"
+    assert "js_tool_parser" in src, "应复用 core/js_tool_parser.py"
+    assert 'split("=")[-1]' not in src, "不应再用 split('=') 解析"

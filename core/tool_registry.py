@@ -335,104 +335,26 @@ class ToolRegistry:
         return all(any(n == h for h in it) for n in needle)
 
     def _parse_tool_file(self, path: Path, plugin_id: str) -> Optional[ToolDef]:
-        """从 JS 工具文件提取 name/description/parameters"""
-        if not path.exists():
-            return None
-        try:
-            content = path.read_text("utf-8")
+        """从 JS 工具文件提取 name/description/parameters。
 
-            # 提取 name
-            name_match = re.search(r"(?:export\s+(?:const|let|var)|const|let|var)\s+name\s*=\s*['\"]([^'\"]+)['\"]", content)
-            name = name_match.group(1) if name_match else path.stem
-
-            # 提取 description
-            desc_match = re.search(r"(?:export\s+(?:const|let|var)|const|let|var)\s+description\s*=\s*['\"]([^'\"]+)['\"]", content)
-            description = desc_match.group(1) if desc_match else ""
-
-            # 提取 parameters (JSON 对象)
-            parameters = self._extract_json_block(content, "parameters")
-            if not parameters:
-                parameters = {"type": "object", "properties": {}}
-
-            # 提取 triggers（本地插件可声明触发词，动态驱动路由）
-            triggers = self._parse_triggers(content)
-
-            return ToolDef(
-                name=name,
-                description=description,
-                parameters=parameters,
-                plugin_id=plugin_id,
-                source_path=str(path),
-                triggers=triggers,
-            )
-        except Exception as e:
-            logger.warning("Failed to parse tool %s: %s", path, e)
-            return None
-
-    def _parse_triggers(self, content: str) -> list:
-        """从 JS 工具文件提取 triggers（字符串数组或 {text,args} 数组）。
-
-        支持两种写法：
-          export const triggers = ['下一首', '切歌'];
-          export const triggers = [{ text: '下一首', args: { action: 'next' } }, ...];
-        返回统一结构：[{"text": str, "args": dict}, ...]（args 缺省为 {}）。
+        2026-09-17：解析逻辑抽到 `core/js_tool_parser.py`（单一实现）。
+        此前 tool_registry / plugin_panel / hana_catalog 三处各写一份，
+        已出现行为不一致。现在只在此处适配成 ToolDef。
         """
-        m = re.search(
-            r"(?:export\s+(?:const|let|var)|const|let|var)\s+triggers\s*=\s*(\[[\s\S]*?\])\s*;",
-            content,
+        from core.js_tool_parser import parse_tool_file as _parse
+
+        parsed = _parse(path)
+        if parsed is None:
+            return None
+        return ToolDef(
+            name=parsed["name"],
+            description=parsed["description"],
+            parameters=parsed["parameters"],
+            plugin_id=plugin_id,
+            source_path=str(path),
+            triggers=parsed["triggers"],
         )
-        if not m:
-            return []
-        raw = m.group(1)
-        # JS → JSON：单引号字符串→双引号；key 限定 ASCII 加引号（与 _extract_json_block 一致）
-        raw = re.sub(r"'((?:[^'\\]|\\.)*)'", r'"\1"', raw)
-        raw = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)', r'\1"\2"\3', raw)
-        try:
-            arr = json.loads(raw)
-        except (json.JSONDecodeError, Exception):
-            return []
-        out: list = []
-        for item in arr:
-            if isinstance(item, str):
-                out.append({"text": item, "args": {}})
-            elif isinstance(item, dict) and item.get("text"):
-                out.append({"text": item["text"], "args": item.get("args") or {}})
-        return out
 
-    def _extract_json_block(self, content: str, var_name: str) -> Optional[dict]:
-        """从 JS 源码中提取 JSON 对象赋值
-
-        注意：JS 工具文件普遍用单引号字符串（const parameters = { type: 'object', ... }），
-        原实现只补 key 引号、不转字符串引号，导致 json.loads 失败 → 参数回退为空对象
-        （本地注册表看不到 play 的 source/title 等参数，LLM 无从正确传参）。本方法
-        增加单引号→双引号转换 + key 限定 ASCII（Python 3 的 \\w 会匹配中文，历史坑）。
-        """
-        # 匹配: const parameters = { ... };
-        pattern = rf"(?:export\s+(?:const|let|var)|const|let|var)\s+{var_name}\s*=\s*(\{{[\s\S]*?\}})\s*;"
-        match = re.search(pattern, content)
-        if not match:
-            return None
-        try:
-            # JS 对象 → JSON：去掉尾逗号、注释
-            raw = match.group(1)
-            raw = re.sub(r'//.*?\n', '\n', raw)  # 去单行注释
-            raw = re.sub(r'/\*[\s\S]*?\*/', '', raw)  # 去多行注释
-            raw = re.sub(r',\s*([\]}])', r'\1', raw)  # 去尾逗号
-            # JS 对象 key 没引号 → 加引号。key 限定 [a-zA-Z_][a-zA-Z0-9_]*，
-            # 避免 \\w 误匹配中文（如 "默认 20" 里的中文）——历史坑。
-            raw = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)', r'\1"\2"\3', raw)
-            try:
-                # 安全路径优先：值已是双引号/纯数字的 JS（多数工具文件），直接可解析。
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                logger.debug("tool_registry: 非致命异常(已静默吞掉)", exc_info=True)
-            # 兜底：JS 单引号字符串 → JSON 双引号字符串（部分工具文件用单引号）。
-            # 注意：仅当安全路径失败才做——双引号字符串里嵌单引号（如
-            # search-stickers 的 "如 '加班,累'"，转换会破坏嵌套引号）。
-            raw = re.sub(r"'((?:[^'\\]|\\.)*)'", r'"\1"', raw)
-            return json.loads(raw)
-        except (json.JSONDecodeError, Exception):
-            return None
 
     def get_tools(self) -> list[dict]:
         """返回所有工具的 OpenAI 格式列表"""

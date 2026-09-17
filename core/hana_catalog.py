@@ -220,27 +220,14 @@ def _discover_apps() -> dict:
 
 
 def _scan_tool_files(tools_dir: Path) -> list[dict]:
-    """解析 tools/*.js 的导出声明（v1/v2 结构一致，可复用）。
+    """解析 tools/*.js 的导出声明（v1/v2 结构一致）。
 
-    只做轻量正则提取，不 import（避免拉起 JS 运行时）。
+    2026-09-17：解析逻辑抽到 `core/js_tool_parser.py`（单一实现）。
+    本函数只取清单所需字段（name/description/file），不取完整 parameters。
     """
-    out: list[dict] = []
-    try:
-        if not tools_dir.is_dir():
-            return out
-        for f in sorted(tools_dir.iterdir()):
-            if not f.is_file() or f.suffix not in (".js", ".mjs", ".ts"):
-                continue
-            try:
-                src = f.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                continue
-            name = _re_str(src, "name") or f.stem
-            desc = _re_str(src, "description") or ""
-            out.append({"name": name, "description": desc[:200], "file": f.name})
-    except Exception as e:
-        logger.debug("解析工具文件失败 (%s): %s", tools_dir, e)
-    return out
+    from core.js_tool_parser import iter_tool_files, parse_tool_summary
+
+    return [parse_tool_summary(f) for f in iter_tool_files(tools_dir)]
 
 
 def _re_str(src: str, var: str) -> Optional[str]:
