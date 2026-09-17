@@ -67,23 +67,36 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin,
                 InterfaceMixin, PerceptionMixin, QWidget):
 ```
 
-**3,456 行**（重构前 3,839）。`__init__` 只有 37 行，直接调 **10 个** `_init_*`；
-其余 10 个是嵌套调用（由其它 `_init_*` 内部调）。
+**3,182 行**（重构前 3,839，**已降 657 行**）。`__init__` 只有 37 行，
+直接调 **10 个** `_init_*`；其余是嵌套调用。
 
-### 接线归属（技术债①已部分清偿）
+### 接线归属（技术债①已清偿大部分）
 
 | 归属 | 方法 | 状态 |
 |---|---|---|
-| **pet.py**（骨架，未搬） | `_init_diag_switches` `_init_states` `_init_schedulers` `_init_interaction` `_init_engine` `_init_voice_audio` `_init_visual_startup` `_init_neko_t05` | 与 Qt 窗口/渲染器强耦合 |
+| **pet.py**（骨架，不搬） | `_init_diag_switches` `_init_states` `_init_engine` `_init_voice_audio` `_init_visual_startup` `_init_neko_t05` | 与 Qt 窗口/渲染器强耦合 |
+| **interface_mixin.py** | MCP / 状态口 / 外部触发 | 第一批（250 行） |
+| **perception_mixin.py** | `_init_schedulers` + `_init_neko_p1` 及五条线 | 第二/五批 |
+| **panels_mixin.py** | `_init_neko_panels` + `_init_multi_pet_greeting` | 第三批 |
+| **interaction_mixin.py** | `_init_interaction` | 第四批 |
 | **play_mixin.py** | `_init_play_layer` | 早已搬 |
-| **interface_mixin.py** | `_init_mcp_server` `_init_status_http` `_init_external_trigger` + 8 个辅助 | **本次新搬**（250 行） |
-| **perception_mixin.py** | `_init_neko_p1` `_init_p1_*` ×5 | **本次新搬**（135 行） |
 
-### 为什么只搬了一半
+### 判据：不是「它属于谁」，而是「它依赖什么」
 
-剩下 8 个与 `self._setup_window()` / `self._renderer` / `QTimer` 强耦合，
-搬走需要先抽接口（工作量大、风险高）。本次优先搬**归属明确、自包含**的
-两组，验证了搬家流程（含安全绳）可行。
+搬家前逐个量了耦合面（self.属性数 / 调 pet.py 方法数）：
+
+| 方法 | 行 | self.属性 | 调 pet.py 方法 | 结论 |
+|---|---|---|---|---|
+| `_init_multi_pet_greeting` | 22 | 2 | 0 | ✅ 已搬 |
+| `_init_neko_panels` | 79 | 12 | 0 | ✅ 已搬 |
+| `_init_interaction` | 45 | 29 | 0 | ✅ 已搬 |
+| `_init_schedulers` | 126 | 25 | 0 | ✅ 已搬 |
+| `_init_visual_startup` | 91 | 36 | **11** | ❌ 搬了更乱 |
+| `_init_engine` | 101 | 44 | 4 | ❌ 与信号声明强绑 |
+
+**关键发现**：`_init_visual_startup` 调 11 个 pet.py 内部方法
+（`_setup_window` / `_setup_ui` / `_setup_menu` / `_setup_tray` …），
+搬走等于把窗口构建拆成两半——**那是设计改动，不是搬家**。
 
 ### 安全绳（重构的前提）
 
@@ -320,7 +333,7 @@ Live2D `l2d.init()` 进程级只调一次，关单个宠不释放全局 GL。
 oc-pet/
 ├── main.py            入口（286 行）
 ├── launcher.py        守护进程（347 行）：心跳看门狗 + 自动复活
-├── pet.py             PetWindow（3456 行，god-object，见 §3）
+├── pet.py             PetWindow（3182 行，见 §3）
 ├── pet_manager.py     多宠管理（833 行）
 ├── config.py          配置读写（545 行）
 ├── env_config.py      环境变量（402 行，多为空壳回退 Hana）
@@ -333,9 +346,10 @@ oc-pet/
 │   ├── perception/              感知（20 文件 6595 行，见 §6）
 │   └── ...（记忆/工具/MCP/桥接等 50+ 模块）
 │
-├── pet_mixins/        PetWindow 行为拆分（10 文件）
+├── pet_mixins/        PetWindow 行为拆分（11 文件）
 │   ├── interface_mixin.py    对外接口（MCP / 状态口 / 外部触发）
-│   ├── perception_mixin.py   P1 感知/记忆集成
+│   ├── perception_mixin.py   调度器 + P1 感知/记忆集成
+│   ├── panels_mixin.py       附属面板（聊天/记忆/角色卡）+ 多宠
 │   └── ...（其余 8 个）
 ├── ui/                UI 组件（38 文件 11609 行）
 ├── avatar/            渲染（15 文件 6628 行）
@@ -366,8 +380,9 @@ oc-pet/
 
 ## 13. 已知技术债
 
-1. **`pet.py` 仍有 8 个 `_init_*` 未搬**：与 Qt 窗口/渲染器强耦合，
-   搬走需先抽接口（技术债①已部分清偿，见 §3）
+1. **`pet.py` 仍有 6 个 `_init_*` 未搬**：`_init_visual_startup` 调 11 个
+   内部方法（拆它=拆窗口构建）、`_init_engine` 与 18 个 Signal 声明强绑。
+   搬这两个需要先抽接口——**那是设计改动，不是搬家**（见 §3）
 2. **`_rebuild` 的 use-after-cleanup 残留**：`old.cleanup()` 与 worker 合成竞态
 3. **屏幕感知与对话共用 provider**：429 限流来源；已支持 per-agent
    `models.vision` 但用户尚未配置

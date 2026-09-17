@@ -1,12 +1,25 @@
-"""PerceptionMixin — 感知与记忆接线（P1 集成层）。
+"""PerceptionMixin — 感知与记忆接线（P1 集成层 + 调度器）。
 
 由 PetWindow 多重继承（pet.py 类定义中加入）。方法体内访问
 ``self.config`` / ``self._perception`` / ``self._proactive`` / ``self._engine``
 等均由 PetWindow 提供（鸭子类型）。
 
-## 这一组是干什么的
+## 包含两部分
 
-P1 集成层把五条独立的增强线接进主循环：
+### 1. 调度器与感知控制器（`_init_schedulers`）
+
+建立桌宠的「心跳源」：
+
+| 组件 | 作用 |
+|---|---|
+| `ActionLinker` | 动作联动（感知→动作） |
+| `ForegroundWatcher` | 前台窗口检测（Win32） |
+| `ProactiveScheduler` | 主动对话（会说话） |
+| `DialogueScheduler` | 统一对话调度 |
+| `PresenceScheduler` | 轻存在感（只做微动作，不说话） |
+| `PerceptionController` | 感知中枢（时间/情绪/日程/屏幕） |
+
+### 2. P1 集成层（`_init_neko_p1` 及五条线）
 
 | 线 | 模块 | 作用 |
 |---|---|---|
@@ -15,25 +28,161 @@ P1 集成层把五条独立的增强线接进主循环：
 | C | `anti_repeat` / `screen` enrich | 反重复 + 屏幕语义增强 |
 
 **共同设计**：全部防御式——任何一线失败只记日志，绝不影响既有功能。
-每条线都有 config 开关，默认行为保守（如 embedding 默认关）。
 
-## 为什么单独一个 mixin
+## 依赖顺序（重要）
 
-这 6 个方法（约 145 行）原本散在 `pet.py` 的对话/动画接线之间。
-它们共享同一套模式（读 config → 检查依赖 → 注入 → 记日志），
-聚在一起后改感知逻辑不必翻渲染代码。
+`_init_schedulers` 读取 `self._diag_disable_perception`，该字段由
+`_init_diag_switches` 设置——`__init__` 保证前者先调用。
 
 搬家自 pet.py（2026-09-17，技术债①）。行为零变化。
 """
 from __future__ import annotations
 
 import logging
+import time
+
+from PySide6.QtCore import QTimer
+
+from config import load_config
+from core.perception.controller import PerceptionController
+from core.perception.proactive import ProactiveScheduler
+from motion.action_linker import ActionLinker
+from motion.foreground_watcher import ForegroundWatcher
 
 logger = logging.getLogger(__name__)
 
 
 class PerceptionMixin:
-    """P1 感知/记忆集成：反重复 / 屏幕增强 / 事实库 / 反思 / 向量召回。"""
+    """调度器与感知：动作联动 / 前景检测 / 主动对话 / 存在感 / 感知中枢 + P1 集成。"""
+
+    # ── 调度器与感知控制器 ──────────────────────────────────
+
+    def _init_schedulers(self):
+        """动作联动/前景检测/Proactive/Presence/感知控制器（与 __init__ 原顺序一致）。"""
+        # ── 动作联动 ──
+        al_cfg = self.config.get("action_linker", {})
+        self._action_linker = ActionLinker(
+            character_id=self._current_char,
+            highlight_duration=al_cfg.get("highlight_duration", 30),
+            enabled=al_cfg.get("enabled", True),
+        )
+
+        # ── 前景窗口检测 ──
+        self._foreground_watcher = ForegroundWatcher()
+        self._foreground_watcher.on_change = self._on_foreground_change
+        self._foreground_watcher.start()
+        self._foreground_timer = QTimer(self)
+        self._foreground_timer.timeout.connect(self._foreground_tick)
+
+        # ── Proactive 主动对话调度器(P1)──
+        proactive_cfg = self.config.get("proactive", {})
+        self._proactive_cfg = proactive_cfg  # 供 _init_visual_startup 使用
+        # 活动感知（打字/划水/空闲）：零成本，给 Proactive 提供打扰成本维度
+        try:
+            from motion.activity_tracker import ActivityTracker
+            self._activity_tracker = ActivityTracker()
+        except Exception:
+            self._activity_tracker = None
+        self._proactive = ProactiveScheduler(
+            foreground_watcher=self._foreground_watcher,
+            on_proactive=self._on_proactive_trigger,
+            activity_tracker=self._activity_tracker,
+        )
+        self._proactive.load_config(proactive_cfg)
+
+        # 2026-09-06: P1 统一调度器（DialogueScheduler）
+        try:
+            from core.dialogue_scheduler import DialogueScheduler
+            self._scheduler = DialogueScheduler()
+            self._scheduler.load_config(self.config)
+        except Exception as e:
+            logger.warning("Failed to init DialogueScheduler: %s", e)
+            self._scheduler = None
+        self._proactive_grace = time.time() + 120  # 启动后 2 分钟内不触发主动对话
+        # T02 P0-1：LLM 生成器注入（复用 Hanako 通道 source="proactive"）。
+        # 适配器在 _init_engine 里由 ConversationEngine.start() 创建，因此延迟到
+        # _init_engine 末尾统一注入（见 _inject_proactive_generator）。
+
+        # ── Presence 轻存在感调度器（不同于 proactive：不说话只做动作）──
+        # 与主动对话互补：proactive 会打断（说话），presence 只在空闲时做微动作，
+        # 让角色“在线”。“对话中暂停”通过 _mark_user_interaction → mark_interaction 实现。
+        self._presence = None
+        self._presence_timer = None
+        # P2: 动作冷却追踪（连续触发合并成一次，防连发）
+        # {action_id: last_trigger_time}
+        self._action_cooldowns: dict[str, float] = {}
+        self._action_cooldown_sec: float = 2.0  # 默认 2 秒冷却
+        try:
+            from core.presence import PresenceScheduler
+            self._presence = PresenceScheduler(on_presence=self._on_presence_action)
+            self._presence.load_config(self.config.get("presence", {}) or {})
+            self._presence_timer = QTimer(self)
+            self._presence_timer.timeout.connect(self._presence_tick)
+            self._presence_timer.start(60_000)  # 每 60s 检查一次空闲状态
+        except Exception as e:
+            logger.warning("Presence 初始化失败（非致命）: %s", e)
+
+        # ── 感知控制器(P2: 时间 + 情绪状态机 + 日程)──
+        # 定时/巡检读取绑定的 Hanako agent：与对话后端一致（默认 ophelia），
+        # 而非显示角色 miku（miku 在 ~/.hanako/agents/ 下无目录 → 读空）。
+        _dlg_agent = ""
+        try:
+            _dlg_agent = (load_config().get("dialog", {}) or {}).get("agent_id", "") or ""
+        except Exception:
+            _dlg_agent = ""
+        if not _dlg_agent:
+            _dlg_agent = self._current_char
+        self._perception = PerceptionController(self._current_char, agent_id=_dlg_agent)
+        # BugFix #5-D：Hanako 任务巡检命中 → 主动汇报（复用 proactive 触发链路）
+        try:
+            self._perception.set_inspection_callback(self._on_proactive_trigger)
+        except Exception as e:
+            logger.debug("Inspection callback wiring failed: %s", e)
+        # 屏幕内容→情绪回调
+        self._perception.screen.on_emotion = self._on_screen_emotion
+        self._perception.screen.on_screen_proactive = self._on_screen_proactive
+        self._perception.screen.on_update = self._on_screen_update
+        # 2026-09-14 对话避让：屏幕 LLM 增强与用户回复抢同一条 API
+        # （实测 Vision API timeout 与回复同时段），对话进行中让路。
+        try:
+            self._perception.screen.busy_check = self._is_conversation_busy
+        except Exception as e:
+            logger.debug("屏幕感知避让钩子注入失败（非致命）: %s", e)
+
+        # ── 屏幕感知开关（从配置读取）──
+        screen_cfg = self.config.get("screen", {})
+        if not screen_cfg.get("enabled", True):
+            self._perception.screen.disable()
+            logger.info("Screen perception disabled by config")
+        # P0 调试：环境变量强制禁用感知（二分定位用）
+        if self._diag_disable_perception:
+            self._perception.screen.disable()
+            logger.warning("Screen perception DISABLED via OC_DISABLE_PERCEPTION=1")
+        # ── 媒体播放感知（SMTC）──
+        try:
+            self._perception.media.start()
+            logger.info("MediaPerception (SMTC) started")
+        except Exception as e:
+            logger.debug("MediaPerception start failed: %s", e)
+
+        # 截图保护开关（默认全关，配置开启）
+        if screen_cfg.get("blur", False):
+            self._perception.screen.set_blur(True)
+        if screen_cfg.get("blacklist", False):
+            self._perception.screen.set_blacklist(True)
+        if not screen_cfg.get("compress", True):
+            self._perception.screen.set_compress(False)
+        # 截屏间隔（随机范围优先，缺省 interval±30%）
+        try:
+            _iv = int(screen_cfg.get("interval", 120) or 120)
+            _lo = screen_cfg.get("interval_min")
+            _hi = screen_cfg.get("interval_max")
+            if _lo and _hi:
+                self._perception.screen.set_interval_range(int(_lo), int(_hi))
+            else:
+                self._perception.screen.set_interval(_iv)
+        except Exception:
+            self._perception.screen.set_interval(120)
 
     # ── P1 集成总入口 ──────────────────────────────────────
 

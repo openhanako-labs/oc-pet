@@ -66,6 +66,7 @@ from pet_mixins.play_mixin import PlayMixin
 from pet_mixins.bubble_mixin import BubbleMixin
 from pet_mixins.interface_mixin import InterfaceMixin
 from pet_mixins.perception_mixin import PerceptionMixin
+from pet_mixins.panels_mixin import PanelsMixin
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ except ImportError:
 
 # ─── 设置对话框 ─────────────────────────────────────────
 
-class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, BehaviorMixin, VoiceProviderMixin, PlayMixin, BubbleMixin, InterfaceMixin, PerceptionMixin, QWidget):
+class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, BehaviorMixin, VoiceProviderMixin, PlayMixin, BubbleMixin, InterfaceMixin, PerceptionMixin, PanelsMixin, QWidget):
     """透明桌面宠物窗口"""
 
     # 跨线程信号：后台线程 -> 主线程
@@ -245,179 +246,6 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         # ── 空闲检查定时器 ──
         self._break_timer = QTimer(self)
         self._break_timer.timeout.connect(self._break_check)
-
-    def _init_schedulers(self):
-        """动作联动/前景检测/Proactive/Presence/感知控制器（与 __init__ 原顺序一致）。"""
-        # ── 动作联动 ──
-        al_cfg = self.config.get("action_linker", {})
-        self._action_linker = ActionLinker(
-            character_id=self._current_char,
-            highlight_duration=al_cfg.get("highlight_duration", 30),
-            enabled=al_cfg.get("enabled", True),
-        )
-
-        # ── 前景窗口检测 ──
-        self._foreground_watcher = ForegroundWatcher()
-        self._foreground_watcher.on_change = self._on_foreground_change
-        self._foreground_watcher.start()
-        self._foreground_timer = QTimer(self)
-        self._foreground_timer.timeout.connect(self._foreground_tick)
-
-        # ── Proactive 主动对话调度器(P1)──
-        proactive_cfg = self.config.get("proactive", {})
-        self._proactive_cfg = proactive_cfg  # 供 _init_visual_startup 使用
-        # 活动感知（打字/划水/空闲）：零成本，给 Proactive 提供打扰成本维度
-        try:
-            from motion.activity_tracker import ActivityTracker
-            self._activity_tracker = ActivityTracker()
-        except Exception:
-            self._activity_tracker = None
-        self._proactive = ProactiveScheduler(
-            foreground_watcher=self._foreground_watcher,
-            on_proactive=self._on_proactive_trigger,
-            activity_tracker=self._activity_tracker,
-        )
-        self._proactive.load_config(proactive_cfg)
-        
-        # 2026-09-06: P1 统一调度器（DialogueScheduler）
-        try:
-            from core.dialogue_scheduler import DialogueScheduler
-            self._scheduler = DialogueScheduler()
-            self._scheduler.load_config(self.config)
-        except Exception as e:
-            logger.warning("Failed to init DialogueScheduler: %s", e)
-            self._scheduler = None
-        self._proactive_grace = time.time() + 120  # 启动后 2 分钟内不触发主动对话
-        # T02 P0-1：LLM 生成器注入（复用 Hanako 通道 source="proactive"）。
-        # 适配器在 _init_engine 里由 ConversationEngine.start() 创建，因此延迟到
-        # _init_engine 末尾统一注入（见 _inject_proactive_generator）。
-
-        # ── Presence 轻存在感调度器（不同于 proactive：不说话只做动作）──
-        # 与主动对话互补：proactive 会打断（说话），presence 只在空闲时做微动作，
-        # 让角色“在线”。“对话中暂停”通过 _mark_user_interaction → mark_interaction 实现。
-        self._presence = None
-        self._presence_timer = None
-        # P2: 动作冷却追踪（连续触发合并成一次，防连发）
-        # {action_id: last_trigger_time}
-        self._action_cooldowns: dict[str, float] = {}
-        self._action_cooldown_sec: float = 2.0  # 默认 2 秒冷却
-        try:
-            from core.presence import PresenceScheduler
-            self._presence = PresenceScheduler(on_presence=self._on_presence_action)
-            self._presence.load_config(self.config.get("presence", {}) or {})
-            self._presence_timer = QTimer(self)
-            self._presence_timer.timeout.connect(self._presence_tick)
-            self._presence_timer.start(60_000)  # 每 60s 检查一次空闲状态
-        except Exception as e:
-            logger.warning("Presence 初始化失败（非致命）: %s", e)
-
-        # ── 感知控制器(P2: 时间 + 情绪状态机 + 日程)──
-        # 定时/巡检读取绑定的 Hanako agent：与对话后端一致（默认 ophelia），
-        # 而非显示角色 miku（miku 在 ~/.hanako/agents/ 下无目录 → 读空）。
-        _dlg_agent = ""
-        try:
-            _dlg_agent = (load_config().get("dialog", {}) or {}).get("agent_id", "") or ""
-        except Exception:
-            _dlg_agent = ""
-        if not _dlg_agent:
-            _dlg_agent = self._current_char
-        self._perception = PerceptionController(self._current_char, agent_id=_dlg_agent)
-        # BugFix #5-D：Hanako 任务巡检命中 → 主动汇报（复用 proactive 触发链路）
-        try:
-            self._perception.set_inspection_callback(self._on_proactive_trigger)
-        except Exception as e:
-            logger.debug("Inspection callback wiring failed: %s", e)
-        # 屏幕内容→情绪回调
-        self._perception.screen.on_emotion = self._on_screen_emotion
-        self._perception.screen.on_screen_proactive = self._on_screen_proactive
-        self._perception.screen.on_update = self._on_screen_update
-        # 2026-09-14 对话避让：屏幕 LLM 增强与用户回复抢同一条 API
-        # （实测 Vision API timeout 与回复同时段），对话进行中让路。
-        try:
-            self._perception.screen.busy_check = self._is_conversation_busy
-        except Exception as e:
-            logger.debug("屏幕感知避让钩子注入失败（非致命）: %s", e)
-
-        # ── 屏幕感知开关（从配置读取）──
-        screen_cfg = self.config.get("screen", {})
-        if not screen_cfg.get("enabled", True):
-            self._perception.screen.disable()
-            logger.info("Screen perception disabled by config")
-        # P0 调试：环境变量强制禁用感知（二分定位用）
-        if self._diag_disable_perception:
-            self._perception.screen.disable()
-            logger.warning("Screen perception DISABLED via OC_DISABLE_PERCEPTION=1")
-        # ── 媒体播放感知（SMTC）──
-        try:
-            self._perception.media.start()
-            logger.info("MediaPerception (SMTC) started")
-        except Exception as e:
-            logger.debug("MediaPerception start failed: %s", e)
-
-        # 截图保护开关（默认全关，配置开启）
-        if screen_cfg.get("blur", False):
-            self._perception.screen.set_blur(True)
-        if screen_cfg.get("blacklist", False):
-            self._perception.screen.set_blacklist(True)
-        if not screen_cfg.get("compress", True):
-            self._perception.screen.set_compress(False)
-        # 截屏间隔（随机范围优先，缺省 interval±30%）
-        try:
-            _iv = int(screen_cfg.get("interval", 120) or 120)
-            _lo = screen_cfg.get("interval_min")
-            _hi = screen_cfg.get("interval_max")
-            if _lo and _hi:
-                self._perception.screen.set_interval_range(int(_lo), int(_hi))
-            else:
-                self._perception.screen.set_interval(_iv)
-        except Exception:
-            self._perception.screen.set_interval(120)
-
-    def _init_interaction(self):
-        """鼠标交互/抚摸/喂食/HUD 状态（与 __init__ 原顺序一致）。"""
-        # ── 鼠标交互追踪器 ──
-        self._mouse_tracker = MouseTracker(self._get_window_rect)
-        self._mouse_reaction_params = MOUSE_REACTIONS.get(
-            self._behavior_mode, MOUSE_REACTIONS["normal"]
-        )
-        self._mouse_tracker.on_nearby = self._on_mouse_nearby
-        self._mouse_tracker.on_hover = self._on_mouse_hover
-        self._mouse_tracker.on_chase = self._on_mouse_chase
-        self._mouse_tracker.on_startled = self._on_mouse_startled
-        self._mouse_tracker.on_leave = self._on_mouse_leave
-        self._mouse_last_scene = "idle"  # 用于去重
-        self._mouse_tracker_timer = QTimer(self)
-        self._mouse_tracker_timer.timeout.connect(self._mouse_tracker.tick)
-        self._mouse_tracker_timer.start(200)
-        # 视线跟随由 unified_timer 驱动，不再单独开定时器
-
-        # ── 抚摸 / 喂食 / HUD 状态 ──
-        self._pet_combo = 0
-        self._pet_combo_timer = QTimer(self)
-        self._pet_combo_timer.setSingleShot(True)
-        self._pet_combo_timer.timeout.connect(self._reset_pet_combo)
-        self._pet_revert_timer = QTimer(self)
-        self._pet_revert_timer.setSingleShot(True)
-        self._pet_revert_timer.timeout.connect(self._pet_revert)
-        # 单击延迟判定：避免与双击(抚摸)冲突
-        self._click_timer = QTimer(self)
-        self._click_timer.setSingleShot(True)
-        self._click_timer.timeout.connect(self._fire_pending_click)
-        self._pending_click = False
-        # 抚摸手势状态
-        self._pet_press_time = 0.0
-        self._pet_press_pos = QPoint()
-        self._pet_cuddle = False
-        self._pet_stroke_count = 0
-        self._pet_last_stroke = 0.0
-        # 待机微动作 + 随机散步活力
-        self._idle_action_cd = random.uniform(10, 24)   # 距下次待机微动作的秒数
-        self._stretch_until = 0.0                         # 伸懒腰：bob 增强截止时间
-        self._looking_around = False
-        # 鼠标追逐：持续跟随
-        self._chasing = False
-        self._chase_last_target = 0
-
 
     def _init_engine(self):
         """TTS provider / 对话引擎 / 信号连接 / 开场问候（与 __init__ 原顺序一致）。"""
@@ -818,86 +646,6 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         except Exception as e:
             logger.warning("T05 proactive generator 注入失败（回退模板池）: %s", e)
 
-    def _init_neko_panels(self):
-        """创建 ChatPanel / MemoryPanel / CharacterCard 窗口并接线（P0-6/P0-7/P0-8/P1-7）。"""
-        theme = getattr(self, "_ui_theme", "dark") or "dark"
-        agent_name = ""
-        try:
-            from config import CHARACTER_INFO
-            agent_name = (CHARACTER_INFO.get(self._current_char, {}) or {}).get("name", "")
-        except Exception:
-            agent_name = ""
-        self._agent_display_name = agent_name or self._current_char
-
-        # ── ChatPanel（P0-6/P0-7）──
-        try:
-            from ui.chat_panel import ChatPanel
-            self._chat_panel = ChatPanel(
-                theme=theme if theme in ("light", "dark") else "dark",
-                agent_name=self._agent_display_name,
-                parent=None,
-            )
-            self._chat_panel.setWindowFlags(self._chat_panel.windowFlags() | Qt.Tool)
-            self._chat_panel.resize(380, 520)
-            self._chat_panel.message_submitted.connect(self._on_chat_panel_submit)
-            self._chat_panel.close_requested.connect(self._close_chat_panel)
-            logger.info("T05 chat panel ready")
-        except Exception as e:
-            logger.warning("T05 chat panel 初始化失败: %s", e)
-            self._chat_panel = None
-
-        # ── MemoryPanel（P0-8）──
-        try:
-            from ui.memory_panel import MemoryPanel
-            self._memory_panel = MemoryPanel(
-                agent_id=self._agent_id,
-                theme=theme if theme in ("light", "dark") else "dark",
-                parent=None,
-            )
-            self._memory_panel.setWindowFlags(self._memory_panel.windowFlags() | Qt.Tool)
-            self._memory_panel.resize(400, 520)
-            logger.info("T05 memory panel ready")
-        except Exception as e:
-            logger.warning("T05 memory panel 初始化失败: %s", e)
-            self._memory_panel = None
-
-        # ── CharacterCard（P1-7 角色卡）──
-        try:
-            from ui.character_card import CharacterCard
-            self._character_card = CharacterCard(
-                agent_id=self._agent_id,
-                character_id=self._current_char,
-                theme=theme if theme in ("light", "dark") else "dark",
-                parent=None,
-            )
-            self._character_card.setWindowFlags(
-                self._character_card.windowFlags() | Qt.Tool,
-            )
-            self._character_card.resize(360, 460)
-            logger.info("P1-7 character card ready")
-        except Exception as e:
-            logger.warning("P1-7 character card 初始化失败: %s", e)
-            self._character_card = None
-
-        # 右键菜单「管理」组入口（活动流旁）
-        try:
-            if hasattr(self, "_manage_menu") and self._manage_menu is not None:
-                if self._chat_panel is not None:
-                    self._manage_menu.addAction("💬 聊天面板", self._toggle_chat_panel)
-                if self._memory_panel is not None:
-                    self._manage_menu.addAction("🧠 记忆", self._toggle_memory_panel)
-                if self._character_card is not None:
-                    self._manage_menu.addAction("🪪 角色卡", self._toggle_character_card)
-        except Exception as e:
-            logger.debug("T05 菜单入口注入失败: %s", e)
-
-    # ────────────────────────────────────────────────────────────
-    # P1 集成：四线（A 语义检索 / B 事实库+反思 / C 反重复+屏幕感知 / D 角色卡+HUD）
-    # 接进主循环。全部防御式 try/except——任何一线失败不影响既有功能（参照 P0
-    # _init_neko_t05 模式）；后台线程（LLM 抽取/反思/屏幕增强）一律经 Qt Signal
-    # 回主线程，不触碰 UI/COM（0x8001010D 约束）。
-    # ────────────────────────────────────────────────────────────
-
     def _on_fact_store_changed(self, result: dict):
         """主线程：事实库变化通知（日志；后续可接记忆面板刷新）。"""
         try:
@@ -1130,29 +878,6 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._character_card.move(pet_geo.right() + 16, max(8, pet_geo.top() - 8))
         self._character_card.show()
         self._character_card.raise_()
-
-    def _init_multi_pet_greeting(self):
-        """订阅 MultiPetBridge 的 pet_enter 事件：另一只桌宠上线 → 打招呼。
-
-        用户点名的 P3 需求："两只看不见彼此但会互相打招呼"。
-        注册顺序注意：bridge.register_pet 广播 pet_enter 时，先注册的宠会收到
-        后注册宠的 enter；本窗口自己 enter 时不响应（source 是自己）。
-        """
-        try:
-            mgr = getattr(self, "_pet_manager", None)
-            if mgr is None:
-                return
-            bridge = getattr(mgr, "bridge", None)
-            if bridge is None or not hasattr(bridge, "subscribe"):
-                return
-            bridge.subscribe(
-                "pet_enter",
-                self._on_other_pet_enter,
-                agent_id=self._agent_id,
-            )
-            logger.info("P3 多宠打招呼已订阅 (agent=%s)", self._agent_id)
-        except Exception as e:
-            logger.warning("P3 多宠打招呼订阅失败（非致命）: %s", e)
 
     def _on_other_pet_enter(self, event):
         """另一只桌宠上线 → 弹打招呼气泡 + 挥手动作（仅响应非自己的 enter）。"""

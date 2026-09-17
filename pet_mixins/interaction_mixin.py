@@ -13,13 +13,16 @@ PetWindow 提供（鸭子类型，无需 import pet）。
 import logging
 import math
 import os
+import random
 import time
 
-from PySide6.QtCore import QEvent, Qt, QPoint
+from PySide6.QtCore import QEvent, Qt, QPoint, QTimer
 from PySide6.QtGui import QCursor, QTransform
 from PySide6.QtWidgets import QGraphicsRotation, QGraphicsProxyWidget
 
 from config import async_config_saver
+from motion.behavior import MOUSE_REACTIONS
+from motion.mouse_tracker import MouseTracker
 from ui.sfx import play as sfx_play
 
 logger = logging.getLogger(__name__)
@@ -27,6 +30,53 @@ logger = logging.getLogger(__name__)
 
 class InteractionMixin:
     """交互逻辑：鼠标事件过滤、拖拽、抚摸/连击、边缘坐下、快速喂食。"""
+
+    # ── 初始化（pet.py __init__ 调用）──
+
+    def _init_interaction(self):
+        """鼠标交互/抚摸/喂食/HUD 状态（与 __init__ 原顺序一致）。"""
+        # ── 鼠标交互追踪器 ──
+        self._mouse_tracker = MouseTracker(self._get_window_rect)
+        self._mouse_reaction_params = MOUSE_REACTIONS.get(
+            self._behavior_mode, MOUSE_REACTIONS["normal"]
+        )
+        self._mouse_tracker.on_nearby = self._on_mouse_nearby
+        self._mouse_tracker.on_hover = self._on_mouse_hover
+        self._mouse_tracker.on_chase = self._on_mouse_chase
+        self._mouse_tracker.on_startled = self._on_mouse_startled
+        self._mouse_tracker.on_leave = self._on_mouse_leave
+        self._mouse_last_scene = "idle"  # 用于去重
+        self._mouse_tracker_timer = QTimer(self)
+        self._mouse_tracker_timer.timeout.connect(self._mouse_tracker.tick)
+        self._mouse_tracker_timer.start(200)
+        # 视线跟随由 unified_timer 驱动，不再单独开定时器
+
+        # ── 抚摸 / 喂食 / HUD 状态 ──
+        self._pet_combo = 0
+        self._pet_combo_timer = QTimer(self)
+        self._pet_combo_timer.setSingleShot(True)
+        self._pet_combo_timer.timeout.connect(self._reset_pet_combo)
+        self._pet_revert_timer = QTimer(self)
+        self._pet_revert_timer.setSingleShot(True)
+        self._pet_revert_timer.timeout.connect(self._pet_revert)
+        # 单击延迟判定：避免与双击(抚摸)冲突
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.timeout.connect(self._fire_pending_click)
+        self._pending_click = False
+        # 抚摸手势状态
+        self._pet_press_time = 0.0
+        self._pet_press_pos = QPoint()
+        self._pet_cuddle = False
+        self._pet_stroke_count = 0
+        self._pet_last_stroke = 0.0
+        # 待机微动作 + 随机散步活力
+        self._idle_action_cd = random.uniform(10, 24)   # 距下次待机微动作的秒数
+        self._stretch_until = 0.0                         # 伸懒腰：bob 增强截止时间
+        self._looking_around = False
+        # 鼠标追逐：持续跟随
+        self._chasing = False
+        self._chase_last_target = 0
 
     # 边缘吸附阈值 / 坐下旋转角
     SIT_THRESHOLD = 30
