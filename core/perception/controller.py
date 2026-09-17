@@ -85,7 +85,7 @@ class PerceptionController:
         # BugFix #5-D：Hanako 任务巡检（每 5 分钟观察者轮询）
         self._inspection = InspectionPerception(self._schedule)
         self._inspection_callback = None  # 巡检命中回调（pet.py 注入 _on_proactive_trigger）
-        self._screen = ScreenPerception()
+        self._screen = ScreenPerception(agent_id=self._hanako_agent)
         self._media = MediaPerception()
         self._screen_process = ScreenObserverProcess()
         self._autonomy = get_autonomy_panel()

@@ -191,9 +191,14 @@ class ScreenPerception:
     MAX_BACKOFF_SECONDS = 600  # 最大退避时间（10分钟）
     MAX_CONSECUTIVE_EMPTY = 3  # 连续空响应阈值：超过则停用（避免无限空转）
 
-    def __init__(self, interval: int = 120):
+    def __init__(self, interval: int = 120, agent_id: str = ""):
         self._interval = interval
         self._base_interval = interval
+        # 2026-09-17：绑定 Hanako agent。视觉模型配置优先从该 agent 的
+        # config.yaml 读 `models.vision`（与 models.chat 同级），
+        # 未配置才回退 catalog 默认。原先这里不传 agent_id，导致
+        # `HanakoContext()` 用默认值 yuexinmiao —— 读的是别人的配置。
+        self._agent_id = (agent_id or "").strip()
         # 2026-09-14：对话避让钩子。由 pet.py 注入 `_is_conversation_busy`，
         # 为 None 时行为不变（不避让）。
         self.busy_check = None
@@ -617,11 +622,11 @@ class ScreenPerception:
         size_info = img.size if not self._compress_enabled else (img.width, img.height)
         logger.debug("Screenshot: %s, %dKB base64", size_info, len(b64) // 1024)
 
-        ctx = HanakoContext()
+        ctx = HanakoContext(self._agent_id) if self._agent_id else HanakoContext()
 
-        # 优先使用视觉专用模型配置
+        # 优先使用视觉专用模型配置（.env → agent config 的 models.vision → catalog）
         from env_config import get_vision_config, get_llm_config
-        vision_cfg = get_vision_config()
+        vision_cfg = get_vision_config(self._agent_id)
 
         if vision_cfg:
             # 使用视觉专用配置

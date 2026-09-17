@@ -164,10 +164,64 @@ def get_hanako_config() -> dict:
     }
 
 
-def get_vision_config() -> dict:
+def _read_agent_model_config(agent_id: str, slot: str) -> dict:
+    """从 agent 的 config.yaml 读 models.<slot>（slot=chat/vision/...）。
+
+    与 core/hanako_context.py 的 read_model_config 同一套寻址方式：
+      ~/.hanako/agents/<agent_id>/config.yaml → models.<slot>
+        {provider, id} → 去 provider-catalog.json 取 base_url/api_key
+
+    与 .env 的差异：.env 是全局单值；这里是 per-agent 的，
+    用户能在 Hana 设置页按 agent 指定视觉模型。
+
+    Returns:
+        完整配置 dict；任一环节缺失返回 {}（调用方继续降级）。
+    """
+    if not agent_id:
+        return {}
+    try:
+        import json as _json
+
+        import yaml as _yaml
+    except Exception:
+        return {}
+    try:
+        cfg_path = Path.home() / ".hanako" / "agents" / agent_id / "config.yaml"
+        if not cfg_path.exists():
+            return {}
+        cfg = _yaml.safe_load(cfg_path.read_text("utf-8")) or {}
+        models = cfg.get("models") or {}
+        slot_cfg = models.get(slot) or {}
+        if not isinstance(slot_cfg, dict):
+            return {}
+        provider_id = str(slot_cfg.get("provider") or "").strip()
+        model_id = str(slot_cfg.get("id") or "").strip()
+        if not provider_id or not model_id:
+            return {}
+        provider_cfg = _read_catalog_provider(provider_id)
+        if not provider_cfg or not provider_cfg.get("api_key"):
+            return {}
+        return {
+            "base_url": provider_cfg.get("base_url", ""),
+            "api_key": provider_cfg.get("api_key", ""),
+            "model": model_id,
+        }
+    except Exception as e:
+        logger.debug("读取 agent models.%s 失败（忽略）: %s", slot, e)
+        return {}
+
+
+def get_vision_config(agent_id: str = "") -> dict:
     """获取视觉模型配置（屏幕感知专用）
 
-    优先使用视觉专用配置，回退到 Hanako catalog 的 agnes provider。
+    优先级（2026-09-17 新增第 2 级）：
+      1. .env 的 VISION_BASE_URL / VISION_API_KEY（显式覆盖，最高优先）
+      2. **agent config.yaml 的 models.vision**（与 models.chat 同级）
+         —— 在 Hana 设置页选视觉模型即可，不用碰 .env
+      3. catalog 的 agnes provider（历史默认，写死的那一级）
+
+    Args:
+        agent_id: Hanako agent id（如 ophelia）。为空时跳过第 2 级。
 
     Returns:
         {"base_url": ..., "api_key": ..., "model": ...}
@@ -180,7 +234,13 @@ def get_vision_config() -> dict:
     if base_url and api_key:
         return {"base_url": base_url, "api_key": api_key, "model": model}
 
-    # 回退：从 Hanako catalog 读 agnes
+    # ── 第 2 级：agent config.yaml 的 models.vision ──
+    # 原实现从 .env 直接跳到写死的 agnes，用户无法指定视觉模型。
+    agent_cfg = _read_agent_model_config(agent_id, "vision")
+    if agent_cfg:
+        return agent_cfg
+
+    # ── 第 3 级：catalog 的 agnes（历史默认）──
     catalog_cfg = _read_catalog_provider("agnes")
     if catalog_cfg and catalog_cfg.get("api_key"):
         models = catalog_cfg.get("models", [])
