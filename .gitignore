@@ -102,3 +102,7 @@ docs/migration-sequence-diagram.mermaid
 
 # 评审产物（内部，不提交；与上面"内部文档"同规）
 docs/review-*/
+
+# 提交信息临时文件
+_commit_msg.txt
+_tmp*
