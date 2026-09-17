@@ -208,6 +208,15 @@ class ConversationEngine:
         self._tts_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="TTS")
         # 引用计数：正在合成中的 provider 数（用于 TTSReload 安全清理旧实例）
         self._tts_in_use = 0
+        # 2026-09-17：external 镜像路径的语音补合成去重。
+        # 背景：`origin=external` 的回复（服务端兜底推送 / 主窗口 / 插件）
+        # 原先直接上气泡、不合成语音（audio_path=""）。这导致同一句话
+        # 有时有声音有时没有——本地路径 429 失败后，服务端 4 分钟后把
+        # 回复作为 external 推回来，那条就没声音。
+        # 现在 external 且无音频时静默补一次本地合成；
+        # 用「文本指纹 + 时间窗」防同一条被反复合成。
+        self._external_tts_dedup: dict[str, float] = {}
+        self._external_tts_dedup_window = 30.0  # 秒
         # P2-7: 语音音色解析器（由 PetWindow 注入）：(agent_id, emotion) -> voice。
         # 返回空字符串表示使用 provider 默认音色（向后兼容，未配置时行为不变）。
         # P2: 情绪历史追踪（最近 100 次对话情绪分布统计）
@@ -2340,7 +2349,85 @@ class ConversationEngine:
         if not anim:
             anim = map_emotion_to_anim(emotion)
 
+        # 2026-09-17：external 镜像路径的语音补合成。
+        #
+        # 问题：`origin=external` 的回复（服务端兜底推送 / 主窗口 / 插件）
+        # 原先直接上气泡、audio_path=""——于是同一句话有时有声音有时没有。
+        # 实测场景（日志 14:31）：本地路径 429 失败 → 服务端 4 分钟后把
+        # 回复作为 external 推回来 → 那条只上气泡不出声。
+        #
+        # 返回值三态：
+        #   "synthesized" — 已交合成，调用方 return（合成后会带音频回调）
+        #   "duplicate"   — 同文本刚处理过，**整条丢弃**（避免重复上气泡）
+        #   "skip"        — 不可合成（未就绪/占位符），调用方走原逻辑
+        _ext = self._maybe_synthesize_external(text, emotion, anim)
+        if _ext == "synthesized":
+            return
+        if _ext == "duplicate":
+            logger.debug("external 回复重复推送，整条丢弃（不重复上气泡）")
+            return
+
         _call_reply_cb(self.on_reply, text or "…", emotion, anim, "", action_intent)
+
+    def _maybe_synthesize_external(self, text: str, emotion: str, anim: str) -> str:
+        """external 回复补合成语音。
+
+        Returns:
+            "synthesized" — 已接管（交线程池合成，成功后带音频回调）
+            "duplicate"   — 同文本在时间窗内已处理过（调用方应整条丢弃）
+            "skip"        — 不可合成（TTS 未就绪 / 占位符 / 异常），
+                            调用方按原行为处理（直接上气泡）
+
+        去重：同一文本在 `_external_tts_dedup_window` 秒内只处理一次——
+        防服务端/主窗口重复推送同一条导致重复朗读**且重复上气泡**。
+        """
+        try:
+            if not text or not text.strip():
+                return "skip"
+            # 占位符不合成（“…”/“...” 朗读无意义）
+            if text.strip() in ("\u2026", "..."):
+                return "skip"
+
+            # 去重先于就绪检查：未就绪时也防重复上气泡
+            import hashlib
+            import time as _t
+            key = hashlib.md5(text.strip().encode("utf-8")).hexdigest()
+            now = _t.monotonic()
+            last = self._external_tts_dedup.get(key, 0.0)
+            if now - last < self._external_tts_dedup_window:
+                logger.debug("external 重复推送：同文本 %.0fs 内已处理过", now - last)
+                return "duplicate"
+            self._external_tts_dedup[key] = now
+            # 顺手清理过期条目（避免字典无限增长）
+            if len(self._external_tts_dedup) > 64:
+                cutoff = now - self._external_tts_dedup_window
+                self._external_tts_dedup = {
+                    k: v for k, v in self._external_tts_dedup.items() if v >= cutoff
+                }
+
+            with self._lock:
+                tts = self._tts
+                tts_ready = self._tts_ready
+            if tts is None or not tts_ready:
+                return "skip"  # 未配置/未就绪：保持原行为（只上气泡）
+
+            # 交线程池补合成（成功后带 audio_path 回调 → 气泡延到 TTS 开播时显示）。
+            #
+            # 注意：**不**先调一次纯文字回调。
+            # `_do_engine_reply_inner` 的逻辑是「有 audio_path → 暂存气泡等开播；
+            # 无 audio_path → 立即显示」——若先发纯文字，气泡会先显示一次，
+            # 合成完再显示一次（用户会看到重复）。
+            # 代价：用户要等合成完成才看到气泡（Edge TTS 通常 1-3s，可接受）。
+            self._tts_executor.submit(
+                self._synth_and_reply,
+                text, emotion, anim, self._character_id, "", "external",
+                self._generation,
+            )
+            logger.info("external 回复已补合成语音（文本=%s…）", text[:24])
+            return "synthesized"
+        except Exception as e:
+            logger.warning("external 补合成失败（回退纯文字）: %s", e)
+            return "skip"
 
     def _handle_session_tool_progress(self, progress: "object") -> None:
         """接收 SessionManager 的 ToolProgress 事件，转发给 UI
