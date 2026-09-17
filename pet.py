@@ -64,6 +64,8 @@ from pet_mixins.behavior_mixin import BehaviorMixin
 from pet_mixins.voice_provider_mixin import VoiceProviderMixin
 from pet_mixins.play_mixin import PlayMixin
 from pet_mixins.bubble_mixin import BubbleMixin
+from pet_mixins.interface_mixin import InterfaceMixin
+from pet_mixins.perception_mixin import PerceptionMixin
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +79,7 @@ except ImportError:
 
 # ─── 设置对话框 ─────────────────────────────────────────
 
-class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, BehaviorMixin, VoiceProviderMixin, PlayMixin, BubbleMixin, QWidget):
+class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, BehaviorMixin, VoiceProviderMixin, PlayMixin, BubbleMixin, InterfaceMixin, PerceptionMixin, QWidget):
     """透明桌面宠物窗口"""
 
     # 跨线程信号：后台线程 -> 主线程
@@ -896,96 +898,6 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
     # 回主线程，不触碰 UI/COM（0x8001010D 约束）。
     # ────────────────────────────────────────────────────────────
 
-    def _init_neko_p1(self):
-        """P1 集成总入口：反重复 / 屏幕感知升级 / 事实库 / 反思引擎 / 向量嵌入确认。"""
-        self._init_p1_anti_repeat()
-        self._init_p1_screen_enrich()
-        self._init_p1_fact_store()
-        self._init_p1_reflection()
-        self._init_p1_embedding_check()
-
-    def _init_p1_anti_repeat(self):
-        """C 线 P1-5：proactive 注入 AntiRepeatCorpus（语义指纹 + 时间窗去重）。"""
-        try:
-            from core.anti_repeat import get_anti_repeat_corpus
-            if not getattr(self, "_proactive", None):
-                return
-            if not (self.config.get("anti_repeat", {}) or {}).get("enabled", True):
-                logger.info("P1 anti_repeat disabled by config")
-                return
-            corpus = get_anti_repeat_corpus()
-            self._proactive.set_anti_repeat(corpus, self._current_char)
-            logger.info("P1 anti_repeat injected (agent=%s)", self._current_char)
-        except Exception as e:
-            logger.warning("P1 anti_repeat 注入失败（非致命）: %s", e)
-
-    def _init_p1_screen_enrich(self):
-        """C 线 P1-6：屏幕感知 → proactive 场景 provider + LLM 语义增强 provider。
-
-        - ``proactive.set_screen_scene_provider(screen.get_scene_snapshot)``：
-          场景快照并入 proactive signals（screen_scene/screen_intent/confidence）。
-        - ``screen.set_enrich_provider(adapter 包装 source="screen_enrich")``：
-          语义增强走 ``chat_direct`` 直连（不写 Hanako 会话历史，与
-          proactive/idle 同策略），失败/超时自动退化纯规则分类。
-        """
-        try:
-            screen = getattr(getattr(self, "_perception", None), "screen", None)
-            if screen is None:
-                return
-            proactive = getattr(self, "_proactive", None)
-            if proactive is not None:
-                proactive.set_screen_scene_provider(screen.get_scene_snapshot)
-            screen_cfg = self.config.get("screen", {}) or {}
-            llm_enrich = bool(screen_cfg.get("llm_enrich", True))
-            screen.set_llm_enrich(llm_enrich)
-            # 429 限流缓解：LLM 语义增强冷却（秒）。场景未变化时最多每 N 秒补一次，
-            # 避免"每次截图 = 视觉 API + enrich LLM 两次请求"的高频打满限流。
-            # hasattr 兜底：兼容未实现该方法的 duck-typed screen（测试 fake 等）。
-            try:
-                if hasattr(screen, "set_enrich_cooldown"):
-                    screen.set_enrich_cooldown(int(screen_cfg.get("llm_enrich_cooldown", 300) or 300))
-            except Exception:
-                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
-            adapter = getattr(getattr(self, "_engine", None), "_adapter", None)
-            if llm_enrich and adapter is not None:
-                def _screen_enrich_provider(prompt: str):
-                    try:
-                        reply, _emotion = adapter.chat_direct(
-                            prompt, inject_memory=False, source="screen_enrich",
-                        )
-                        return (reply or "").strip() or None
-                    except Exception:
-                        return None
-                screen.set_enrich_provider(_screen_enrich_provider)
-            else:
-                screen.set_enrich_provider(None)
-            logger.info("P1 screen enrich injected (llm_enrich=%s, adapter=%s)",
-                        llm_enrich, "yes" if adapter else "no")
-        except Exception as e:
-            logger.warning("P1 屏幕感知升级接线失败（非致命）: %s", e)
-
-    def _init_p1_fact_store(self):
-        """B 线 P1-2：FactStore 注入 + 对话事实记录钩子。"""
-        try:
-            facts_cfg = (self.config.get("memory", {}) or {}).get("facts", {}) or {}
-            if not facts_cfg.get("enabled", True):
-                logger.info("P1 FactStore disabled by config")
-                self._fact_store = None
-                return
-            from core.memory_facts import FactStore
-            adapter = getattr(getattr(self, "_engine", None), "_adapter", None)
-            self._fact_store = FactStore(
-                agent_id=self._agent_id,
-                adapter=adapter,
-                use_qt_bridge=True,
-            )
-            self._fact_store.set_changed_callback(self._on_fact_store_changed)
-            logger.info("P1 FactStore ready (agent=%s, adapter=%s)",
-                        self._agent_id, "yes" if adapter else "no")
-        except Exception as e:
-            logger.warning("P1 FactStore 初始化失败（非致命）: %s", e)
-            self._fact_store = None
-
     def _on_fact_store_changed(self, result: dict):
         """主线程：事实库变化通知（日志；后续可接记忆面板刷新）。"""
         try:
@@ -1012,29 +924,6 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             )
         except Exception as exc:
             logger.debug("P1 对话事实记录跳过: %s", exc)
-
-    def _init_p1_reflection(self):
-        """B 线 P1-3：ReflectionEngine 注入 + 定时触发（presence 60s tick）。"""
-        try:
-            refl_cfg = (self.config.get("memory", {}) or {}).get("reflection", {}) or {}
-            if not refl_cfg.get("enabled", True):
-                logger.info("P1 ReflectionEngine disabled by config")
-                self._reflection_engine = None
-                return
-            from core.memory_reflection import ReflectionEngine
-            adapter = getattr(getattr(self, "_engine", None), "_adapter", None)
-            self._reflection_engine = ReflectionEngine(
-                agent_id=self._agent_id,
-                adapter=adapter,
-                event_source=getattr(self, "_event_stream", None),
-                use_qt_bridge=True,
-            )
-            self._reflection_engine.set_changed_callback(self._on_reflection_changed)
-            logger.info("P1 ReflectionEngine ready (agent=%s, adapter=%s)",
-                        self._agent_id, "yes" if adapter else "no")
-        except Exception as e:
-            logger.warning("P1 ReflectionEngine 初始化失败（非致命）: %s", e)
-            self._reflection_engine = None
 
     def _on_reflection_changed(self, result: dict):
         """主线程：反思引擎变化通知（日志；后续可接记忆面板刷新）。"""
@@ -1099,28 +988,6 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         except Exception:
             logger.debug("判断普通 TTS 状态失败", exc_info=True)
         return False
-
-    def _init_p1_embedding_check(self):
-        """A 线 P1-1：确认 HybridMemoryRecall 默认 embedding provider 已接。
-
-        ``core.memory_hybrid.HybridMemoryRecall`` 构造时已默认调用
-        ``memory_embedding.default_embedding_provider()``（config
-        ``memory.embedding.enabled=False`` → None → 纯 BM25 退化）。此处只做
-        确认与日志，不强制启用（用户后续自行开）。
-        """
-        try:
-            from core.memory_hybrid import _default_embedding_provider
-            provider = _default_embedding_provider()
-            emb_cfg = (self.config.get("memory", {}) or {}).get("embedding", {}) or {}
-            enabled = bool(emb_cfg.get("enabled", False))
-            if provider is not None:
-                logger.info("P1 embedding provider available (enabled=%s)", enabled)
-            else:
-                logger.info("P1 embedding provider 未启用（memory.embedding.enabled=false），hybrid 走纯 BM25")
-        except Exception as e:
-            logger.debug("P1 embedding provider 检查跳过: %s", e)
-
-    # ── 专注模式联动 ──
 
     def _on_focus_state_changed(self, active: bool, charge: float, signals: dict):
         """FocusStateMachine 状态变化回调（可能后台线程）→ 经信号回主线程更新 UI。"""
@@ -1448,78 +1315,6 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
     # ── F：本地状态口（默认关，复用 phone_receiver 范式）──
 
-    def _init_status_http(self):
-        """按 config.state_http.enabled 启动本地状态口（默认关，不占端口）。"""
-        try:
-            sh_cfg = self.config.get("state_http", {}) or {}
-            if not sh_cfg.get("enabled", False):
-                return
-            from core.status_http_server import PetStatusHTTPServer
-            self._status_http = PetStatusHTTPServer(
-                state_provider=self._status_snapshot,
-                auth_token=sh_cfg.get("auth_token", ""),
-                port=int(sh_cfg.get("port", 8977) or 8977),
-                allow_set_mode=bool(sh_cfg.get("allow_set_mode", False)),
-            )
-            self._status_http.start()
-        except Exception as e:
-            logger.warning("F 本地状态口启动失败（非致命）: %s", e)
-            self._status_http = None
-
-    # ── P4：通用外部触发入口（默认关；复用 status_http 范式）──
-
-    def _init_external_trigger(self):
-        """按 config.external_trigger.enabled 启动通用外部触发接收器（默认关）。
-
-        任何外部调度器 POST /trigger 推送给桌宠，回调经 QTimer 转主线程后
-        驱动气泡 + 情绪动画；桌宠本地提醒保持自包含，此入口纯通用附加。
-        """
-        try:
-            et_cfg = self.config.get("external_trigger", {}) or {}
-            if not et_cfg.get("enabled", False):
-                return
-            from core.external_trigger_receiver import ExternalTriggerReceiver
-            from core.event_bus import EventBus
-            # P6: 订阅 EventBus 上的 external_trigger 事件（与 phone_receiver 共享）
-            def _on_external_trigger_event(action, text, emotion, source="unknown"):
-                try:
-                    from PySide6.QtCore import QTimer
-                    QTimer.singleShot(0, lambda: self._apply_external_trigger(action, text, emotion, source))
-                except Exception as e:
-                    logger.warning("外部触发调度失败（via EventBus）: %s", e)
-            self._ext_trigger_event_handler = _on_external_trigger_event
-            EventBus.on("external_trigger", _on_external_trigger_event)
-            self._external_trigger = ExternalTriggerReceiver(
-                on_trigger=lambda a, t, e: None,  # 已改走 EventBus，on_trigger 空操作
-                auth_token=et_cfg.get("auth_token", ""),
-                port=int(et_cfg.get("port", 8988) or 8988),
-            )
-            self._external_trigger.start()
-            logger.info("P4/P6 通用外部触发入口已启动: port=%s, EventBus 已订阅", et_cfg.get("port", 8988))
-        except Exception as e:
-            logger.warning("P4 通用外部触发入口启动失败（非致命）: %s", e)
-            self._external_trigger = None
-
-    def _on_external_trigger(self, action: str, text: str, emotion: str):
-        """外部触发回调（HTTP 线程）→ QTimer 转主线程应用。"""
-        try:
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._apply_external_trigger(action, text, emotion))
-        except Exception as e:
-            logger.warning("外部触发调度失败: %s", e)
-
-    def _apply_external_trigger(self, action: str, text: str, emotion: str, source: str = "unknown"):
-        """主线程应用外部触发：气泡 + 情绪动画（非致命包裹）。"""
-        try:
-            emo = emotion or "neutral"
-            if text:
-                self._show_bubble(text, emotion=emo)
-            if emo != "neutral" and hasattr(self, "_set_surface_emotion"):
-                self._set_surface_emotion(emo, duration_ms=2500)
-            logger.info("外部触发 [%s]: action=%s source=%s text=%s", action, action, source, text[:30])
-        except Exception as e:
-            logger.warning("外部触发应用失败: %s", e)
-
     def trigger(self, text: str, action: str = "custom", emotion: str = ""):
         """公共入口：从任意线程发起外部触发（work/任务/内部事件均可调）。
 
@@ -1531,172 +1326,6 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             QTimer.singleShot(0, lambda: self._apply_external_trigger(action, text, emotion or "neutral"))
         except Exception as e:
             logger.warning("window.trigger 调度失败: %s", e)
-
-    def _init_mcp_server(self):
-        """W1a（2026-09-14）：启动桌宠 MCP 提供方，让 Hana 看见桌宠。
-
-        背景：桌宠一直只做 MCP **消费方**（skyrim_bridge 连 SkyrimNet），
-        Hana 侧对桌宠一无所知。这里反过来把桌宠自己的状态/能力/表现暴露成 MCP 工具。
-
-        默认关（config mcp_server.enabled=false），零行为、不占端口。
-        线程安全：action_sink 只做 EventBus.emit，实际动作由主线程订阅者执行。
-        """
-        try:
-            from core.mcp_server import build_from_config
-            srv = build_from_config(
-                self.config,
-                state_provider=self._status_snapshot,
-                capabilities_provider=self._mcp_capabilities,
-                action_sink=self._mcp_action_sink,
-                catalog_provider=self._mcp_hana_catalog,
-            )
-            if srv is None:
-                self._mcp_server = None
-                return
-            # 主线程订阅：MCP 线程 emit → QTimer 转主线程执行
-            from core.event_bus import EventBus
-
-            def _on_mcp_action(action, params):
-                try:
-                    from PySide6.QtCore import QTimer
-                    QTimer.singleShot(
-                        0, lambda: self._apply_mcp_action(action, params)
-                    )
-                except Exception as e:
-                    logger.warning("MCP 动作调度失败: %s", e)
-
-            self._mcp_action_handler = _on_mcp_action
-            EventBus.on("mcp_action", _on_mcp_action)
-            srv.start()
-            self._mcp_server = srv
-        except Exception as e:
-            logger.warning("MCP server 启动失败（非致命）: %s", e)
-            self._mcp_server = None
-
-    def _mcp_capabilities(self) -> list:
-        """MCP 用能力清单。
-
-        分两部分：
-        - 桌宠**自己的**内部能力（CAPABILITIES）
-        - **Hana 的**全体系摘要（DISC-2）——让 Hana 自己也能看到"我有什么"
-        """
-        out: list = []
-        try:
-            from core.capability_registry import CAPABILITIES
-            out.extend(
-                {"name": c.name, "description": c.description or "", "source": "pet"}
-                for c in CAPABILITIES
-            )
-        except Exception as e:
-            logger.warning("MCP 能力清单读取失败: %s", e)
-        # DISC-2：附上 Hana 全体系摘要（不附明细，避免 token 爆炸）
-        try:
-            from core.hana_catalog import get_catalog
-            cat = get_catalog()
-            out.append({
-                "name": "hana_catalog",
-                "description": (
-                    f"Hana 全体系目录（plugins={cat['totals']['plugins']}, "
-                    f"apps={cat['totals']['apps']}, mcp={cat['totals']['mcp_connectors']}, "
-                    f"skills={cat['totals']['skills']}, agents={cat['totals']['agents']}）；"
-                    "用 pet_hana_catalog 取明细"
-                ),
-                "source": "hana",
-            })
-        except Exception as e:
-            logger.debug("Hana 目录摘要读取失败: %s", e)
-        return out
-
-    def _mcp_hana_catalog(self, system: str = "") -> dict:
-        """取 Hana 全体系目录明细（供 MCP 工具调用）。"""
-        try:
-            from core.hana_catalog import get_catalog
-            cat = get_catalog()
-        except Exception as e:
-            return {"error": str(e)[:200]}
-        s = (system or "").strip().lower()
-        if s in ("plugins", "apps", "mcp", "skills", "agents"):
-            return {s: cat[s]}
-        if s == "summary" or not s:
-            return {
-                "totals": cat["totals"],
-                "hana_server_reachable": cat["hana_server_reachable"],
-            }
-        return {"error": f"未知体系: {system}（可用: plugins/apps/mcp/skills/agents/summary）"}
-
-    def _mcp_action_sink(self, action: str, params: dict) -> str:
-        """MCP 写操作入口（MCP 线程调用）。只发事件，立即返回。"""
-        from core.event_bus import EventBus
-        EventBus.emit("mcp_action", action=action, params=dict(params or {}))
-        return f"已派发: {action}"
-
-    def _apply_mcp_action(self, action: str, params: dict) -> None:
-        """主线程应用 MCP 动作（白名单已在 mcp_server 侧校验）。"""
-        try:
-            if action == "set_emotion":
-                emo = str(params.get("emotion") or "neutral")
-                try:
-                    inten = float(params.get("intensity", 1.0))
-                except (TypeError, ValueError):
-                    inten = 1.0
-                if hasattr(self, "_set_surface_emotion"):
-                    self._set_surface_emotion(emo, duration_ms=2500)
-                r = getattr(self, "_renderer", None)
-                if r is not None and hasattr(r, "set_emotion"):
-                    r.set_emotion(emo, inten)
-            elif action == "play_anim":
-                anim = str(params.get("anim") or "idle")
-                if hasattr(self, "_set_anim_seq"):
-                    self._set_anim_seq(anim)
-            elif action == "expression":
-                name = str(params.get("name") or "")
-                r = getattr(self, "_renderer", None)
-                if name and r is not None and hasattr(r, "_apply_expression"):
-                    r._apply_expression(name)
-            elif action == "say":
-                text = str(params.get("text") or "")
-                if text:
-                    self._show_bubble(text)
-            elif action == "celebrate":
-                if hasattr(self, "_celebrate"):
-                    self._celebrate()
-            elif action == "idle":
-                if hasattr(self, "_set_anim_seq"):
-                    self._set_anim_seq("idle")
-                r = getattr(self, "_renderer", None)
-                if r is not None and hasattr(r, "set_emotion_expression_only"):
-                    r.set_emotion_expression_only("neutral")
-            logger.info("MCP 动作已应用: %s %s", action, params)
-        except Exception as e:
-            logger.warning("MCP 动作应用失败 (%s): %s", action, e)
-
-    def _status_snapshot(self) -> dict:
-        """状态快照（F GET /pet/state 只读输出）。"""
-        state = "idle"
-        try:
-            mapper = getattr(self, "_status_mapper", None)
-            if mapper is not None:
-                state = mapper.current()
-        except Exception:
-            state = "idle"
-        emotion = getattr(self, "_current_emotion", "neutral") or "neutral"
-        anim = getattr(self, "_current_anim", "idle") or "idle"
-        scenario = ""
-        try:
-            scenario = getattr(self._perception, "_scenario", "") or ""
-        except Exception:
-            scenario = ""
-        celebrating_active = bool(state == "celebrating")
-        return {
-            "state": state,
-            "emotion": emotion,
-            "anim": anim,
-            "scenario": scenario,
-            "agent_id": self._agent_id,
-            "renderer_format": self._renderer_format(),
-            "celebrating_active": celebrating_active,
-            "ts": time.time(),
-        }
 
     def _renderer_format(self) -> str:
         """按鸭子类型识别渲染器格式（sprite|live2d|vrm|unknown）。"""
@@ -1718,18 +1347,6 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             self.pet_set_mode_signal.emit(str(mode or ""))
         except Exception:
             logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
-
-    def _do_pet_set_mode(self, mode: str):
-        """主线程槽：登记状态 + 经状态语义层下发（只走统一接口）。"""
-        try:
-            mapper = getattr(self, "_status_mapper", None)
-            if mapper is None:
-                return
-            mapper.set_state(mode)
-            if hasattr(self, "_renderer"):
-                mapper.render_for(mode, self._renderer)
-        except Exception as e:
-            logger.debug("F set-mode 主线程执行失败: %s", e)
 
     def set_hanako_ws(self, ws_client, session_manager):
         """注入共享 Hanako WS 客户端（由 PetManager 调用）"""
