@@ -211,36 +211,95 @@ def _read_agent_model_config(agent_id: str, slot: str) -> dict:
         return {}
 
 
+def _read_hana_preferences_vision() -> dict:
+    """从 Hana 的全局 preferences 读 `vision_model`（设置页那个下拉框）。
+
+    这是**单一来源**：Hana 设置页 → 视觉辅助模型 → 写入
+    `~/.hanako/user/preferences.json` 的 `vision_model` 字段，
+    格式 `{"id": ..., "provider": ...}`（与 models.chat 同构）。
+
+    2026-09-17：此前 oc-pet 读不到它——它用的是自创的
+    `models.vision`（在 agent config.yaml 里），而 Hana 的 UI 不知道那个键。
+    于是用户改了设置页，屏幕感知却毫无变化。现在统一读这一份。
+
+    注意：`vision_auxiliary_enabled=false` 时视为未配置（用户在 Hana 侧
+    关掉了视觉辅助）。
+
+    Returns:
+        完整配置 dict；未配置/不可用返回 {}。
+    """
+    try:
+        pref_path = Path.home() / ".hanako" / "user" / "preferences.json"
+        if not pref_path.exists():
+            return {}
+        import json as _json
+        prefs = _json.loads(pref_path.read_text(encoding="utf-8")) or {}
+        # 用户显式关掉了视觉辅助 → 视为未配置
+        if prefs.get("vision_auxiliary_enabled") is False:
+            return {}
+        ref = prefs.get("vision_model")
+        if not isinstance(ref, dict):
+            return {}
+        provider_id = str(ref.get("provider") or "").strip()
+        model_id = str(ref.get("id") or "").strip()
+        if not provider_id or not model_id:
+            return {}
+        provider_cfg = _read_catalog_provider(provider_id)
+        if not provider_cfg or not provider_cfg.get("api_key"):
+            logger.debug(
+                "preferences.vision_model 指向 provider=%s，但 catalog 里无凭证",
+                provider_id,
+            )
+            return {}
+        return {
+            "base_url": provider_cfg.get("base_url", ""),
+            "api_key": provider_cfg.get("api_key", ""),
+            "model": model_id,
+        }
+    except Exception as e:
+        logger.debug("读 preferences.vision_model 失败（忽略）: %s", e)
+        return {}
+
+
 def get_vision_config(agent_id: str = "") -> dict:
     """获取视觉模型配置（屏幕感知专用）
 
-    优先级（2026-09-17 新增第 2 级）：
-      1. .env 的 VISION_BASE_URL / VISION_API_KEY（显式覆盖，最高优先）
-      2. **agent config.yaml 的 models.vision**（与 models.chat 同级）
-         —— 在 Hana 设置页选视觉模型即可，不用碰 .env
-      3. catalog 的 agnes provider（历史默认，写死的那一级）
+    优先级（2026-09-17 重排——Hana 设置页为默认单一来源）：
+      1. **Hana 全局 preferences 的 `vision_model`**（设置页那个下拉框）
+         —— 这是用户能看见、能改的入口，默认就走它
+      2. .env 的 VISION_BASE_URL / VISION_API_KEY（高级覆盖，排障用）
+      3. agent config.yaml 的 `models.vision`（oc-pet 旧私有约定，兼容保留）
+      4. catalog 的 agnes provider（最终回退）
+
+    为什么把 Hana preferences 放第一：用户说“本来就应该直接默认使用 Hana
+    的设置”。此前 oc-pet 读的是自创的 `models.vision`，Hana 的 UI 不知道
+    那个键——用户在设置页改了半天，屏幕感知毫无变化。
 
     Args:
-        agent_id: Hanako agent id（如 ophelia）。为空时跳过第 2 级。
+        agent_id: Hanako agent id（如 ophelia）。为空时跳过第 3 级。
 
     Returns:
         {"base_url": ..., "api_key": ..., "model": ...}
-        如果没有配置则返回空 dict
+        如果都没配置则返回空 dict
     """
+    # 1) Hana 设置页的视觉辅助模型（默认来源）
+    hana_pref = _read_hana_preferences_vision()
+    if hana_pref:
+        return hana_pref
+
+    # 2) .env 显式覆盖
     base_url = os.environ.get("VISION_BASE_URL", "").strip()
     api_key = os.environ.get("VISION_API_KEY", "").strip()
     model = os.environ.get("VISION_MODEL", "").strip()
-
     if base_url and api_key:
         return {"base_url": base_url, "api_key": api_key, "model": model}
 
-    # ── 第 2 级：agent config.yaml 的 models.vision ──
-    # 原实现从 .env 直接跳到写死的 agnes，用户无法指定视觉模型。
+    # 3) agent config.yaml 的 models.vision（旧约定，兼容）
     agent_cfg = _read_agent_model_config(agent_id, "vision")
     if agent_cfg:
         return agent_cfg
 
-    # ── 第 3 级：catalog 的 agnes（历史默认）──
+    # 4) catalog 的 agnes（历史默认）
     catalog_cfg = _read_catalog_provider("agnes")
     if catalog_cfg and catalog_cfg.get("api_key"):
         models = catalog_cfg.get("models", [])
