@@ -873,19 +873,37 @@ class ScreenPerception:
     # ── 屏幕感知主动评论模板 ──
     # 注：模板经 .format(detail=...) 渲染，正文里的 JSON 大括号必须写成 {{ }} 转义，
     # 否则 .format 会把 {gesture:...} 当成字段名抛 KeyError。
-    # 动作意图用结构化 [action:{...}]（动态模型参数），取代旧的固定 [emotion:xxx] 标签。
+    #
+    # 2026-09-17 重写：原模板每条 200+ 字符，其中 2/3 是 [action:] 标签说明，
+    # 且带多个示例（peek/excited/curious/cheer/tsukkomi/concern…）。
+    # 实测后果（日志 13:24:09）：模型在缺具体素材时**把指令里的关键词复述了出来**——
+    #     LLM 回复: 桌宠 鼓励 用户 阅读 技术博客 桌面宠物 交互风格
+    # 这不是句子，是关键词堆。根因：模板里可被复述的词太多、示例太多，
+    # 而 {detail} 填的是场景摘要（非具体内容），模型无从发挥。
+    #
+    # 新写法：模板只留**一句要求**，动作说明统一在 _PROACTIVE_ACTION_HINT
+    # 里追加（且只给一个最小示例）。这样正文要求短、示例少，复述面大幅缩小。
     _PROACTIVE_TEMPLATES = [
         # 自由评论型
-        "你是一个桌宠，你看到用户的屏幕内容如下：\n{detail}\n\n根据你看到的内容，自由发挥说一句话（10-30字）。不要用固定格式，像真正看到屏幕的人一样自然反应。可以吐槽、关心、好奇、或者评论。可以问问题。结尾用 [action:{{\"gesture\":\"<动作名>\",\"intensity\":<0到1>,\"params\":{{<可选Live2D参数>}}}}] 表达你看到这幕时的动作/表情倾向：例如好奇探头 [action:{{\"gesture\":\"peek\",\"intensity\":0.6,\"params\":{{\"ParamAngleX\":12}}}}]，看到好玩的兴奋 [action:{{\"gesture\":\"excited\",\"intensity\":0.7,\"params\":{{\"ParamAngleZ\":8}}}}]。普通闲聊可省略标签，只说正文。",
+        "你是一个桌宠，你看到用户的屏幕内容如下：\n{detail}\n\n用一句话（10-30字）自然反应。像真正看到屏幕的人那样，可以吐槽、关心、好奇或评论。不要罗列词语，要成句。",
         # 好奇提问型
-        "你是一个桌宠，你偷看了一眼用户的屏幕：\n{detail}\n\n你很好奇，用好奇的语气问用户一个问题（10-30字）。自然一点，不要像机器。结尾用 [action:{{\"gesture\":\"<动作名>\",\"intensity\":<0到1>,\"params\":{{<可选Live2D参数>}}}}] 表达你看到这幕时的动作/表情倾向：例如歪头好奇 [action:{{\"gesture\":\"curious\",\"intensity\":0.6,\"params\":{{\"ParamAngleX\":-10}}}}]。普通闲聊可省略标签，只说正文。",
+        "你是一个桌宠，你偷看了一眼用户的屏幕：\n{detail}\n\n用好奇的语气问一个问题（10-30字）。要成句，不要罗列词语。",
         # 鼓励型
-        "你是一个桌宠，你看到用户正在：\n{detail}\n\n用鼓励或支持的语气说一句话（10-30字）。真诚一点，不要太假。结尾用 [action:{{\"gesture\":\"<动作名>\",\"intensity\":<0到1>,\"params\":{{<可选Live2D参数>}}}}] 表达你给鼓励时的动作/表情：例如握拳打气 [action:{{\"gesture\":\"cheer\",\"intensity\":0.7,\"params\":{{\"ParamMouthOpenY\":0.5}}}}]。普通闲聊可省略标签，只说正文。",
+        "你是一个桌宠，你看到用户正在：\n{detail}\n\n用鼓励的语气说一句话（10-30字）。要真诚、成句，不要罗列词语。",
         # 吐槽型
-        "你是一个桌宠，你看到用户的屏幕：\n{detail}\n\n用吐槽或调侃的语气说一句话（10-30字）。幽默一点。结尾用 [action:{{\"gesture\":\"<动作名>\",\"intensity\":<0到1>,\"params\":{{<可选Live2D参数>}}}}] 表达你吐槽时的动作/表情：例如翻白眼 [action:{{\"gesture\":\"tsukkomi\",\"intensity\":0.6,\"params\":{{\"ParamEyeBallX\":-15}}}}]。普通闲聊可省略标签，只说正文。",
+        "你是一个桌宠，你看到用户的屏幕：\n{detail}\n\n用吐槽的语气说一句话（10-30字）。幽默一点，要成句。",
         # 关心型
-        "你是一个桌宠，你注意到用户：\n{detail}\n\n用关心的语气说一句话（10-30字）。比如提醒休息、或者担心用户太累。结尾用 [action:{{\"gesture\":\"<动作名>\",\"intensity\":<0到1>,\"params\":{{<可选Live2D参数>}}}}] 表达你关心时的动作/表情：例如凑近查看 [action:{{\"gesture\":\"concern\",\"intensity\":0.5,\"params\":{{\"ParamAngleX\":8}}}}]。普通闲聊可省略标签，只说正文。",
+        "你是一个桌宠，你注意到用户：\n{detail}\n\n用关心的语气说一句话（10-30字）。比如提醒休息。要成句。",
     ]
+
+    # 动作标签提示（统一追加，只给一个最小示例）。
+    # 拆出来的理由：原实现把这段塞进每个模板，占了模板 2/3 篇幅，
+    # 是「模型复述指令」的主要素材来源。
+    _PROACTIVE_ACTION_HINT = (
+        "\n\n可选：想在说这句话时配个动作，就在末尾加 "
+        '[action:{{"gesture":"<动作名>","intensity":<0到1>}}]。'
+        "没有合适的就不加。"
+    )
 
     def _check_screen_proactive(self, description: str, detail: str = ""):
         """根据屏幕内容触发主动评论（多模板随机，自适应性格）"""
@@ -897,8 +915,9 @@ class ScreenPerception:
         if time.time() - self._last_screen_proactive < self._proactive_cooldown:
             return
 
-        # 随机触发（20%概率）
-        if random.random() > 0.2:
+        # 随机触发（20%→10% 概率）。
+        # 2026-09-17：与模板瘦身配套——降低触发率减少「缺素材」场景的绝对发生数。
+        if random.random() > 0.10:
             return
 
         # 用 detail 如果有，否则用 description
@@ -912,7 +931,7 @@ class ScreenPerception:
 
         # 随机选模板
         template = random.choice(self._PROACTIVE_TEMPLATES)
-        prompt = identity_line + template.format(detail=screen_info)
+        prompt = identity_line + template.format(detail=screen_info) + self._PROACTIVE_ACTION_HINT
 
         logger.info("Screen proactive: %s", screen_info[:60])
         self._last_screen_proactive = time.time()

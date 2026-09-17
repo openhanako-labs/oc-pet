@@ -24,7 +24,8 @@ from PySide6.QtGui import (
 )
 from config import (CHARACTER_INFO, EXPRESSION_MAP, get_transition_style,
                     load_config, save_config, async_config_saver)
-from core.hanako_monitor import HanakoMonitor, clean_bubble_text, compact_bubble_text
+from core.hanako_monitor import (HanakoMonitor, clean_bubble_text,
+                                 compact_bubble_text, looks_like_keyword_salad)
 from core.idle_chatter import IdleChatter
 
 from motion.behavior import BehaviorParams, BEHAVIOR_MODES
@@ -2694,6 +2695,13 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                     display_text = reply if clean_bubble_text(reply) else ""
                 except Exception:
                     display_text = reply
+            # 2026-09-17：关键词堆兜底——与来源无关。
+            # 现象（日志 13:24:09）：屏幕主动评论返回的不是句子，而是词语罗列
+            # （"桌宠 鼓励 用户 阅读 技术博客…"）。模板已瘦身，此处再加一道
+            # 出口校验：不管哪条链路产生的，堆词一律不上气泡。
+            if display_text and looks_like_keyword_salad(display_text):
+                logger.warning("气泡文本疑似关键词堆，已拦截: %r", display_text[:60])
+                display_text = ""
 
         # 是否有即将播放的音频（有则延到 on_tts_start 显示）
         will_play = bool(

@@ -23,12 +23,24 @@ from core.perception.proactive_generation import (
 
 class TestScreenProactiveActionIntent(unittest.TestCase):
     def test_templates_render_via_format_no_keyerror(self):
-        """模板用 .format(detail=...) 渲染，含 [action:{...}] 但不应崩。"""
+        """模板用 .format(detail=...) 渲染，不应崩（JSON 大括号需转义）。
+
+        2026-09-17 更新：动作指令从模板内移到独立的
+        `_PROACTIVE_ACTION_HINT`（模板瘦身——原每条 200+ 字符，
+        2/3 是动作标签说明，实测导致模型复述指令产生关键词堆）。
+        本断言保留原意（渲染后的完整 prompt 仍含动作指令），
+        但改为检查「模板 + hint」的组合。
+        """
         detail = "用户在 VS Code 写 Python，屏幕有很多终端窗口"
+        hint = screen_mod.ScreenPerception._PROACTIVE_ACTION_HINT
         for i, tpl in enumerate(screen_mod.ScreenPerception._PROACTIVE_TEMPLATES):
             rendered = tpl.format(detail=detail)
-            self.assertIn("[action:", rendered, f"tpl{i} 缺少 [action:] 指令")
             self.assertNotIn("{detail}", rendered, f"tpl{i} 占位符未替换")
+            # 完整 prompt = 模板 + 动作提示，仍应含 [action:]
+            full = rendered + hint
+            self.assertIn("[action:", full, f"tpl{i} 组合后缺少 [action:] 指令")
+            # 模板本体应瘦身（不内嵌长示例）
+            self.assertLess(len(tpl), 120, f"tpl{i} 过长（{len(tpl)} 字）")
 
     def test_reply_with_action_intent_parses_and_strips(self):
         """模拟屏幕主动评论回复：单标签应被解析且从正文剥离。"""

@@ -123,6 +123,63 @@ def compact_bubble_text(text: str) -> str:
     return candidate[:BUBBLE_MAX_CHARS - 1] + "…"
 
 
+# ── 关键词堆检测（2026-09-17）──────────────────────────
+#
+# 现象（日志 13:24:09）：屏幕主动评论返回的不是句子，而是词语罗列：
+#     LLM 回复: 桌宠 鼓励 用户 阅读 技术博客 桌面宠物 交互风格
+#
+# 根因：模板把整段指令（含动作标签说明与多个示例）发给 LLM，
+# 而 {detail} 填的是场景摘要（非具体内容），模型缺素材时把指令里的
+# 关键词复述了出来。模板已瘦身，此处再加一道**与来源无关的兜底**。
+#
+# 判据（基于实测 33 条回复校准）：
+#   · 空格分隔的 token ≥ 4
+#   · 且全句没有任何句读标点（。！？，、；：等）
+#   · 且含中文（避免误伤正常英文短语，如 "Java Spring Boot"）
+#
+# 为什么这组判据：正常中文回复词间无空格（整句连写），而关键词堆
+# 是空格分隔的短 token。实测 33 条中仅 1 条命中，且无误伤。
+KEYWORD_SALAD_MIN_TOKENS = 4
+# 平均 token 长度上限：关键词堆是短词罗列（“桌宠 鼓励 用户”平均 2 字）；
+# 中英混排正常句里的英文词较长，平均会被拉上去。
+KEYWORD_SALAD_AVG_TOKEN_LEN = 3.0
+_SENTENCE_PUNCT_RE = re.compile(r"[。！？，、；：…～!?,;:]")
+
+
+def looks_like_keyword_salad(text: str) -> bool:
+    """这段文本是否像「关键词堆」（词语罗列而非句子）？
+
+    真值时调用方应丢弃它、不上气泡。容错：空文本返回 False
+    （交由现有判空逻辑处理，本函数只管「堆」这一种病）。
+
+    判据（三层，全部满足才算）：
+      1. 无句读标点（有标点就是句子）
+      2. 含中文
+      3. 空格分隔的 token ≥ 4，**且平均 token 长度 ≤ 3**
+
+    第 3 条的「平均长度」是关键：关键词堆是「桌宠 鼓励 用户 阅读」
+    这种短词，而中英混排正常句（"Skyrim modding 和 Java 同时开着"）
+    里的英文词较长，平均会被拉上去。
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    if not stripped:
+        return False
+    # 1) 有句读标点 → 是句子，不是堆
+    if _SENTENCE_PUNCT_RE.search(stripped):
+        return False
+    # 2) 无中文 → 可能是正常英文短语（如 "Java Spring Boot"），不判
+    if not re.search(r"[\u4e00-\u9fff]", stripped):
+        return False
+    tokens = [t for t in stripped.split() if t]
+    if len(tokens) < KEYWORD_SALAD_MIN_TOKENS:
+        return False
+    # 3) 平均 token 长度短 → 堆
+    avg_len = sum(len(t) for t in tokens) / len(tokens)
+    return avg_len <= KEYWORD_SALAD_AVG_TOKEN_LEN
+
+
 # ── 事件驱动情绪映射（移植自 HanakoPro） ───────────────────
 
 EVENT_TO_MOOD = {
