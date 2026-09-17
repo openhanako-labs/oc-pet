@@ -145,24 +145,14 @@ class PluginPanel(PanelWindow):
         self.move(geo.x() + (geo.width() - self.width()) // 2,
                   geo.y() + (geo.height() - self.height()) // 2)
 
-    def mousePressEvent(self, event):
-        """从头部拖拽（避开关闭按钮）"""
-        if event.button() == Qt.LeftButton:
-            header_local = self._header.mapFromGlobal(event.globalPos())
-            if self._header.rect().contains(header_local):
-                close_local = self._close.mapFromGlobal(event.globalPos())
-                if not self._close.rect().contains(close_local):
-                    self._drag = event.globalPos() - self.frameGeometry().topLeft()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if getattr(self, "_drag", None) is not None and event.buttons() & Qt.LeftButton:
-            self.move(event.globalPos() - self._drag)
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._drag = None
-        super().mouseReleaseEvent(event)
+    # 注（2026-09-17）：原先这里有一份 mousePressEvent/mouseMoveEvent/
+    # mouseReleaseEvent 的拖拽实现，是 `55a8a70 refactor: 插件面板继承
+    # PanelWindow` 之后**未删除的重复代码**。它引用 `self._header` /
+    # `self._close`，而这两个名字在 PanelWindow 里是 `_create_header()`
+    # 的局部变量（从未存成实例属性）——于是鼠标一按就 AttributeError，
+    # 冒泡成 CRITICAL 崩溃（实测 2026-09-17 14:31:11）。
+    # 拖拽已由 PanelWindow 基类完整提供（`_drag_pos` + 三个事件方法），
+    # 故删除。
 
     def _scan_plugins(self) -> list[dict]:
         """扫描 Hanako 插件：V1 plugins + V2 apps（2026-09-17 补后者）。

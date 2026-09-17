@@ -86,7 +86,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
     # 跨线程信号：后台线程 -> 主线程
     engine_reply_signal = Signal(str, str, str, str, object)  # reply, emotion, anim, audio_path, action_intent
-    engine_status_signal = Signal(str)  # status message
+    engine_status_signal = Signal(str, str)  # status message, emotion
     # P1: 流式 chunk 信号（边生成边显示气泡）
     engine_chunk_signal = Signal(str, str, str, int)  # chunk, accumulated, emotion, gen
     voice_status_signal = Signal(str)  # voice input status
@@ -2802,9 +2802,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._is_thinking = False
         self._mark_user_interaction()
 
-    def _on_engine_status(self, msg: str):
+    def _on_engine_status(self, msg: str, emotion: str = "thinking"):
         """引擎状态提示 - 从后台线程调用，通过信号转到主线程"""
-        self.engine_status_signal.emit(msg)
+        self.engine_status_signal.emit(msg, emotion or "thinking")
 
     # ── 状态气泡节流（2026-09-17）────────────────────────
     #
@@ -2823,8 +2823,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
     # 后者是用户该知道的信息，吞掉它们是另一个错误。
     _STATUS_BUBBLE_THROTTLE_MS = 1500
 
-    def _do_engine_status(self, msg: str):
-        """在主线程中处理引擎状态（带节流）。"""
+    def _do_engine_status(self, msg: str, emotion: str = "thinking"):
+        """在主线程中处理引擎状态（带节流）。
+
+        emotion: 气泡情绪。工具失败等场景可传 "sad"。
+        """
         if not msg:
             try:
                 self.bubble.hide_bubble()
@@ -2834,15 +2837,16 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
         # 工具失败 / 错误提示不过滤——这些是用户该看到的信息
         if self._is_important_status(msg):
-            self._flush_status_bubble(msg)
+            self._flush_status_bubble(msg, emotion)
             return
 
         # 状态类：合并到窗口末尾只发最后一条
         now = time.monotonic() * 1000.0
         last_ms = getattr(self, "_status_bubble_last_ms", 0.0)
         if now - last_ms < self._STATUS_BUBBLE_THROTTLE_MS:
-            # 窗口内：记下最新一条，不立即上屏
+            # 窗口内：记下最新一条（含情绪），不立即上屏
             self._status_bubble_pending = msg
+            self._status_bubble_pending_emotion = emotion
             timer = getattr(self, "_status_bubble_timer", None)
             if timer is not None:
                 timer.stop()
@@ -2853,24 +2857,25 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 self._status_bubble_timer = timer
             timer.start(self._STATUS_BUBBLE_THROTTLE_MS)
             return
-        self._flush_status_bubble(msg)
+        self._flush_status_bubble(msg, emotion)
 
     @staticmethod
     def _is_important_status(msg: str) -> bool:
         """该状态是否必须立即展示（工具失败/错误）。"""
         return any(k in msg for k in ("失败", "错误", "⚠️", "出了问題", "异常"))
 
-    def _flush_status_bubble(self, msg: str):
+    def _flush_status_bubble(self, msg: str, emotion: str = "thinking"):
         """真正上屏一条状态气泡，并记录节流时间。"""
         self._status_bubble_pending = ""
         self._status_bubble_last_ms = time.monotonic() * 1000.0
-        self._show_bubble(msg, emotion="thinking")
+        self._show_bubble(msg, emotion=emotion)
 
     def _flush_status_bubble_pending(self):
-        """节流窗口到期：补发窗口内最后一条状态。"""
+        """节流窗口到期：补发窗口内最后一条状态（含其情绪）。"""
         msg = getattr(self, "_status_bubble_pending", "")
         if msg:
-            self._flush_status_bubble(msg)
+            emo = getattr(self, "_status_bubble_pending_emotion", "thinking")
+            self._flush_status_bubble(msg, emo)
 
     def _cancel_pending_status(self):
         """真实回复即将上屏——取消任何待发的状态气泡。
@@ -2938,13 +2943,20 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
         phase: "start" / "progress" / "end"
         success: None / True / False
+
+        2026-09-17：接入状态气泡节流。
+        实测（日志 14:32:30→14:32:31）：tool_call 与「正在思考」在 1 秒内
+        连续上屏——因为本方法直接调 `_show_bubble`，**绕过了
+        `_do_engine_status` 的节流**。现在统一走 `_do_engine_status`，
+        与其它状态文案共享同一窗口；失败提示仍立即上屏（重要信息不节流）。
         """
         try:
             if phase == "start" or phase == "progress":
-                self._show_bubble(display_text or f"⏳ {tool_name}…", emotion="thinking")
+                self._do_engine_status(display_text or f"⏳ {tool_name}…", "thinking")
             elif phase == "end":
                 if success is False:
-                    self._show_bubble(f"⚠️ {display_text or tool_name} 出了问题", emotion="sad")
+                    # 失败是重要信息：直接上屏（节流器会识别并放行）
+                    self._do_engine_status(f"⚠️ {display_text or tool_name} 出了问题", "sad")
                 # 成功时不覆盖后续的最终回复气泡
         except Exception as e:
             logger.warning("_do_tool_progress error: %s", e)

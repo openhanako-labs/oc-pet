@@ -72,7 +72,7 @@ def _all_sources() -> dict:
 # 18 个 Signal：名称 → 参数签名
 EXPECTED_SIGNALS = {
     "engine_reply_signal": "str, str, str, str, object",
-    "engine_status_signal": "str",
+    "engine_status_signal": "str, str",
     "engine_chunk_signal": "str, str, str, int",
     "voice_status_signal": "str",
     "tts_stop_signal": "",
