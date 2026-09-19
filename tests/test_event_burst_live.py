@@ -141,3 +141,70 @@ def test_screen_records_last_burst():
     assert _wait_for(lambda: getattr(sp, "_last_burst", None) is not None)
     assert sp._last_burst.size == 1
     assert sp._last_burst.window_chain() == "Edge"
+
+
+# ── 另一半：把"他刚从哪过来"喂进视觉提问 ──────────────────
+
+
+def test_vision_prompt_unchanged_without_any_hint():
+    """三个参数全空时必须**原样**返回——不能顺手改掉旧行为。"""
+    from core.perception.screen import VISION_PROMPT, build_vision_prompt
+
+    assert build_vision_prompt() == VISION_PROMPT
+    assert build_vision_prompt("", "") == VISION_PROMPT
+
+
+def test_vision_prompt_keeps_the_window_hint():
+    from core.perception.screen import build_vision_prompt
+
+    p = build_vision_prompt("Code", "pet.py - oc-pet")
+    assert "[当前窗口]" in p and "Code" in p
+    assert "[最近窗口切换]" not in p, "没有爆发序列时不该出现这一段"
+
+
+def test_vision_prompt_carries_the_burst_sequence():
+    from core.perception.screen import build_vision_prompt
+
+    p = build_vision_prompt("Code", "pet.py", recent="这 1.2s 里切过 2 次窗口：Edge → Code（最后停在 Code）")
+    assert "[最近窗口切换]" in p
+    assert "Edge → Code" in p
+
+
+def test_vision_prompt_warns_not_to_confuse_sequence_with_screen():
+    """必须明说"别把序列当本屏内容"——否则模型会把窗口名写进描述，比不说还糟。"""
+    from core.perception.screen import build_vision_prompt
+
+    p = build_vision_prompt("Code", "t", recent="Edge → Code")
+    assert "不要" in p and "截图" in p
+
+
+def test_vision_prompt_has_both_sections():
+    from core.perception.screen import build_vision_prompt
+
+    p = build_vision_prompt("Code", "t", recent="Edge → Code")
+    assert p.index("[当前窗口]") < p.index("[最近窗口切换]"), "顺序：先说当前，再说刚切过"
+
+
+def test_capture_passes_the_hint_into_the_prompt():
+    """源码护栏：_capture_and_analyze 必须把 burst.hint() 传进 build_vision_prompt。"""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1].joinpath(
+        "core", "perception", "screen.py").read_text(encoding="utf-8")
+    body = src[src.index("def _capture_and_analyze"):]
+    assert "burst.hint()" in body
+    assert "recent=" in body
+
+
+def test_live_burst_hint_is_what_gets_fed():
+    """端到端：合并出来的 hint 就是将要被喂进提问的那句（真类、真定时器）。"""
+    sp, calls = _make()
+    for app in ("Edge", "Code", "Chrome"):
+        sp.on_foreground_change(app, "x", "t")
+    assert _wait_for(lambda: len(calls) == 1)
+    from core.perception.screen import build_vision_prompt
+
+    prompt = build_vision_prompt(calls[0]["app"], calls[0]["title"],
+                                 recent=calls[0]["burst"].hint())
+    assert "[最近窗口切换]" in prompt
+    assert "Edge" in prompt and "Chrome" in prompt

@@ -61,21 +61,34 @@ VISION_PROMPT = """分析用户当前屏幕内容，以 JSON 格式返回。尽�
 - 只返回 JSON，不要其他文字"""
 
 
-def build_vision_prompt(app: str = "", title: str = "") -> str:
+def build_vision_prompt(app: str = "", title: str = "", recent: str = "") -> str:
     """构造发给视觉模型的提示词（P5：拼接窗口名提示）。
 
-    app/title 至少有一个时，在 JSON 格式要求之后追加 [当前窗口] 提示，让视觉
-    模型优先结合窗口名判断用户在做什么（避免多开/相似界面认错）；窗口名与截图
-    内容矛盾时以窗口名为准。无窗口名时原样返回 VISION_PROMPT（不影响格式约束）。
+    - app/title 至少有一个时，在 JSON 格式要求之后追加 ``[当前窗口]`` 提示，
+      让视觉模型优先结合窗口名判断用户在做什么（避免多开/相似界面认错）；
+      窗口名与截图内容矛盾时以窗口名为准。
+    - ``recent``（O1-P3 事件合并的附带产物，如"这 1.2s 里切过 Edge → Code →
+      Chrome"）非空时追加 ``[最近窗口切换]``。它回答的是"他刚从哪过来"，
+      是本轮合并真正要赚的那半。
+      关键：必须明说**别把切换序列当成本屏内容**——否则模型会把那串窗口名
+      写进描述里，比不说还糟。
+    - 三个参数全空时**原样返回 VISION_PROMPT**（保持旧行为与格式约束）。
     """
-    if not app and not title:
-        return VISION_PROMPT
-    window_hint = (
-        f"\n[当前窗口] 进程={app or '未知'}, 标题={title or '未知'}\n"
-        "规则：窗口标题是最准确的信息，截图可能包含残留图标、菜单、无关窗口区域。"
-        "窗口标题与截图内容矛盾时，绝对以窗口标题为准，并说明判断依据。"
-    )
-    return VISION_PROMPT + window_hint
+    prompt = VISION_PROMPT
+    if app or title:
+        prompt += (
+            f"\n[当前窗口] 进程={app or '未知'}, 标题={title or '未知'}\n"
+            "规则：窗口标题是最准确的信息，截图可能包含残留图标、菜单、无关窗口区域。"
+            "窗口标题与截图内容矛盾时，绝对以窗口标题为准，并说明判断依据。"
+        )
+    if recent:
+        prompt += (
+            f"\n[最近窗口切换] {recent}\n"
+            "规则：这是用户**刚刚**（秒级）切过的窗口顺序，可用来判断他在忙什么；"
+            "但截图只是最后那一屏——**不要把切换序列当成本张截图里出现的内容**，"
+            "summary/detail 仍需如实描述你真正看到的画面。"
+        )
+    return prompt
 
 # 屏幕内容→情绪映射
 SCREEN_EMOTION_MAP = {
@@ -854,7 +867,11 @@ class ScreenPerception:
             return None
 
         # P5: 窗口名拼接进视觉提示（视觉模型优先结合窗口名判断，避免多开/相似界面认错）
-        vision_text = build_vision_prompt(app, title)
+        # O1-P3: 事件合并带来的"他刚从哪过来"也一并喂进去——这才是合并赚的那半
+        vision_text = build_vision_prompt(
+            app, title,
+            recent=(burst.hint() if burst is not None else ""),
+        )
 
         # O1-P2 全局闸门：冷却中 / 超预算 / 并发已满 → 本轮直接跳过。
         # 屏幕感知是后台循环，晚一轮没有代价；三条线程一起撞上去才是 429 的成因。
