@@ -189,11 +189,97 @@ class InterfaceMixin:
                 auth_token=sh_cfg.get("auth_token", ""),
                 port=int(sh_cfg.get("port", 8977) or 8977),
                 allow_set_mode=bool(sh_cfg.get("allow_set_mode", False)),
+                memory_provider=self._memory_snapshot,
+                memory_recall_provider=self._memory_recall,
             )
             self._status_http.start()
         except Exception as e:
             logger.warning("F 本地状态口启动失败（非致命）: %s", e)
             self._status_http = None
+
+    def _memory_snapshot(self, query: str = "") -> dict:
+        """记忆检视快照（F GET /pet/memory 只读输出）。
+
+        暴露桌宠自己记的事实与场景，便于在浏览器/curl 里看它到底记了什么。
+        ``query`` 非空时按关键词过滤（事实走 FactStore.search；场景按
+        label/scenario/category/tags/topics 子串匹配）。只读，不写盘、不走网络。
+        """
+        from dataclasses import asdict
+        q = (query or "").strip()
+        out: dict = {"ok": True, "query": q, "facts": [], "scenes": []}
+        try:
+            fs = getattr(self, "_fact_store", None)
+            if fs is not None:
+                out["facts"] = fs.search(q, limit=50) if q else fs.get_facts(limit=50)
+        except Exception as e:
+            out["facts_error"] = str(e)[:200]
+        try:
+            sm = getattr(self, "_scene_memory", None)
+            if sm is not None:
+                scenes = list(sm.scenes)
+                if q:
+                    ql = q.lower()
+
+                    def _hit(s) -> bool:
+                        blob = " ".join(
+                            [str(s.label), str(s.scenario), str(s.category)]
+                            + [str(t) for t in (s.tags or [])]
+                            + [str(t) for t in (s.topics or [])]
+                        ).lower()
+                        return ql in blob
+
+                    scenes = [s for s in scenes if _hit(s)]
+                out["scenes"] = [asdict(s) for s in scenes][:50]
+        except Exception as e:
+            out["scenes_error"] = str(e)[:200]
+        return out
+
+    def _memory_recall(self, query: str = "") -> dict:
+        """混合召回可视化（F GET /pet/memory/recall?q=...）。
+
+        把桌宠的事实 + 场景拼成候选池，跑一次 ``HybridMemoryRecall``
+        （BM25 + cosine + RRF），返回带得分的命中排序——用于看清「一句话
+        到底唤起了哪些记忆」。只读，不写盘。
+        """
+        q = (query or "").strip()
+        if not q:
+            return {"ok": False, "error": "缺少查询词 q"}
+        pool: list = []
+        try:
+            fs = getattr(self, "_fact_store", None)
+            if fs is not None:
+                for f in fs.get_facts(limit=200):
+                    parts = [str(f.get(k, "")) for k in
+                             ("text", "subject", "predicate", "object", "topic") if f.get(k)]
+                    pool.append({"id": f"fact:{f.get('id', '')}", "kind": "fact",
+                                 "text": " ".join(parts)})
+        except Exception as e:
+            logger.debug("recall: 读事实失败: %s", e)
+        try:
+            sm = getattr(self, "_scene_memory", None)
+            if sm is not None:
+                for s in sm.scenes:
+                    parts = ([str(s.label), str(s.scenario), str(s.category)]
+                             + [str(t) for t in (s.tags or [])]
+                             + [str(t) for t in (s.topics or [])])
+                    pool.append({"id": f"scene:{s.scene_id}", "kind": "scene",
+                                 "text": " ".join(p for p in parts if p)})
+        except Exception as e:
+            logger.debug("recall: 读场景失败: %s", e)
+        try:
+            from core.memory_hybrid import HybridMemoryRecall
+            hits = HybridMemoryRecall().recall(q, pool)
+        except Exception as e:
+            return {"ok": False, "error": f"召回失败: {e}"}
+        return {
+            "ok": True, "query": q, "pool_size": len(pool),
+            "hits": [
+                {"id": d.get("id"), "kind": d.get("kind"),
+                 "score": round(float(d.get("_rrf_score", 0.0) or 0.0), 4),
+                 "text": (d.get("text", "") or "")[:160]}
+                for d in hits[:20]
+            ],
+        }
 
     def _status_snapshot(self) -> dict:
         """状态快照（F GET /pet/state 只读输出）。"""
