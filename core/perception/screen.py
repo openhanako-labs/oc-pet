@@ -252,6 +252,21 @@ class ScreenPerception:
         self._last_timer_capture: float = 0          # 最近一次 timer 截图时间
         self._activity_history: list[ActivityEvent] = []  # 最近 50 个活动事件
         self._last_frame_hash: str = ""
+        # O1-P3（2026-09-19）：事件爆发合并（去抖，借鉴 Cortico batching）。
+        # 关掉则回到旧行为（第一个事件立刻分析、其余在冷却期内丢弃）。
+        # 导入失败也回退旧行为——合并是省钱项，不该拖垮屏幕感知本身。
+        self._burst_enabled = False
+        self._burst = None
+        self._burst_timer = None
+        self._burst_lock = threading.Lock()
+        self._last_burst = None
+        try:
+            from core.perception.event_burst import EventBurstCoalescer
+
+            self._burst = EventBurstCoalescer()
+            self._burst_enabled = True
+        except Exception as e:  # noqa: BLE001 — 合并是省钱项，失败就回退旧行为
+            logger.warning("屏幕事件合并不可用（回退旧行为）: %s", e)
         # P1：感知哈希近邻去重（0=关，默认关）。整帧 MD5 之外再挡一层
         # 「像素变了但画面没变」（闪烁光标 / 跳动时钟 / 视频微动）。
         self._phash_threshold: int = 0
@@ -503,22 +518,98 @@ class ScreenPerception:
         """前台窗口切换时调用（由 ForegroundWatcher 触发）
 
         黑名单内 → 跳过
-        冷却期内 → 跳过（避免频繁截图）
-        其他 → 触发一次截图
+        开合并 → 攒进爆发，等安静后**只打一次**视觉 API
+        关合并 → 旧行为：立刻分析，冷却期内丢弃
         """
         if _is_screen_blacklisted(app, title, self._blacklist_enabled):
             logger.debug("Screenshot skipped (blacklisted): %s - %s", app, title[:30])
             return
-        # 事件触发也加冷却（与定时器同一节奏：event 与 timer 共用冷却，
-        # 避免"切窗口一次 + 定时一次"在 2 分钟内打两条视觉 API）
-        now = time.time()
-        if not hasattr(self, '_last_event_capture'):
-            self._last_event_capture = 0
-        event_cooldown = self._interval  # 与 timer 同频，不再额外叠加
-        if now - self._last_event_capture < event_cooldown:
+        if not (self._burst_enabled and self._burst is not None):
+            # 旧行为（保留可回退）：事件触发也加冷却
+            now = time.time()
+            if not hasattr(self, '_last_event_capture'):
+                self._last_event_capture = 0
+            if now - self._last_event_capture < self._interval:
+                return
+            self._last_event_capture = now
+            self._capture_and_analyze(mode="event", app=app, title=title)
             return
-        self._last_event_capture = now
-        self._capture_and_analyze(mode="event", app=app, title=title)
+        try:
+            flush_now, delay = self._burst.add(app, title, category)
+        except Exception as e:  # noqa: BLE001 — 合并出问题不能吞掉事件路径
+            logger.warning("屏幕爆发合并失败（回退本次立刻分析）: %s", e)
+            self._capture_and_analyze(mode="event", app=app, title=title)
+            return
+        if flush_now:
+            self._flush_burst()
+        else:
+            self._schedule_burst_flush(delay)
+
+    def _schedule_burst_flush(self, delay: float):
+        """排一次冲刷；**每次事件都重排**——这就是去抖：事件越密、动手越晚。"""
+        with self._burst_lock:
+            old = self._burst_timer
+            timer = threading.Timer(max(0.05, float(delay)), self._flush_burst)
+            timer.daemon = True
+            timer.name = "ScreenBurstFlush"
+            self._burst_timer = timer
+        # 取消放锁外，避免 cancel 回调里再抢锁
+        if old is not None:
+            try:
+                old.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        timer.start()
+
+    def set_burst(self, enabled: bool = True, **kw) -> None:
+        """改事件合并参数（quiet_gap_s / min_age_s / max_age_s / max_size）。
+
+        不给配置块是有意的：没接进读取链路的配置键就是"装饰品"
+        （这个项目里已经踩过 `auth_token` 那个坑）。要用时调这里。
+        """
+        try:
+            from core.perception.event_burst import EventBurstCoalescer
+
+            self._burst = EventBurstCoalescer(**kw)
+            self._burst_enabled = bool(enabled)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("设置事件合并参数失败（保持原状）: %s", e)
+
+    def cancel_pending_burst(self) -> None:
+        """丢弃还没冲的爆发（停止感知时调，避免停完又打一条 API）。"""
+        with self._burst_lock:
+            timer = self._burst_timer
+            self._burst_timer = None
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        if self._burst is not None:
+            try:
+                self._burst.reset()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _flush_burst(self):
+        """把攒下的事件合并成**一次**分析。"""
+        try:
+            with self._burst_lock:
+                self._burst_timer = None
+            if not self._running:
+                return
+            burst = self._burst.take() if self._burst is not None else None
+            if burst is None or not burst.events:
+                return
+            last = burst.last
+            # 定时器路径仍按 _last_event_capture 避让，不变
+            self._last_event_capture = time.time()
+            logger.info("屏幕爆发合并：%d 个事件 / %.1fs → %s",
+                        burst.size, burst.duration, burst.window_chain())
+            self._capture_and_analyze(mode="event", app=last.app,
+                                      title=last.title, burst=burst)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("屏幕爆发冲刷失败（非致命）: %s", e)
 
     def start(self):
         if not self._enabled:
@@ -664,9 +755,19 @@ class ScreenPerception:
                     return
                 time.sleep(1)
 
-    def _capture_and_analyze(self, mode: str = "timer", app: str = "", title: str = "") -> ScreenEvent | None:
+    def _capture_and_analyze(self, mode: str = "timer", app: str = "", title: str = "",
+                             burst=None) -> ScreenEvent | None:
         import hashlib as _hashlib
         from core.hanako_context import HanakoContext
+
+        # O1-P3：记住本次是哪个爆发触发的。序列文本在 burst.hint() 里，
+        # 目前用于日志与观测；**接进视觉提示词是下一步**（提示词不在本文件里）。
+        if burst is not None:
+            self._last_burst = burst
+            try:
+                logger.info("屏幕分析附带爆发序列：%s", burst.hint())
+            except Exception:  # noqa: BLE001
+                pass
 
         # 视觉模型配置错误（400/401）后本次会话停用，避免反复请求刷屏
         if getattr(self, "_vision_disabled", False):
