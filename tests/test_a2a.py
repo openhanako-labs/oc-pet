@@ -394,3 +394,50 @@ def test_build_from_config_accepts_single_agent_string():
     d = build_from_config({"a2a": {"enabled": True, "allowed_agents": "kurisu"}},
                           lambda a: _Session(a), lambda s, t, to: "x")
     assert d.allowed_agents == ["kurisu"]
+
+
+# ── "交出去" vs "办成了"（用户 2026-09-19 追问：超时也算没交出去吗） ──
+
+
+def test_success_is_delivered():
+    d, _, _ = _mk()
+    r = d.delegate("任务", "kurisu")
+    assert r.ok is True and r.delivered is True
+
+
+def test_send_failure_is_still_delivered():
+    """会话建起来了 = 活已经在那边了。没等到回话 ≠ 没交出去。"""
+    d, _, _ = _mk()
+    d._send = lambda s, t, to: (_ for _ in ()).throw(RuntimeError("等超时了"))
+    r = d.delegate("任务", "kurisu")
+    assert r.ok is False
+    assert r.delivered is True, "不能替对方宣布失败"
+    assert r.session_id, "得留下会话说，以后才能回去看"
+
+
+def test_create_failure_is_not_delivered():
+    """连会话都没建起来，才是真的没交出去。"""
+    d, _, _ = _mk()
+    d._create_session = lambda a: (_ for _ in ()).throw(RuntimeError("Hana 掉线"))
+    r = d.delegate("任务", "kurisu")
+    assert r.ok is False and r.delivered is False
+
+
+def test_no_stable_id_is_not_delivered():
+    d, _, _ = _mk()
+    d._create_session = lambda a: type("X", (), {})()
+    r = d.delegate("任务", "kurisu")
+    assert r.delivered is False
+
+
+def test_policy_rejection_is_not_delivered():
+    """根本没发出去（白名单/配额拒掉）也算没交出去。"""
+    d, _, _ = _mk()
+    r = d.delegate("任务", "alice")
+    assert r.ok is False and r.delivered is False
+
+
+def test_delivered_shows_up_in_to_dict():
+    """观测点要带出来——不然出了事只看得到 ok=False。"""
+    d, _, _ = _mk()
+    assert d.delegate("任务", "kurisu").to_dict()["delivered"] is True

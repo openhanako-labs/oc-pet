@@ -1072,8 +1072,10 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         """(b) 方案：**只响门铃，不念结论**。
 
         讲不讲、什么时候讲由他决定；结论在 ``Delegator.results`` 里等他问。
-        **失败也响**（内容不同）——三分钟过去什么都没交出去，
-        如果既不响也不存，就等于替他吞掉了失败。
+        **失败也响**（内容不同）——不响也不存就等于替他吞掉了失败。
+
+        但"失败"要分两种（用户 2026-09-19 追问"思考时间过长没回复也算吗"）：
+        会话建起来了 = 活已经交出去了，只是还没回话，**不能替它宣布失败**。
 
         本方法在派活的**后台线程**里被调，所以只走线程安全的气泡入口。
         """
@@ -1083,8 +1085,10 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             label = label_of(getattr(result, "agent_id", ""))
             if getattr(result, "ok", False):
                 text, emotion = f"{label} 那边有结果了，想听就说一声～", "happy"
+            elif getattr(result, "delivered", False):
+                text, emotion = f"{label} 那边还没回话…要我看看吗？", "thinking"
             else:
-                text, emotion = f"{label} 那边没办成…要我细说吗？", "sad"
+                text, emotion = f"{label} 那边没交出去…要我细说吗？", "sad"
             self._show_bubble(text, emotion=emotion, source="a2a", duration_ms=8000)
         except Exception as e:
             logger.debug("A2A 门铃失败（忽略）: %s", e)

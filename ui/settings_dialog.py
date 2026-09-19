@@ -1024,6 +1024,9 @@ class SettingsDialog(QDialog):
         # ── Tab: QQ/微信（需求③：Hanako 只读桥接）──
         self._main_tabs.addTab(self._build_hb_tab(), "💬 QQ/微信")
 
+        # ── Tab: 派活（G2/A4 A2A：把活交给别的助手）──
+        self._main_tabs.addTab(self._build_a2a_tab(), "🤝 派活")
+
         # .env / agent / 角色包列表在 showEvent 中异步加载
 
         # ── 按钮 ──
@@ -1927,6 +1930,26 @@ class SettingsDialog(QDialog):
                         if not ac["dialog"]:
                             ac.pop("dialog", None)
 
+        # 派活 A2A（G2/A4）
+        if hasattr(self, "a2a_enabled"):
+            a2a = c.setdefault("a2a", {})
+            a2a["enabled"] = self.a2a_enabled.isChecked()
+            picked = [aid for aid, cb in getattr(self, "a2a_agent_checks", {}).items()
+                      if cb.isChecked()]
+            box = getattr(self, "a2a_extra_agents", None)
+            if box is not None:
+                raw = box.text().replace("，", ",").replace("、", ",")
+                picked += [x.strip() for x in raw.split(",") if x.strip()]
+            seen, ordered = set(), []
+            for aid in picked:
+                if aid not in seen:
+                    seen.add(aid)
+                    ordered.append(aid)
+            a2a["allowed_agents"] = ordered
+            a2a["max_per_hour"] = self.a2a_max_hour.value()
+            a2a["max_per_day"] = self.a2a_max_day.value()
+            a2a["timeout_seconds"] = self.a2a_timeout.value()
+
         # Minecraft（需求② P4）
         if hasattr(self, "mc_enabled"):
             mc = c.setdefault("mc", {})
@@ -1976,6 +1999,101 @@ class SettingsDialog(QDialog):
         save_config(self._config)
 
         self.accept()
+
+    # ── A2A 派活标签页（G2/A4：把活交给别的助手）──
+
+    def _build_a2a_tab(self) -> QWidget:
+        """🤝 派活页：总开关 / 允许派给谁 / 配额 / 等待上限。
+
+        这些都是**花钱、花额度**的开关，所以默认全关、白名单默认空。
+        设置写进 config.json 的 ``a2a`` 块（不进 .env——.env 只放凭据）。
+        对应实现：``core/a2a.py`` + ``core/a2a_capability.py``。
+        """
+        a2a = self._config.get("a2a") or {}
+        muted = "color: rgb(%s); font-size: 11px;" % rgb(self._ui_theme, "text_muted")
+
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(14)
+
+        hint = QLabel(
+            "把活交给另一个助手（比如让它叫红莉栖去查点东西）。\n"
+            "桌宠只负责两件事：把活派出去、结果回来时响一声；结论要你自己问才讲。\n"
+            "⚠️ 派活会花你的 token、并在 Hana 里新建一个会话，所以默认关闭、白名单默认为空。\n"
+            "⚠️ 改完要重启桌宠才生效（派活通道在启动时接入）。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(muted)
+        lay.addWidget(hint)
+
+        main = QGroupBox("总开关")
+        main_form = QFormLayout(main)
+        self.a2a_enabled = QCheckBox("启用派活")
+        self.a2a_enabled.setChecked(bool(a2a.get("enabled", False)))
+        main_form.addRow(self.a2a_enabled)
+        lay.addWidget(main)
+
+        allow = QGroupBox("允许派给谁")
+        allow_lay = QVBoxLayout(allow)
+        allow_tip = QLabel("一个都不勾 = 一个都不许。桌宠绝不自动替你挑助手。")
+        allow_tip.setWordWrap(True)
+        allow_tip.setStyleSheet(muted)
+        allow_lay.addWidget(allow_tip)
+
+        allowed_now = set(a2a.get("allowed_agents") or [])
+        labels = {}
+        try:
+            from core.a2a_capability import AGENT_ALIASES, AGENT_LABELS
+            labels = dict(AGENT_LABELS)
+            known_ids = list(labels) + [a for a in AGENT_ALIASES if a not in labels]
+        except Exception:
+            known_ids = []
+        self.a2a_agent_checks = {}
+        for agent_id in known_ids:
+            cb = QCheckBox(f"{labels.get(agent_id, agent_id)}（{agent_id}）")
+            cb.setChecked(agent_id in allowed_now)
+            self.a2a_agent_checks[agent_id] = cb
+            allow_lay.addWidget(cb)
+
+        self.a2a_extra_agents = QLineEdit(
+            ", ".join(a for a in (a2a.get("allowed_agents") or []) if a not in known_ids)
+        )
+        self.a2a_extra_agents.setPlaceholderText("其他助手 id，逗号分隔（一般不用填）")
+        allow_lay.addWidget(self.a2a_extra_agents)
+        lay.addWidget(allow)
+
+        quota = QGroupBox("配额与等待")
+        quota_form = QFormLayout(quota)
+        self.a2a_max_hour = QSpinBox()
+        self.a2a_max_hour.setRange(1, 100)
+        self.a2a_max_hour.setSuffix(" 次/小时")
+        self.a2a_max_hour.setValue(int(a2a.get("max_per_hour", 6) or 6))
+        quota_form.addRow("每小时上限", self.a2a_max_hour)
+
+        self.a2a_max_day = QSpinBox()
+        self.a2a_max_day.setRange(1, 500)
+        self.a2a_max_day.setSuffix(" 次/天")
+        self.a2a_max_day.setValue(int(a2a.get("max_per_day", 30) or 30))
+        quota_form.addRow("每天上限", self.a2a_max_day)
+
+        self.a2a_timeout = QSpinBox()
+        self.a2a_timeout.setRange(10, 1800)
+        self.a2a_timeout.setSuffix(" 秒")
+        self.a2a_timeout.setValue(int(a2a.get("timeout_seconds", 180) or 180))
+        quota_form.addRow("单次等待上限", self.a2a_timeout)
+
+        quota_note = QLabel(
+            "等待是「活跃窗口顺延」的：对面在跑工具就不会被超时墙误杀；"
+            "真超时也会先从会话历史把回复捞回来。这里只是兜底上限。"
+        )
+        quota_note.setWordWrap(True)
+        quota_note.setStyleSheet(muted)
+        quota_form.addRow("", quota_note)
+        lay.addWidget(quota)
+
+        lay.addStretch(1)
+        return tab
 
     # ── MCP 父分类标签页（Minecraft + Skyrim 两个 MCP 游戏桥接的子标签）──
     def _build_mcp_tab(self) -> QWidget:

@@ -51,7 +51,25 @@ DEFAULT_MAX_PER_DAY = 30
 
 @dataclass
 class DelegateResult:
-    """一次派活的结果。失败**绝不伪装成成功**（与 mc_bridge / hanako_bridge 同纪律）。"""
+    """一次派活的结果。
+
+    **三个状态必须分清**（2026-09-19 用户问"思考时间过长没回复也算没交出去吗"
+    ——之前没分清，铃会说谎）：
+
+    ==================  ==========  ======  ================================
+    状态                 delivered   ok      说什么
+    ==================  ==========  ======  ================================
+    会话没建起来         False       False   "没交出去"（真没发出去）
+    交出去了、没等到回话  True        False   "还没回话"（**可能在干活**）
+    拿到回复             True        True    结论
+    ==================  ==========  ======  ================================
+
+    为什么非分不可：``send_and_wait`` 的等待是"活跃窗口顺延"的（服务端跑工具链
+    期间 deadline 跟着事件往后延），真超时还会**先从会话历史把回复捞回来**。
+    走到最后一格时，活其实已经在那边了——说"没办成"就是替对方宣布失败。
+
+    失败**绝不伪装成成功**（与 mc_bridge / hanako_bridge 同纪律）。
+    """
 
     ok: bool
     agent_id: str = ""
@@ -60,6 +78,7 @@ class DelegateResult:
     reply: str = ""
     error: str = ""
     elapsed: float = 0.0
+    delivered: bool = False    # 会话建成了 = 活已经交到对方那边
     acked: bool = False        # 是否已被"开口问"取走（门铃方案的另一半）
 
     def to_dict(self) -> dict:
@@ -71,6 +90,7 @@ class DelegateResult:
             "reply": self.reply,
             "error": self.error,
             "elapsed": round(self.elapsed, 2),
+            "delivered": self.delivered,
             "acked": self.acked,
         }
 
@@ -237,6 +257,7 @@ class Delegator:
         t0 = self._now()
         agent = str(agent_id).strip()
         session = None
+        sid = spath = ""
         try:
             # 一律**新建**会话：绝不往用户已有会话里插话（护栏 4）
             session = self._create_session(agent)
@@ -244,19 +265,24 @@ class Delegator:
             if not sid:
                 return self._finish(DelegateResult(
                     False, agent_id=agent, error="新建会话没拿到稳定标识"))
+            # 拿到会话 = 活已经交出去了。之后即使没等到回话，
+            # 也不能说"没交出去"（那是在替对方宣布失败）。
             reply = self._send(session, text, self._timeout) or ""
             with self._lock:
                 self._spent.append(t0)
             return self._finish(DelegateResult(
                 True, agent_id=agent, session_id=sid, session_path=spath,
-                reply=str(reply), elapsed=self._now() - t0,
+                reply=str(reply), elapsed=self._now() - t0, delivered=True,
             ))
         except Exception as e:  # noqa: BLE001 — 派活失败绝不拖垮主路径
-            logger.warning("A2A 派活失败（agent=%s）: %s", agent, e)
-            sid, spath = self._ids_of(session)
+            logger.warning("A2A 派活失败（agent=%s, delivered=%s）: %s", agent, bool(sid), e)
+            sid2, spath2 = self._ids_of(session)
+            sid = sid or sid2
+            spath = spath or spath2
             return self._finish(DelegateResult(
                 False, agent_id=agent, session_id=sid, session_path=spath,
                 error=f"{type(e).__name__}: {e}", elapsed=self._now() - t0,
+                delivered=bool(sid),
             ))
 
     @staticmethod

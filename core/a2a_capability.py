@@ -191,11 +191,14 @@ def _result_callee(delegator: Delegator):
             body = (r.reply or "").strip()
             if r.ok and body:
                 lines.append(f"{label} 那边：{body}")
-            elif not r.ok:
-                # 失败也要说清——悄悄吞掉失败等于骗他
-                lines.append(f"{label} 那边没办成（{r.error}）")
-            else:
+            elif r.ok:
                 lines.append(f"{label} 那边回了，但没给出内容")
+            elif getattr(r, "delivered", False):
+                # 交出去了、只是没等到回话——**不能替它宣布失败**
+                lines.append(f"{label} 那边还没回话（{r.error}）")
+            else:
+                # 真的没发出去，才叫"没交出去"
+                lines.append(f"{label} 那边没交出去（{r.error}）")
         return RouteResult(
             capability="delegation_result",
             text="\n\n".join(lines),

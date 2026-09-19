@@ -216,7 +216,7 @@ def test_result_capability_reads_unread_once(registered):
 
 
 def test_result_capability_reports_failure_honestly(registered):
-    """失败也要说清：不能悄悄吞掉。"""
+    """会话建起来了但没等到回话 → 说"还没回话"，**不能说"没交出去"**。"""
     def boom(session, text, timeout):
         raise RuntimeError("Hana 掉线")
 
@@ -227,7 +227,32 @@ def test_result_capability_reports_failure_honestly(registered):
     assert _wait(lambda: d.unread_count == 1)
 
     r = CapabilityRouter().route("红莉栖那边有结果了吗")
-    assert "没办成" in r.text and "Hana 掉线" in r.text
+    assert "还没回话" in r.text and "Hana 掉线" in r.text
+    assert "没交出去" not in r.text
+
+
+def test_result_capability_says_not_delivered_when_create_failed(registered):
+    """连会话都没建起来，才说"没交出去"。"""
+    d = Delegator(lambda a: (_ for _ in ()).throw(RuntimeError("Hana 掉线")),
+                  lambda s, t, to: "x",
+                  {"enabled": True, "allowed_agents": ["kurisu"]})
+    registered(d)
+    CapabilityRouter().route("交给红莉栖查一下")
+    assert _wait(lambda: d.unread_count == 1)
+
+    r = CapabilityRouter().route("红莉栖那边有结果了吗")
+    assert "没交出去" in r.text
+    assert "还没回话" not in r.text
+
+
+def test_bell_does_not_declare_failure_when_delivered():
+    """源码护栏：宠物端门铃必须区分"没交出去"与"还没回话"。"""
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1].joinpath("pet.py").read_text(encoding="utf-8")
+    start = src.index("def _on_a2a_result")
+    body = src[start:start + 1400]
+    assert 'getattr(result, "delivered", False)' in body
+    assert "没交出去" in body and "还没回话" in body
 
 
 def test_result_capability_when_nothing_pending(registered):
