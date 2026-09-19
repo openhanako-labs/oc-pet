@@ -64,7 +64,10 @@ def test_adapter_reports_429_to_gate():
 def test_pet_configures_gate_at_startup():
     s = _src("pet.py")
     assert "configure_gate(" in s, "启动时没有按配置建闸门"
-    assert "self._init_llm_gate()" in s, "闸门初始化没有被调用"
+    # 2026-09-19：启动与热重载**共用一条路**（_apply_runtime_config），
+    # 所以这里查统一入口而不是单点调用
+    assert "self._apply_runtime_config()" in s, "闸门配置没有被调用"
+    assert '"llm_gate"' in s
 
 
 def test_config_templates_carry_gate_block():

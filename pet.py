@@ -990,12 +990,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             # 前台分类活动 → 记忆（常做的事）
             if hasattr(self, '_foreground_watcher'):
                 self._foreground_watcher.on_change = self._on_foreground_change_with_memory
-            # P0-1 陪玩：游戏窗口识别（只识别 + 发事件，不做用户可见动作）
-            self._init_game_watch()
-            # O1-P2：初始化后台 LLM 全局闸门（并发上限 + 每源预算 + 429 全局冷却）
-            self._init_llm_gate()
-            # O3：口型开口上限（默认不压，只留旋钮）
-            self._init_lip_sync()
+            # 可热生效的运行时配置（陪玩游戏识别 / LLM 全局闸门 / 口型上限 / A2A）
+            # 启动、【设置保存】、【config.json 改动】都走这一条路
+            self._apply_runtime_config()
+            # 盯 config.json：那几项没有设置页，只能手改文件
+            self._start_config_watch()
             # 跨天首启问候（延迟到窗口稳定后弹气泡）
             from core.companion_hooks import build_morning_greeting
             greet = build_morning_greeting(self._companion_memory)
@@ -1007,6 +1006,91 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         except Exception as e:
             logger.warning("P2 陪伴记忆初始化失败（非致命）: %s", e)
             self._companion_memory = None
+
+    # ── 可热生效的运行时配置（改配置不用重启）──────────────────
+
+    #: 支持热生效的配置子块（值只是给人看的；真正的装卸表在 _apply_runtime_config）
+    HOT_CONFIG_KEYS = ("a2a", "game", "lip_sync", "llm_gate")
+
+    def _apply_runtime_config(self, cfg=None):
+        """把**可热生效**的配置重新装一遍。
+
+        启动、【设置面板保存】、以及 ``config.json`` 被改动（见
+        :class:`core.config_watch.ConfigWatcher`）**都走这一条路**——
+        所以"改配置不用重启"。
+
+        两条纪律：
+
+        1. **只把这几个子块拷进内存配置，不整份替换 ``self.config``**：
+           运行期改过的位置/缩放等状态不能被磁盘版本冲掉。
+        2. **该块内容没变就不重装**：重建闸门会清掉已用配额与冷却，
+           重建派活会丢掉还没念的结论——不能因为别的键改了就把它们连坐。
+        """
+        from core.config_watch import config_signature
+
+        cfg = cfg if isinstance(cfg, dict) else (getattr(self, "config", {}) or {})
+        appliers = {
+            "a2a": self._apply_a2a_config,
+            "game": self._init_game_watch,
+            "lip_sync": self._init_lip_sync,
+            "llm_gate": self._init_llm_gate,
+        }
+        out = {}
+        for key in self.HOT_CONFIG_KEYS:
+            raw = cfg.get(key)
+            # 缺失/类型不对一律当空块——**不能把 None 塞回 self.config**，
+            # 那会让后面 `self.config["game"]["enabled"]` 这类写法直接炸
+            block = raw if isinstance(raw, dict) else {}
+            sig = config_signature(block)
+            if getattr(self, "_hot_sig_" + key, None) == sig:
+                out[key] = "unchanged"
+                continue
+            if isinstance(getattr(self, "config", None), dict):
+                self.config[key] = block
+            try:
+                ok = appliers[key]()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("热重载 %s 失败（非致命）: %s", key, e)
+                ok = False
+            if not ok:
+                # **没装成功就不记账**——否则下次真该装时会被"没变"挡掉
+                # （例：启动时 A2A 还没拿到会话管理器，失败不记账，注入后才能装上）
+                out[key] = "failed"
+                continue
+            setattr(self, "_hot_sig_" + key, sig)
+            out[key] = "applied"
+        return out
+
+    def _start_config_watch(self):
+        """盯 ``config.json``：手改（或任何写盘）后**自动生效**，不用重启。
+
+        ``a2a`` 有设置页、保存时会主动重载；但 ``game`` / ``lip_sync`` /
+        ``llm_gate`` **没有设置页**，只能手改文件——所以必须有这条路径，
+        否则"热重载"对它们是不可达的（写了等于没写）。
+        """
+        try:
+            from PySide6.QtCore import QTimer
+
+            import config as config_mod
+            from core.config_watch import ConfigWatcher
+
+            path = getattr(config_mod, "CONFIG_PATH", "")
+            self._config_watcher = ConfigWatcher(path, on_change=self._on_config_file_changed)
+            self._config_watcher.prime()
+            self._config_watch_timer = QTimer(self)
+            self._config_watch_timer.setInterval(int(self._config_watcher.interval_s * 1000))
+            self._config_watch_timer.timeout.connect(self._config_watcher.poll)
+            self._config_watch_timer.start()
+            logger.info("配置热生效已开启（盯 %s）", path)
+        except Exception as e:
+            logger.warning("配置监视启动失败（非致命，改配置仍需重启）: %s", e)
+
+    def _on_config_file_changed(self, cfg):
+        """磁盘上的 config.json 变了 → 只重装**可热生效**的子块。"""
+        try:
+            logger.info("配置热生效：%s", self._apply_runtime_config(cfg))
+        except Exception as e:
+            logger.warning("配置热生效失败（非致命）: %s", e)
 
     def _init_lip_sync(self):
         """按 ``config.lip_sync`` 配置口型。
@@ -1023,8 +1107,10 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
             cfg = (self.config.get("lip_sync", {}) if hasattr(self, "config") else {}) or {}
             set_mouth_peak(cfg.get("mouth_peak", 1.0))
+            return True          # 供 _apply_runtime_config 判断"真装上了"
         except Exception as e:
             logger.warning("口型配置失败（非致命）: %s", e)
+            return False
 
     def _init_a2a(self, session_manager):
         """G2/A4：把活派给 Hana 的 agent（**启动路径**）。
@@ -1050,7 +1136,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             sm = getattr(self, "_a2a_session_manager", None)
             if sm is None:
                 logger.info("A2A: 无会话管理器，跳过")
-                return None
+                # 返回 False = 没装成功 → 调用方**不记账**，
+                # 否则 _init_a2a 拿到会话管理器后会被"配置没变"挡掉
+                return False
 
             def _create(agent_id):
                 # create_session 的 agent_id 是**关键字参数**
@@ -1111,8 +1199,10 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
             g = configure_gate(getattr(self, "config", {}) or {})
             logger.info("O1-P2 全局闸门就绪：%s", g.stats())
+            return True
         except Exception as e:
             logger.warning("O1-P2 全局闸门配置失败（非致命）: %s", e)
+            return False
 
     def _init_game_watch(self):
         """P0-1（陪玩）：按 ``config.game`` 建游戏会话状态机。
@@ -1129,16 +1219,18 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             cfg = (self.config.get("game", {}) if hasattr(self, "config") else {}) or {}
             if not cfg.get("enabled", True):
                 logger.info("陪玩 P0-1：游戏识别未启用（config game.enabled=false）")
-                return
+                return True
             from core.game.registry import load_games
 
             games = load_games(cfg)
             self._game_watch = GameSessionWatcher(games=games)
             logger.info("陪玩 P0-1：游戏识别就绪，白名单 %d 款（%s）",
                         len(games), "、".join(g.name for g in games[:5]))
+            return True
         except Exception as e:
             logger.warning("陪玩 P0-1 初始化失败（非致命）: %s", e)
             self._game_watch = None
+            return False
 
     def _on_foreground_change_with_memory(self, app_name: str, app_category: str, title: str):
         """前台变化：记录活动到陪伴记忆 + A 事件流 + 原有回调。"""
@@ -2315,9 +2407,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         if dialog.exec():
             self.config = dialog.get_config()
             save_config(self.config)
-            # 热重载派活能力：设置里改了开关/白名单/配额**立刻生效**，不用重启
-            # （启动与这里走同一条路 core.a2a_capability.apply_config）
-            self._apply_a2a_config()
+            # 热重载运行时配置：设置里改了**立刻生效**，不用重启
+            # （启动 / 设置保存 / config.json 改动走同一条路 _apply_runtime_config）
+            self._apply_runtime_config()
             # 刷新防抖写盘 pending：避免退出时 async_config_saver 用旧 config 引用
             # 把设置面板刚保存的切换结果覆盖回原角色。
             try:

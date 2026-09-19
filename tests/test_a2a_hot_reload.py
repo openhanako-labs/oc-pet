@@ -157,6 +157,7 @@ def test_settings_save_triggers_reload():
     """设置面板保存后必须真的调重载——不然'不用重启'只是句口号。"""
     src = Path(__file__).resolve().parents[1].joinpath("pet.py").read_text(encoding="utf-8")
     body = src[src.index("def _open_settings"):]
-    assert "self._apply_a2a_config()" in body
+    # 2026-09-19：从只重载 a2a 改成统一入口（a2a/game/lip_sync/llm_gate）
+    assert "self._apply_runtime_config()" in body
     # 必须在 save_config 之后（拿的是新 config）
-    assert body.index("save_config(self.config)") < body.index("self._apply_a2a_config()")
+    assert body.index("save_config(self.config)") < body.index("self._apply_runtime_config()")

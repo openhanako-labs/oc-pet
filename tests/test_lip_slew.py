@@ -171,7 +171,11 @@ def test_speaking_stop_resets_slew():
 
 def test_pet_configures_mouth_peak():
     s = _src("pet.py")
-    assert "set_mouth_peak(" in s and "_init_lip_sync()" in s
+    assert "set_mouth_peak(" in s
+    # 2026-09-19：启动改为走**统一热生效入口**（不再各自单点调用），
+    # 手改 config.json 也能生效
+    assert "self._apply_runtime_config()" in s
+    assert '"lip_sync"' in s
 
 
 def test_config_templates_carry_lip_sync():
