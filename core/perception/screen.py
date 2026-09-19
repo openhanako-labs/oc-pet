@@ -174,6 +174,39 @@ def _is_screen_blacklisted(app: str, title: str, enabled: bool = False) -> bool:
     return False
 
 
+# ── 感知哈希（P1：整帧 MD5 之外的近邻去重）────────────────────────
+
+
+def dhash_frame(img, size: int = 8) -> int:
+    """差分感知哈希（dHash）：缩为 (size+1)×size 灰度，逐行比较水平相邻像素。
+
+    返回 size*size 位整数（默认 64 位）。**近邻帧**（闪烁光标、跳动时钟、
+    视频微动）哈希相近、Hamming 距离小——这正是整帧 MD5 完全抓不到的。
+
+    失败（无 PIL / 图像异常）返回 -1，调用方应视为「不可用」直接放行。
+    """
+    try:
+        from PIL import Image
+        g = img.convert("L").resize((size + 1, size), Image.LANCZOS)
+        px = list(g.getdata())
+        bits = 0
+        for row in range(size):
+            base = row * (size + 1)
+            for col in range(size):
+                bits = (bits << 1) | (1 if px[base + col] > px[base + col + 1] else 0)
+        return bits
+    except Exception as exc:
+        logger.debug("dhash_frame 失败（视为不可用）: %s", exc)
+        return -1
+
+
+def hamming(a: int, b: int) -> int:
+    """两个整数位串的 Hamming 距离（不同位数）；任一不可用（<0）返回极大值。"""
+    if a < 0 or b < 0:
+        return 1 << 30
+    return bin(a ^ b).count("1")
+
+
 # ════════════════════════════════════════════════════════════
 #  屏幕感知主类
 # ════════════════════════════════════════════════════════════
@@ -219,6 +252,11 @@ class ScreenPerception:
         self._last_timer_capture: float = 0          # 最近一次 timer 截图时间
         self._activity_history: list[ActivityEvent] = []  # 最近 50 个活动事件
         self._last_frame_hash: str = ""
+        # P1：感知哈希近邻去重（0=关，默认关）。整帧 MD5 之外再挡一层
+        # 「像素变了但画面没变」（闪烁光标 / 跳动时钟 / 视频微动）。
+        self._phash_threshold: int = 0
+        self._last_phash: int | None = None  # 上次**真正分析过**那帧的 dHash（跳过时不更新）
+        self._phash_skips: int = 0           # 连续跳过次数（仅用于日志/观测）
         self._consecutive_failures: int = 0
         self._consecutive_empty: int = 0  # 连续空响应计数
         # 视觉模型配置状态（避免未配置/配置错误时反复请求刷屏）
@@ -530,6 +568,41 @@ class ScreenPerception:
         """开关缩放+压缩（True=缩放4x+50%压缩，False=原图+85%压缩）"""
         self._compress_enabled = enabled
 
+    def set_phash_threshold(self, threshold: int):
+        """感知哈希近邻去重的 Hamming 阈值（0=关闭，默认关）。
+
+        整帧 MD5 只能挡「一个像素都没变」；本阈值挡「像素变了、画面没变」
+        （闪烁光标 / 跳动时钟 / 视频微动）——正对屏幕感知白烧 LLM 与 429 限流。
+
+        建议 3~6：越大越省，但过大会漏掉局部小变化（如弹窗突然出现）。
+        无效输入回退 0（关闭）；置 0 同时清空历史哈希。
+        """
+        try:
+            t = int(threshold)
+        except (TypeError, ValueError):
+            t = 0
+        self._phash_threshold = max(0, min(64, t))
+        if self._phash_threshold == 0:
+            self._last_phash = None
+
+    def _is_perceptually_unchanged(self, phash: int) -> bool:
+        """近邻判定（含 ``_last_phash`` 维护）。不可用/阈值 0 → 恒 False（放行）。
+
+        对比对象是**上次真正分析过**的那帧（跳过时不更新），因此缓慢渐变会
+        累积到超过阈值 → 自然触发一次分析，不会无限跳过。
+        """
+        if self._phash_threshold <= 0 or phash < 0:
+            self._last_phash = phash if phash >= 0 else None
+            self._phash_skips = 0
+            return False
+        prev = self._last_phash
+        if prev is not None and hamming(phash, prev) <= self._phash_threshold:
+            self._phash_skips += 1
+            return True
+        self._last_phash = phash
+        self._phash_skips = 0
+        return False
+
     def stop(self):
         self._running = False
 
@@ -614,6 +687,12 @@ class ScreenPerception:
             logger.debug("Screen unchanged, skipping API call")
             return
         self._last_frame_hash = frame_hash
+
+        # P1 近邻去重（整帧 MD5 之外的一层）：像素变了但画面没变时不打 API。
+        if self._phash_threshold > 0 and self._is_perceptually_unchanged(dhash_frame(img)):
+            logger.debug("Screen perceptually unchanged (hamming<=%d, skips=%d), skipping API call",
+                         self._phash_threshold, self._phash_skips)
+            return
 
         buf = io.BytesIO()
         quality = JPEG_QUALITY if self._compress_enabled else 85

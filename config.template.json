@@ -190,6 +190,7 @@
     "blur": false,
     "blacklist": false,
     "compress": true,
+    "phash_threshold": 0,
     "llm_enrich": true,
     "llm_enrich_cooldown": 300
   },

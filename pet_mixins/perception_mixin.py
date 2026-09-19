@@ -172,6 +172,13 @@ class PerceptionMixin:
             self._perception.screen.set_blacklist(True)
         if not screen_cfg.get("compress", True):
             self._perception.screen.set_compress(False)
+        # P1 感知哈希近邻去重（0=关）：像素变了但画面没变时不打视觉 API
+        try:
+            if hasattr(self._perception.screen, "set_phash_threshold"):
+                self._perception.screen.set_phash_threshold(
+                    int(screen_cfg.get("phash_threshold", 0) or 0))
+        except Exception:
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         # 截屏间隔（随机范围优先，缺省 interval±30%）
         try:
             _iv = int(screen_cfg.get("interval", 120) or 120)

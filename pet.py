@@ -2284,6 +2284,13 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             screen.set_blur(screen_cfg.get("blur", False))
             screen.set_blacklist(screen_cfg.get("blacklist", False))
             screen.set_compress(screen_cfg.get("compress", True))
+            # P1 感知哈希近邻去重（0=关）：像素变了但画面没变时不打视觉 API
+            try:
+                if hasattr(screen, "set_phash_threshold"):
+                    screen.set_phash_threshold(
+                        int(screen_cfg.get("phash_threshold", 0) or 0))
+            except Exception:
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             # 截屏间隔（支持随机范围：interval_jitter_min/max，缺省用 interval±30%）
             try:
                 iv = int(screen_cfg.get("interval", 120) or 120)

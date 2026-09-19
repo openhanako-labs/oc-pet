@@ -302,6 +302,10 @@ DEFAULT_CONFIG = {
         "blur": False,
         "blacklist": False,
         "compress": True,
+        # P1 感知哈希近邻去重（0=关，默认关）：整帧 MD5 只能挡「一个像素都没变」，
+        # 本阈值挡「像素变了但画面没变」（闪烁光标/跳动时钟/视频微动）→ 省视觉 API。
+        # 建议 3~6；过大会漏掉局部小变化。
+        "phash_threshold": 0,
         # LLM 语义增强开关（默认开）：未注入 provider 时自动退化为纯规则分类；
         # 增强失败/超时/解析错误 → 保留规则结果，不阻塞感知
         "llm_enrich": True,
