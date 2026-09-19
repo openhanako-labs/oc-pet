@@ -1851,8 +1851,17 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             return f"🔍 {int(eff * 100)}%（屏幕上限）"
         return f"🔍 {int(requested * 100)}%"
 
-    def _resize_keeping_visible(self, w: int, h: int) -> None:
+    def _resize_keeping_visible(self, w: int, h: int) -> tuple:
         """setFixedSize + 重新定位，保证窗口不被挤出屏幕。
+
+        **返回钳制后的实际尺寸**——调用方必须把它转给渲染器。
+
+        2026-09-19 修：原来返回 None，调用方继续用**未钳制**的尺寸去调
+        `renderer.recalc_geometry(...)`。而渲染器是拿这个尺寸去设角色 label 的
+        （`char_label.setFixedSize(w,h)` + `_recompute_fit()`）——于是
+        **窗口被屏幕钳小、角色 label 却按放大后的尺寸渲染 → 模型画到窗口外面**。
+        用户实测：“放大到一定程度桌宠会显示到设定窗口外面”，且只在屏幕上限那
+        条路径上出现，正是因为那里 `_screen_clamp < 1`。
 
         桌宠在屏幕上是「站在那里」的，所以贴边/缩放时：
           · 水平：中心不动（左右摆动幅度小，居中观感稳定）
@@ -1875,7 +1884,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         w, h = self._clamp_size_to_screen(w, h)
         self.setFixedSize(w, h)
         if not self.isVisible():
-            return
+            return w, h
 
         x = x_center - w // 2
         y = bottom - h + 1
@@ -1887,6 +1896,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             y = max(sg.top(), min(y, sg.bottom() - h + 1))
         x = max(sg.left(), min(x, sg.right() - w + 1))
         self.move(x, y)
+        return w, h
 
     # （栖息行为按项目规矩在 pet_mixins/perch_mixin.py；这里只留菜单与 tick 接线）──────────────────────────────
 
@@ -1925,12 +1935,15 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             # setFixedSize 默认左上角不动、向右下扩展——贴合后模型会跟着往右/往下漂
             # （用户反馈“更右了”）。_resize_keeping_visible 保持水平中心 + 底边，
             # 并把窗口钳制在屏幕内。
-            self._resize_keeping_visible(w_final, h_final)
+            # 2026-09-19 修：必须把**钳制后**的尺寸转给渲染器，
+            # 否则角色 label 按未钳制尺寸渲染 → 模型画到窗口外。
+            w_ok, h_ok = self._resize_keeping_visible(w_final, h_final)
             # P0-2: 一次性调用 recalc_geometry，避免 set_scale 和 recalc_geometry 分别触发 _recompute_fit
             if hasattr(self._renderer, "recalc_geometry"):
-                self._renderer.recalc_geometry(w_final, h_final)
-            logger.info("PetWindow: 窗口贴合模型 %dx%d (缩放 %.2f → %dx%d)",
-                        self._base_w, self._base_h, self._pet_scale, w_final, h_final)
+                self._renderer.recalc_geometry(w_ok, h_ok)
+            _limited = "（屏幕限制）" if (w_ok, h_ok) != (w_final, h_final) else ""
+            logger.info("PetWindow: 窗口贴合模型 %dx%d (缩放 %.2f → %dx%d)%s",
+                        self._base_w, self._base_h, self._pet_scale, w_ok, h_ok, _limited)
             QTimer.singleShot(50, self._store_label_pos)
             QTimer.singleShot(50, self._reposition_bubble)
         except Exception as e:
@@ -1949,10 +1962,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         # 与 fit_window_to_model 走同一个定位规则（保持底边 + 钳制屏幕内），
         # 否则「滚轮放大」会把桌宠顶出屏幕，而「重启后贴合」不会——
         # 又一处两条路语义不一致。
-        self._resize_keeping_visible(w, h)
+        w_ok, h_ok = self._resize_keeping_visible(w, h)
         # 委托给 SpriteRenderer 处理角色尺寸
         self._renderer.set_scale(self._pet_scale)
-        self._renderer.recalc_geometry(w, h)
+        # 2026-09-19 修：用钳制后的尺寸（否则放大到屏幕上限时模型画到窗口外）
+        self._renderer.recalc_geometry(w_ok, h_ok)
         QTimer.singleShot(50, self._store_label_pos)
         QTimer.singleShot(50, self._reposition_bubble)
 
