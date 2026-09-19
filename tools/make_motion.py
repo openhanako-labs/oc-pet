@@ -52,6 +52,38 @@ SEGMENT_POINTS = {
     3: 1,   # 反向阶梯
 }
 SEGMENT_LINEAR = 0
+
+#: **渲染器每帧都往回写的参数——动作写在这些参数上等于白写。**
+#:
+#: 证据（`avatar/live2d_renderer.py`）：
+#:   - 1488-1491: ``SetParameterValue(ParamAngleX/Y, _gaze_cur_angle_*, 1.0)``（视线跟随）
+#:   - 1544/1592/1599: ``ParamMouthOpenY`` / ``ParamMouthForm``（口型）
+#: 动作真播了，但下一个瞬间被覆盖 → 零效果。
+#:
+#: 2026-09-19 实测：`ParamAngleY` 上 ±12 度的“点头”完全看不见，
+#: 而原版 `waving` 看得见，因为它动的是 `ParamBodyAngleZ`(±5) +
+#: `ParamHairSide` + 眨眼——**这些没人覆盖**。
+RENDERER_OVERWRITTEN_PARAMS = frozenset({
+    "ParamAngleX", "ParamAngleY",
+    "ParamEyeBallX", "ParamEyeBallY",
+    "ParamMouthOpenY", "ParamMouthForm",
+})
+
+#: 实测“动了看得见”的参数（从模型自带动作里统计出来的，不是拍的）
+VISIBLE_PARAMS = frozenset({
+    "ParamAngleZ",          # 头歪——happy 用 ±3
+    "ParamBodyAngleZ",      # 身体倾斜——waving 的主力，±5（**模型确有此参数**，cdi3 里有）
+    "ParamHairFront", "ParamHairSide", "ParamHairBack",   # 头发
+    "ParamBreath",          # 呼吸
+    "ParamEyeLOpen", "ParamEyeROpen",     # 眨眼
+    "ParamEyeLSmile", "ParamEyeRSmile",   # 眯眼笑
+    "ParamBrowLForm", "ParamBrowRForm",   # 眉形
+    "ParamBrowLY", "ParamBrowRY",
+    "ParamBrowLAngle", "ParamBrowRAngle",
+    "ParamBrowLX", "ParamBrowRX",
+    # 这个模型自己的贴图开关（挂脸 / 吐舌 / 歪嘴 / 鼓嘴）——肯定看得见
+    "Paramgulian", "Paramtushe", "Paramwaizui", "Paramguzui", "Paramguzui2",
+})
 #: 默认帧率（与模型自带动作一致）
 DEFAULT_FPS = 30.0
 #: 默认淡入淡出（本模型 7 个动作文件一律 0.3）
@@ -122,7 +154,8 @@ def validate_motion(data: dict) -> dict:
 
 def build_motion(curves: dict, *, duration: float | None = None,
                  fps: float = DEFAULT_FPS, loop: bool = False,
-                 fade_in: float = DEFAULT_FADE, fade_out: float = DEFAULT_FADE) -> dict:
+                 fade_in: float = DEFAULT_FADE, fade_out: float = DEFAULT_FADE,
+                 allow_overwritten: bool = False) -> dict:
     """把 ``{参数名: [(时间, 值), ...]}`` 编成 motion3.json 结构。
 
     段形状严格按官方规范：先第一个点，再逐个段（线性 = 标识符 0 + 一个点）。
@@ -132,12 +165,23 @@ def build_motion(curves: dict, *, duration: float | None = None,
         duration: 时长；不给则取所有关键帧里的最大时间。
         fps / loop: 写进 Meta。
         fade_in / fade_out: Meta 里的淡入淡出；本模型 7 个动作一律 0.3。
+        allow_overwritten: 连渲染器每帧覆盖的参数也允许（默认否）。
+            默认拒绝，因为这几乎总是“动作写了但看不见”的根因。
 
     Raises:
-        ValueError: 关键帧为空、时间不从 0 开始、或时间不是递增。
+        ValueError: 关键帧为空、时间不从 0 开始、时间不是递增，
+            或写在了 :data:`RENDERER_OVERWRITTEN_PARAMS` 上。
     """
     if not curves:
         raise ValueError("至少要有一条曲线")
+    if not allow_overwritten:
+        bad = sorted(set(curves) & RENDERER_OVERWRITTEN_PARAMS)
+        if bad:
+            raise ValueError(
+                f"{', '.join(bad)} 被渲染器每帧覆盖（视线/口型），写上去动作会播但看不见。"
+                f"改用 {', '.join(sorted(VISIBLE_PARAMS))[:60]}… 里的参数；"
+                "确实要写就传 allow_overwritten=True。"
+            )
     out_curves = []
     max_t = 0.0
     total_points = 0
@@ -199,10 +243,16 @@ def write_motion(motion: dict, path) -> Path:
 
 
 def nod_motion(amplitude: float = 12.0, cycles: float = 2.0) -> dict:
-    """一个最朴素的"点头"：``ParamAngleY`` 来回摆几下再回正。
+    """**反例，保留作教训**：用 ``ParamAngleY``（俯仰）做“点头”。
 
-    振幅取 12（保守）——不同模型俯仰的正负方向不一定一致，
-    但**来回摆动**在两种约定下都看得出是点头。
+    2026-09-19 实测：能被 SDK 正常加载、也确实被播了
+    （日志：``播放动作 idx=2（motions/waving.motion3.json）``），
+    但**完全看不见**——因为渲染器每帧用视线跟随往回写 ``ParamAngleY``。
+
+    要做真正的点头，得先让渲染器在动作播放期间暂停视线写入（另一件事）。
+
+    Raises:
+        ValueError: 默认情况下会被守门人拒绕（参数在黑名单里）。
     """
     frames = [(0.0, 0.0)]
     step = 0.25
@@ -212,6 +262,40 @@ def nod_motion(amplitude: float = 12.0, cycles: float = 2.0) -> dict:
         frames.append(((i + 1) * step, 0.0))
     frames.append((frames[-1][0] + 0.2, 0.0))          # 收尾停住
     return build_motion({"ParamAngleY": frames}, loop=False)
+
+
+def model_params(model3_path) -> set:
+    """模型**真有**哪些参数——读 `model3.json` 指向的 `cdi3.json`（权威来源）。
+
+    不要用“动作文件里出现过哪些参数”当依据：老动作里可能残留模型根本没有的
+    参数（Cubism 会静静忽略），而好参数可能只是暂时没人用。
+    2026-09-19 实测：`ParamBodyAngleZ` 被误判成“不存在”，它其实在 cdi3 里。
+
+    读不到就返回空集合（调用方自行决定是保守拒绝还是跳过）。
+    """
+    try:
+        p = Path(model3_path)
+        data = json.loads(p.read_text(encoding="utf-8"))
+        name = (data.get("FileReferences") or {}).get("DisplayInfo")
+        if not name:
+            return set()
+        cdi = json.loads((p.parent / name).read_text(encoding="utf-8"))
+        return {x.get("Id") for x in (cdi.get("Parameters") or []) if x.get("Id")}
+    except Exception:
+        return set()
+
+
+def tilt_motion(head: float = 8.0, body: float = 4.0, hair: float = 0.3) -> dict:
+    """**看得见**的动作：歪头 + 身体摆一下 + 头发跟随。
+
+    只动没人覆盖的参数。幅度参考模型自带动作：
+    ``happy`` 的 ``ParamAngleZ`` 用 ±3，``waving`` 的 ``ParamBodyAngleZ`` 用 ±5。
+    """
+    return build_motion({
+        "ParamAngleZ":     [(0.0, 0.0), (0.25, head), (0.75, head), (1.1, -head * 0.5), (1.4, 0.0)],
+        "ParamBodyAngleZ": [(0.0, 0.0), (0.3, body), (0.8, body), (1.15, -body * 0.4), (1.4, 0.0)],
+        "ParamHairSide":   [(0.0, 0.0), (0.3, hair), (0.8, hair), (1.15, -hair * 0.3), (1.4, 0.0)],
+    }, loop=False)
 
 
 if __name__ == "__main__":  # pragma: no cover - 手跑用
