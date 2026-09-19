@@ -1027,46 +1027,53 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             logger.warning("口型配置失败（非致命）: %s", e)
 
     def _init_a2a(self, session_manager):
-        """G2/A4：把活派给 Hana 的 agent。
+        """G2/A4：把活派给 Hana 的 agent（**启动路径**）。
+
+        这里只负责把会话管理器存下来，真正的装卸在 :meth:`_apply_a2a_config`。
+        """
+        self._a2a_session_manager = session_manager
+        return self._apply_a2a_config()
+
+    def _apply_a2a_config(self):
+        """按**当前** ``self.config`` 装/卸派活能力。
+
+        启动（`_init_a2a`）和「设置面板保存后热重载」走**同一条路**
+        （``core.a2a_capability.apply_config``）——只有一条路，
+        就不会出现"启动时对、重载时不对"。所以改完设置**不用重启**。
 
         默认**关**（``config.a2a.enabled``），护栏全在 ``core/a2a.py``。
-        这里只做三件事：把会话管理器接到派活通道上、按配置起 Delegator、
-        开启时把两条对话能力挂上去。
-
         结果**不自动念**——(b) 方案：只响一声门铃，他问才讲。
         """
         try:
-            from core.a2a import build_from_config
+            from core.a2a_capability import apply_config
 
-            if session_manager is None:
+            sm = getattr(self, "_a2a_session_manager", None)
+            if sm is None:
                 logger.info("A2A: 无会话管理器，跳过")
-                return
-            bound = session_manager
+                return None
 
             def _create(agent_id):
                 # create_session 的 agent_id 是**关键字参数**
-                return bound.create_session(agent_id=agent_id)
+                return sm.create_session(agent_id=agent_id)
 
             def _send(session, text, timeout):
                 # send_and_wait 的 timeout 也是关键字参数，
                 # 且返回 ReplyResult 而不是 str——两处都跟默认假设不一样
-                r = bound.send_and_wait(session, text, timeout=timeout)
+                r = sm.send_and_wait(session, text, timeout=timeout)
                 return getattr(r, "text", "") or ""
 
-            d = build_from_config(
+            d = apply_config(
                 getattr(self, "config", {}) or {}, _create, _send,
                 on_result=self._on_a2a_result,
             )
             self._a2a = d
-            if not d.enabled:
-                logger.info("A2A 未启用（config.a2a.enabled=false），派活能力不注册")
-                return
-            from core.a2a_capability import register_a2a
-
-            register_a2a(d)
-            logger.info("A2A 就绪：%s", d.stats())
+            logger.info("A2A %s：%s",
+                        "已生效" if (d is not None and d.enabled) else "未启用",
+                        d.stats() if d is not None else "无会话管理器")
+            return d
         except Exception as e:
-            logger.warning("A2A 初始化失败（非致命）: %s", e)
+            logger.warning("A2A 应用配置失败（非致命）: %s", e)
+            return None
 
     def _on_a2a_result(self, result):
         """(b) 方案：**只响门铃，不念结论**。
@@ -2308,6 +2315,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         if dialog.exec():
             self.config = dialog.get_config()
             save_config(self.config)
+            # 热重载派活能力：设置里改了开关/白名单/配额**立刻生效**，不用重启
+            # （启动与这里走同一条路 core.a2a_capability.apply_config）
+            self._apply_a2a_config()
             # 刷新防抖写盘 pending：避免退出时 async_config_saver 用旧 config 引用
             # 把设置面板刚保存的切换结果覆盖回原角色。
             try:

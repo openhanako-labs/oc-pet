@@ -76,6 +76,20 @@ def test_tab_page_has_real_widgets(monkeypatch):
     assert set(d.a2a_agent_checks) >= {"kurisu", "alice", "glados"}
 
 
+def test_tab_hint_no_longer_says_restart(monkeypatch):
+    """提示不能再说"要重启"——已经热重载了，写错会让人白重启。"""
+    from PySide6.QtWidgets import QLabel
+
+    d, _ = _build_dialog(monkeypatch, _full_config())
+    page = d._main_tabs.widget(_tab_index(d))
+    texts = [w.text() for w in page.findChildren(QLabel)]
+    joined = "\n".join(texts)
+    assert "立即生效" in joined
+    # 旧说法（已不成立）不能留着
+    assert "重启桌宠才生效" not in joined
+    assert "要重启" not in joined
+
+
 # ── 读配置 ────────────────────────────────────────────────
 
 

@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from core.a2a import Delegator
+from core.a2a import Delegator, build_from_config
 from core.capability_registry import (
     Capability,
     RouteResult,
@@ -261,3 +261,28 @@ def register_a2a(delegator: Delegator) -> list:
 def unregister_a2a() -> None:
     for name in CAPABILITY_NAMES:
         unregister_capability(name)
+
+
+def apply_config(config, create_session, send, on_result=None):
+    """按配置**装/卸**派活能力：先卸后装。
+
+    启动与「设置面板保存后热重载」走的是**同一条路**——只有一条路，
+    就不会出现"启动时对、重载时不对"这种最难查的毛病，也就不用重启桌宠。
+
+    ``create_session is None``（没注入会话管理器）→ 只卸载，返回 None。
+
+    Returns:
+        :class:`~core.a2a.Delegator`（未启用时也返回实例，便于查 stats）；
+        无会话管理器时返回 None。
+    """
+    # 先摘旧的：配置可能从「开」变「关」，或白名单/配额变了。
+    # 注册本身按名字去重，但显式卸载才能让"关掉开关"真的生效。
+    unregister_a2a()
+    if create_session is None or send is None:
+        return None
+    delegator = build_from_config(config, create_session, send, on_result=on_result)
+    if delegator.enabled:
+        register_a2a(delegator)
+    else:
+        logger.info("A2A 未启用（config.a2a.enabled=false），派活能力已卸载")
+    return delegator
