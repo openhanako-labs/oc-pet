@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+import types
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -203,3 +204,41 @@ def test_memory_recall_ranks_hits():
 
 def test_memory_recall_rejects_empty_query():
     assert _Dummy()._memory_recall("")["ok"] is False
+
+
+# ── 状态快照的「拉取」段（/pet/state 与 MCP pet_state 共用）────────────
+
+
+class _FakeScreen:
+    def __init__(self, desc: str = "", scene: dict | None = None):
+        self.last_description = desc
+        self._scene = scene
+
+    def get_scene_snapshot(self):
+        return self._scene
+
+
+class _StatusDummy(InterfaceMixin):
+    def __init__(self, screen=None):
+        self._agent_id = "t"
+        self._perception = types.SimpleNamespace(_screen=screen, _scenario="") \
+            if screen is not None else None
+        self._current_emotion = "neutral"
+        self._current_anim = "idle"
+
+    def _renderer_format(self):
+        return "sprite"
+
+
+def test_status_snapshot_exposes_screen_observation():
+    """拉取路径：快照里必须能直接拿到缓存的屏幕观察（不触发新截图）。"""
+    d = _StatusDummy(_FakeScreen("在写 Python 代码", {"category": "work"}))
+    snap = d._status_snapshot()
+    assert snap["screen"]["last_description"] == "在写 Python 代码"
+    assert snap["screen"]["scene"] == {"category": "work"}
+
+
+def test_status_snapshot_screen_section_is_empty_dict_without_data():
+    """无缓存观察 → 空 dict（不是 None），调用方不必判空。"""
+    assert _StatusDummy(_FakeScreen(""))._status_snapshot()["screen"] == {}
+    assert _StatusDummy(None)._status_snapshot()["screen"] == {}

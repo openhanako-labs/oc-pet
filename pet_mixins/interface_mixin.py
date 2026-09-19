@@ -289,7 +289,15 @@ class InterfaceMixin:
         }
 
     def _status_snapshot(self) -> dict:
-        """状态快照（F GET /pet/state 只读输出）。"""
+        """状态快照（F GET /pet/state 只读输出；MCP ``pet_state`` 工具复用同一份）。
+
+        ``screen`` 段是**拉取路径**的关键：它给外部（agent / HTTP 客户端）一个
+        「廉价读一下刚才看到了什么」的口子——直接读缓存（``last_description`` /
+        ``get_scene_snapshot``），**不触发新截图、不打视觉 API**。
+
+        线程约束：本方法会被 HTTP/MCP 线程调用，因此只读缓存、绝不碰 Qt 对象
+        （screen 侧的读访问均有锁保护）。
+        """
         state = "idle"
         try:
             mapper = getattr(self, "_status_mapper", None)
@@ -313,8 +321,37 @@ class InterfaceMixin:
             "agent_id": self._agent_id,
             "renderer_format": self._renderer_format(),
             "celebrating_active": celebrating_active,
+            "screen": self._screen_snapshot(),
             "ts": time.time(),
         }
+
+    def _screen_snapshot(self) -> dict:
+        """当前屏幕观察的只读快照（缓存读取，零成本）。
+
+        供两种拉取口：``GET /pet/state`` 与 MCP ``pet_state``。
+        无缓存观时返回空 dict（而不是 None）——调用方不用判空。
+        """
+        out: dict = {}
+        try:
+            scr = getattr(getattr(self, "_perception", None), "_screen", None)
+            if scr is None:
+                return out
+            try:
+                desc = scr.last_description or ""
+            except Exception:
+                desc = ""
+            if desc:
+                out["last_description"] = desc
+            try:
+                getter = getattr(scr, "get_scene_snapshot", None)
+                scene = getter() if callable(getter) else None
+                if scene:
+                    out["scene"] = scene
+            except Exception:
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
+        except Exception:
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
+        return out
 
     def _do_pet_set_mode(self, mode: str):
         """主线程槽：登记状态 + 经状态语义层下发（只走统一接口）。"""
