@@ -425,6 +425,14 @@ class ScreenPerception:
             return
 
         def _worker():
+            # O1-P2：语义增强同样过全局闸门（冷却中 / 超预算就跳过这一次增强，
+            # 保留规则结果，不丢场景）
+            from core.llm_gate import get_gate
+
+            gate = get_gate()
+            if not gate.acquire("enrich"):
+                logger.debug("屏幕语义增强被全局闸门跳过（本轮保留规则结果）")
+                return
             try:
                 extra = {
                     "app": app or "",
@@ -437,6 +445,8 @@ class ScreenPerception:
             except Exception as exc:
                 logger.debug("Screen enrich worker failed: %s", exc)
                 return
+            finally:
+                gate.release()
             if merged is None or merged.source == "rule":
                 return  # 增强失败 → 保留规则结果，不发事件
             with self._lock:
@@ -745,6 +755,19 @@ class ScreenPerception:
         # P5: 窗口名拼接进视觉提示（视觉模型优先结合窗口名判断，避免多开/相似界面认错）
         vision_text = build_vision_prompt(app, title)
 
+        # O1-P2 全局闸门：冷却中 / 超预算 / 并发已满 → 本轮直接跳过。
+        # 屏幕感知是后台循环，晚一轮没有代价；三条线程一起撞上去才是 429 的成因。
+        from core.llm_gate import get_gate
+
+        gate = get_gate()
+        if not gate.acquire("vision"):
+            _ok, _why = gate.check("vision")
+            self._gate_skips = getattr(self, "_gate_skips", 0) + 1
+            if self._gate_skips <= 3 or self._gate_skips % 20 == 0:
+                logger.info("屏幕感知被全局闸门跳过（%s，累计 %d 次）——等下个周期",
+                            _why or "busy", self._gate_skips)
+            return None
+
         try:
             resp = requests.post(
                 api_url,
@@ -761,6 +784,7 @@ class ScreenPerception:
                 timeout=30,
             )
             if resp.status_code == 200:
+                gate.notify_ok()
                 raw = resp.json()["choices"][0]["message"].get("content", "").strip()
                 if raw:
                     # 尝试解析 JSON（新版提示词返回结构化数据）
@@ -866,6 +890,9 @@ class ScreenPerception:
                 if resp.status_code == 429:
                     # 限流信号：不要等累计 3 次失败才退避，立即拉长轮询间隔，
                     # 避免 429 期间每个周期仍打 API 反复撞墙（深度分析04 方案 C）。
+                    # O1-P2：同时通知全局闸门——让**所有**后台源一起收手，
+                    # 而不是只有屏幕这一条在退避、另两条继续撞。
+                    gate.notify_429("vision")
                     self._consecutive_failures += 1
                     self._interval = self._next_interval() + self.BASE_BACKOFF_SECONDS
                     logger.warning(
@@ -881,6 +908,9 @@ class ScreenPerception:
         except Exception as e:
             logger.warning("Vision analysis failed: %s", e)
             self._consecutive_failures += 1
+        finally:
+            # 并发槽只盖住这次视觉调用（成功/失败/异常都归还）
+            gate.release()
 
         # 失败退避：指数退避（连续失败时拉长间隔）
         if self._consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:

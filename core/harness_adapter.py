@@ -394,12 +394,26 @@ class HanakoPetAdapter:
                 for _attempt in range(_max_retries):
                     try:
                         resp = self._call_api(messages, tools=tools)
+                        # O1-P2：成功 → 复位全局闸门的 429 计数（提供方是好的）
+                        try:
+                            from core.llm_gate import get_gate
+                            get_gate().notify_ok()
+                        except Exception:  # noqa: BLE001 — 闸门异常不影响主流程
+                            pass
                         break  # 成功，跳出重试
                     except requests.exceptions.HTTPError as _http_e:
                         # 429 限流是「稍后重试」的临时信号，纳入指数退避（避免
                         # 立即失败后下个 tick 再次撞墙）；其它 HTTP 错误（400/401
                         # 等配置类）不重试，直接抛给外层 except 分支。
                         _status = getattr(getattr(_http_e, "response", None), "status_code", None)
+                        if _status == 429:
+                            # O1-P2：把 429 告诉全局闸门——让所有后台源一起收手，
+                            # 而不是这里重试、屏幕那边继续撞。
+                            try:
+                                from core.llm_gate import get_gate
+                                get_gate().notify_429(source or "direct")
+                            except Exception:  # noqa: BLE001
+                                pass
                         if _status == 429 and _attempt < _max_retries - 1:
                             logger.warning(
                                 "LLM 429 限流 (attempt %d/%d, source=%s)，%.1fs 后重试",
@@ -490,6 +504,11 @@ class HanakoPetAdapter:
                 return _err("(API 凭证失效了，检查下 .env 的 LLM_API_KEY)")
             if status == 429:
                 logger.warning("LLM 429 Too Many Requests: %s", e)
+                try:
+                    from core.llm_gate import get_gate
+                    get_gate().notify_429(source or "direct")
+                except Exception:  # noqa: BLE001
+                    pass
                 return _err("(模型有点忙，稍后再试)")
             logger.warning("LLM HTTP error: %s", e)
             return _err("(出了点岔子)")

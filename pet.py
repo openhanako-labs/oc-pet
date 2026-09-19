@@ -992,6 +992,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 self._foreground_watcher.on_change = self._on_foreground_change_with_memory
             # P0-1 陪玩：游戏窗口识别（只识别 + 发事件，不做用户可见动作）
             self._init_game_watch()
+            # O1-P2：初始化后台 LLM 全局闸门（并发上限 + 每源预算 + 429 全局冷却）
+            self._init_llm_gate()
             # 跨天首启问候（延迟到窗口稳定后弹气泡）
             from core.companion_hooks import build_morning_greeting
             greet = build_morning_greeting(self._companion_memory)
@@ -1003,6 +1005,20 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         except Exception as e:
             logger.warning("P2 陪伴记忆初始化失败（非致命）: %s", e)
             self._companion_memory = None
+
+    def _init_llm_gate(self):
+        """O1-P2：按 ``config.llm_gate`` 配置全局闸门（启动时一次）。
+
+        它管的是后台那几条**互相不知情**的 LLM 调用（屏幕视觉 / 语义增强 /
+        主动对话）：并发上限、每源小时预算、以及撞到 429 后全体一起收手。
+        """
+        try:
+            from core.llm_gate import configure_gate
+
+            g = configure_gate(getattr(self, "config", {}) or {})
+            logger.info("O1-P2 全局闸门就绪：%s", g.stats())
+        except Exception as e:
+            logger.warning("O1-P2 全局闸门配置失败（非致命）: %s", e)
 
     def _init_game_watch(self):
         """P0-1（陪玩）：按 ``config.game`` 建游戏会话状态机。
