@@ -262,6 +262,13 @@
   "lip_sync": {
     "mouth_peak": 1.0
   },
+  "a2a": {
+    "enabled": false,
+    "allowed_agents": [],
+    "max_per_hour": 6,
+    "max_per_day": 30,
+    "timeout_seconds": 180
+  },
   "llm_gate": {
     "enabled": true,
     "max_concurrent": 1,
