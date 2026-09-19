@@ -42,6 +42,7 @@ from ui.theme.palette import rgb, rgba
 from ui.theme import get_default, rgb, rgba
 
 from motion.action_linker import ActionLinker
+from core.game.session import GameSessionWatcher, emit_session_events
 from motion.foreground_watcher import ForegroundWatcher
 from ui.tts_player import TTSTtsPlayer
 from ui.streaming_pcm_player import StreamingPcmPlayer
@@ -989,6 +990,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             # 前台分类活动 → 记忆（常做的事）
             if hasattr(self, '_foreground_watcher'):
                 self._foreground_watcher.on_change = self._on_foreground_change_with_memory
+            # P0-1 陪玩：游戏窗口识别（只识别 + 发事件，不做用户可见动作）
+            self._init_game_watch()
             # 跨天首启问候（延迟到窗口稳定后弹气泡）
             from core.companion_hooks import build_morning_greeting
             greet = build_morning_greeting(self._companion_memory)
@@ -1000,6 +1003,32 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         except Exception as e:
             logger.warning("P2 陪伴记忆初始化失败（非致命）: %s", e)
             self._companion_memory = None
+
+    def _init_game_watch(self):
+        """P0-1（陪玩）：按 ``config.game`` 建游戏会话状态机。
+
+        默认**开**，但这一步**不做任何用户可见动作**（不弹气泡、不说话）——
+        只把“现在在玩哪个游戏、玩了多久”变成可观测的事实 + 一条 EventBus 事件
+        （``game_session``）。说话是 P0-3/P0-4 的事，所以这一步可以放心常开。
+
+        白名单来自内置表（零配置可用）+ ``config.game.games`` 覆盖，
+        ``config.game.disabled`` 可剔除条目，全部关闭用 ``enabled=false``。
+        """
+        self._game_watch = None
+        try:
+            cfg = (self.config.get("game", {}) if hasattr(self, "config") else {}) or {}
+            if not cfg.get("enabled", True):
+                logger.info("陪玩 P0-1：游戏识别未启用（config game.enabled=false）")
+                return
+            from core.game.registry import load_games
+
+            games = load_games(cfg)
+            self._game_watch = GameSessionWatcher(games=games)
+            logger.info("陪玩 P0-1：游戏识别就绪，白名单 %d 款（%s）",
+                        len(games), "、".join(g.name for g in games[:5]))
+        except Exception as e:
+            logger.warning("陪玩 P0-1 初始化失败（非致命）: %s", e)
+            self._game_watch = None
 
     def _on_foreground_change_with_memory(self, app_name: str, app_category: str, title: str):
         """前台变化：记录活动到陪伴记忆 + A 事件流 + 原有回调。"""
@@ -1017,6 +1046,14 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         try:
             self._on_foreground_change(app_name, app_category, title)
+        except Exception:
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
+        # P0-1 陪玩：游戏会话识别——只发 EventBus 事件（game_session），
+        # 不弹气泡不说话；说什么是 P0-3/P0-4 的事。
+        try:
+            gw = getattr(self, "_game_watch", None)
+            if gw is not None:
+                emit_session_events(gw.on_foreground(app_name, title, app_category))
         except Exception:
             logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 

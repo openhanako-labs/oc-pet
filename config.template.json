@@ -251,6 +251,11 @@
     "port": 8979,
     "allow_actions": true
   },
+  "game": {
+    "enabled": true,
+    "disabled": [],
+    "games": []
+  },
   "plugin_tools": {
     "enabled": true
   }

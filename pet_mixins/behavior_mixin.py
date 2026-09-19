@@ -20,6 +20,7 @@ from PySide6.QtCore import QTimer
 
 from config import EXPRESSION_MAP, get_transition_style
 from core.event_bus import EventBus
+from core.game.session import emit_session_events
 from core.perception.scenarios import get_bubble_emotion_for_prompt
 
 logger = logging.getLogger(__name__)
@@ -235,6 +236,13 @@ class BehaviorMixin:
             self._foreground_watcher.tick()
         except Exception as e:
             logger.error("_foreground_tick error: %s", e)
+        # P0-1 陪玩：游戏不在前台时，顺便看它是不是已经关了（退出判定）
+        gw = getattr(self, "_game_watch", None)
+        if gw is not None:
+            try:
+                emit_session_events(gw.poll())
+            except Exception:
+                logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         # 活动感知：打字/划水/空闲（零成本，喂给 ProactiveScheduler）
         tracker = getattr(self, "_activity_tracker", None)
         if tracker is not None:

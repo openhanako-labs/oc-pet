@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import ctypes
+import fnmatch
 import logging
 import time
 from ctypes import wintypes
@@ -144,6 +145,102 @@ def classify_app(process_name: str) -> str:
     if any(k in low for k in GAME_KEYWORDS):
         return "gaming"
     return "other"
+
+
+# ── 顶层窗口枚举（给「游戏还在跑吗」用）────────────────────
+
+_EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+
+def list_visible_windows() -> list[dict] | None:
+    """枚举所有**可见的**顶层窗口。
+
+    Returns:
+        ``[{"process": 进程名, "title": 标题}]``；
+        **整体枚举失败时返回 None**（与「没找到」区分开——调用方需要
+        知道“是没这个进程”还是“探测本身失败了”）。
+
+    用于判断“游戏切到后台后进程是否还在”。纯 ctypes，零依赖。
+    提不到进程名（权限不足 / 已退出）的窗口其 ``process`` 为空串。
+    """
+    out: list[dict] = []
+
+    def _cb(hwnd, _lparam):
+        try:
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            out.append({"process": _process_name_of_pid(pid.value), "title": buf.value or ""})
+        except Exception:  # noqa: BLE001 — 单个窗口出错不影响整体枚举
+            pass
+        return True
+
+    try:
+        ok = user32.EnumWindows(_EnumWindowsProc(_cb), 0)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("EnumWindows 失败: %s", e)
+        return None
+    if not ok and not out:
+        return None
+    return out
+
+
+def _process_name_of_pid(pid: int) -> str:
+    """PID → 进程名（提不到返回空串）。"""
+    if not pid:
+        return ""
+    handle = kernel32.OpenProcess(0x0400 | 0x0010, False, pid)
+    if not handle:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(260)
+        size = wintypes.DWORD(260)
+        if psapi.GetModuleBaseNameW(handle, None, buf, size):
+            return buf.value or ""
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        kernel32.CloseHandle(handle)
+    return ""
+
+
+def find_process_windows(patterns) -> list[dict] | None:
+    """找出进程名命中任一 pattern 的可见窗口。
+
+    Args:
+        patterns: 进程名模式序列（支持 ``*`` 通配与子串，大小写不敏感）。
+
+    Returns:
+        命中窗口列表；**整体枚举失败返回 None**（调用方按“未知”处理，
+        不要当成“进程不存在”）。
+
+    注意：提不到进程名的窗口不参与匹配（权限不足时会漏判，
+    所以调用方在拿到空列表时仍应区分“枚举成功但没命中”）。
+    """
+    wins = list_visible_windows()
+    if wins is None:
+        return None
+    pats = [str(p).strip().lower() for p in (patterns or []) if str(p).strip()]
+    if not pats:
+        return []
+    hits: list[dict] = []
+    for w in wins:
+        name = str(w.get("process") or "").strip().lower()
+        if not name:
+            continue
+        for p in pats:
+            if ("*" in p or "?" in p):
+                if fnmatch.fnmatch(name, p):
+                    hits.append(w)
+                    break
+            elif p in name:
+                hits.append(w)
+                break
+    return hits
 
 
 # ── 情绪映射 ─────────────────────────────────────────────
