@@ -249,7 +249,10 @@
   "mcp_server": {
     "enabled": false,
     "port": 8979,
-    "allow_actions": true
+    "allow_actions": true,
+    "dns_rebinding_protection": true,
+    "allowed_hosts": [],
+    "allowed_origins": []
   },
   "game": {
     "enabled": true,

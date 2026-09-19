@@ -63,6 +63,48 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 8979
 
+
+# ── 传输安全（Origin / DNS-rebinding 保护）────────────────
+#
+# 2026-09-19 核实：**MCP SDK 默认就开着**这层保护，且只允本机来源：
+#   TransportSecuritySettings(enable_dns_rebinding_protection=True,
+#       allowed_hosts=['127.0.0.1:*', 'localhost:*', '[::1]:*'],
+#       allowed_origins=['http://127.0.0.1:*', 'http://localhost:*', 'http://[::1]:*'])
+# 所以报告里那条「MCP 提供端缺 Origin 校验」**不成立**。
+#
+# 那为什么还显式传一遍？因为**安全默认值不该是隐式的**：哪天 SDK 改了默认，
+# oc-pet 会静默丢掉这层保护。这里把它钉死，并用测试守住。
+DEFAULT_ALLOWED_HOSTS: tuple[str, ...] = ("127.0.0.1:*", "localhost:*", "[::1]:*")
+DEFAULT_ALLOWED_ORIGINS: tuple[str, ...] = (
+    "http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*",
+)
+
+
+def build_transport_security(cfg: Optional[dict] = None):
+    """按 config 构建 ``TransportSecuritySettings``；无 SDK 时返回 None。
+
+    配置（写在 ``mcp_server`` 块里）::
+
+        "dns_rebinding_protection": true,   # 默认 true
+        "allowed_hosts": [],                # 留空 = 用内置本机白名单
+        "allowed_origins": []
+
+    ⚠️ **空列表一律回退内置白名单**，既不当“允许全部”、也不当“拒绝全部”：
+    向开启了保护的 SDK 传空列表会让谁都进不来——那是坏配置，不是安全。
+    """
+    try:
+        from mcp.server.transport_security import TransportSecuritySettings
+    except Exception:  # noqa: BLE001 — 无 SDK 时优雅降级（与 MCP_AVAILABLE 同路）
+        return None
+    c = cfg or {}
+    hosts = [str(h) for h in (c.get("allowed_hosts") or []) if str(h).strip()]
+    origins = [str(o) for o in (c.get("allowed_origins") or []) if str(o).strip()]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=bool(c.get("dns_rebinding_protection", True)),
+        allowed_hosts=hosts or list(DEFAULT_ALLOWED_HOSTS),
+        allowed_origins=origins or list(DEFAULT_ALLOWED_ORIGINS),
+    )
+
 try:
     from mcp.server.fastmcp import FastMCP
     MCP_AVAILABLE = True
@@ -105,6 +147,7 @@ class PetMCPServer:
             （只登记/发信号，不做实际动作）。
         port: 监听端口（默认 8979）。
         allow_actions: 是否允许写操作（False = 只读模式）。
+        transport_security: 传输安全配置（见 :func:`build_transport_security`）。
     """
 
     def __init__(
@@ -115,6 +158,7 @@ class PetMCPServer:
         catalog_provider: Optional[Callable[[str], dict]] = None,
         port: int = DEFAULT_PORT,
         allow_actions: bool = True,
+        transport_security: Optional[dict] = None,
     ):
         self._state_provider = state_provider
         self._capabilities_provider = capabilities_provider
@@ -122,6 +166,7 @@ class PetMCPServer:
         self._catalog_provider = catalog_provider
         self._port = int(port or DEFAULT_PORT)
         self._allow_actions = bool(allow_actions)
+        self._transport_security_cfg: dict = dict(transport_security or {})
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._app = None
@@ -195,6 +240,10 @@ class PetMCPServer:
 
     def _build_app(self):
         """构建 FastMCP 实例并注册工具。"""
+        security = build_transport_security(self._transport_security_cfg)
+        # ⚠️ 不能写 transport_security=None：那是“显式传空”，会**关掉** SDK 的默认保护。
+        # 拿不到设置对象时干脆不传这个参数，让 SDK 用它的默认值。
+        extra = {"transport_security": security} if security is not None else {}
         app = FastMCP(
             "oc-pet",
             instructions=(
@@ -203,7 +252,13 @@ class PetMCPServer:
                 "注意：桌宠是被看着的角色，请勿高频刷写动作；"
                 "表现类动作为异步生效，不阻塞。"
             ),
+            **extra,
         )
+        if security is not None:
+            logger.info(
+                "MCP 传输安全：DNS-rebinding 保护=%s ｜ 允许来源=%s",
+                security.enable_dns_rebinding_protection, security.allowed_origins,
+            )
 
         @app.tool()
         def pet_state() -> dict:
@@ -384,8 +439,11 @@ def build_from_config(
         enabled (bool)        默认 False
         port (int)            默认 8979
         allow_actions (bool)  默认 True
+        dns_rebinding_protection (bool)  默认 True（保持 SDK 默认，不放松）
+        allowed_hosts / allowed_origins  留空 = 内置本机白名单
 
     注：不含鉴权（无 token 校验），见模块顶部说明。
+    “Origin 校验”不缺——SDK 默认就开，这里只是把它显式钉住。
     """
     cfg = (config or {}).get("mcp_server") or {}
     if not cfg.get("enabled", False):
@@ -402,4 +460,9 @@ def build_from_config(
         catalog_provider=catalog_provider,
         port=port,
         allow_actions=bool(cfg.get("allow_actions", True)),
+        transport_security={
+            k: cfg[k]
+            for k in ("dns_rebinding_protection", "allowed_hosts", "allowed_origins")
+            if k in cfg
+        },
     )
