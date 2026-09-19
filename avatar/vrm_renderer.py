@@ -628,11 +628,18 @@ class VRMRenderer(AvatarRenderer):
         return (192, 208)
 
     def recalc_geometry(self, window_w: int, window_h: int) -> None:
-        """按窗口尺寸重算视图几何（等比缩放 + 贴底）。"""
-        w = max(48, int(192 * self._scale))
-        h = max(48, int(208 * self._scale))
+        """按窗口尺寸重算视图几何。
+
+        约定对齐 Live2DRenderer：``window_w/window_h`` 已经是**缩放后的最终尺寸**
+        （pet.py 算好再传进来），所以直接用，不再乘 ``_scale``（否则双重缩放）。
+        旧实现把两个参数丢掉、固定回 192×208，导致窗口变大后角色在下半段被硬切。
+        取景本身在页面里做（按头胯距算），所以视图多大都能自适应。
+        """
+        w = max(48, int(window_w or 0) or 192)
+        h = max(48, int(window_h or 0) or 208)
         if self._view is not None:
             self._view.setFixedSize(w, h)
+            self._view.move(0, 0)
         self.char_label.setFixedSize(w, h)
 
     def set_facing(self, right: bool) -> None:
