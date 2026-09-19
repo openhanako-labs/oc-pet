@@ -544,6 +544,35 @@ class VRMRenderer(AvatarRenderer):
         """VRM 的平滑由 JS 侧每帧插值完成，这里只记录（接口对齐）。"""
         self._smoothing_s = max(0.0, float(seconds or 0.0))
 
+    def submit_motion_request(self, req) -> bool:
+        """把 MotionMixer 的请求映射成 VRM 表情/参数动作。
+
+        VRM 侧没有骨骼动画剪辑（motion 文件），所以不能真「播动作」；但至少要让
+        同一套 MotionRequest 在 VRM 上也有反应，否则所有经 mixar 下发的表演在
+        VRM 角色上都是静默无效的（与 Live2D 行为不一致）。
+
+        映射：``motion_group`` 当 gesture（命中情绪名→预设表情）；``params`` 里的
+        Live2D 参数名按 ``_PARAM_TO_EXPRESSION`` 转成 VRM 表情。
+
+        Returns: True 表示至少执行了一个命令。
+        """
+        if req is None:
+            return False
+        intent = {
+            "gesture": getattr(req, "motion_group", "") or "",
+            "params": getattr(req, "params", None) or None,
+            "intensity": getattr(req, "intensity", 1.0) or 1.0,
+        }
+        cmds = intent_to_commands(intent)
+        if not cmds:
+            return False
+        for cmd in cmds:
+            fn = cmd.get("fn")
+            if isinstance(fn, str):
+                self._js_args(fn, *cmd.get("args", []))
+        logger.debug("VRMRenderer.submit_motion_request → %s", cmds)
+        return True
+
     # ── 视线 ──
 
     def look_at(self, x: int, y: int) -> None:

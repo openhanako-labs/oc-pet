@@ -109,8 +109,77 @@ def main() -> int:
     out.write_bytes(base64.b64decode(data_url.split(",", 1)[1]))
     print(f"[OK] 截图已保存: {out}  ({out.stat().st_size} B)")
     print("[info] metrics=", json.dumps(_metrics(renderer), ensure_ascii=False))
+
+    failures = _api_sweep(renderer)
     renderer.cleanup()
+    if failures:
+        print(f"[FAIL] 接口扫出 {len(failures)} 处异常：")
+        for name, detail in failures:
+            print(f"    - {name}: {detail}")
+        return 1
+    print("[OK] 接口面扫无异常（pet.py 会调的每个方法都试过）")
     return 0
+
+
+def _api_sweep(renderer) -> list[tuple[str, str]]:
+    """把 pet.py 真正会调用的接口都走一遗，抓接口不匹配（缺失/签名不对/抛异常）。"""
+    from PySide6.QtCore import QPoint
+
+    from avatar.motion_mixer import Layer, MotionRequest
+
+    calls: list[tuple[str, tuple]] = [
+        ("load 后属性", ()),
+        ("set_position", (10, 20)),
+        ("get_size", ()),
+        ("set_scale", (1.2,)),
+        ("get_scale", ()),
+        ("recalc_geometry", (300, 320)),
+        ("set_facing", (False,)),
+        ("get_facing", ()),
+        ("set_alpha", (0.6,)),
+        ("get_alpha", ()),
+        ("look_at", (100, 60)),
+        ("update_gaze", ()),
+        ("set_gaze_enabled", (False,)),
+        ("reset_gaze", ()),
+        ("play_anim", ("idle", "happy")),
+        ("set_emotion", ("sad", 0.5)),
+        ("set_master_emotion", ("relaxed",)),
+        ("set_procedural_smoothing", (0.3,)),
+        ("apply_action_intent", ({"gesture": "happy", "intensity": 0.4,
+                                   "params": {"ParamMouthOpenY": 0.3}},)),
+        ("submit_motion_request", (MotionRequest(layer=Layer.DIALOG, motion_group="happy",
+                                                  duration=1.0),)),
+        ("force_idle", ()),
+        ("play_emote_sequence", ("wave",)),
+        ("get_motion_layer", ()),
+        ("is_motion_idle", ()),
+        ("get_char_top_y", ()),
+        ("set_label_base_pos", (QPoint(0, 0),)),
+        ("show_eyes", ()),
+        ("hide_eyes", ()),
+    ]
+    # 属性（pet.py 按属性访问，不能当方法调）
+    props = ["label", "eye_overlay", "character_id", "current_anim",
+             "current_emotion", "unsupported", "is_ready", "model_path",
+             "page_error", "view"]
+    failures: list[tuple[str, str]] = []
+    for name, a in calls:
+        try:
+            if name == "load 后属性":
+                assert renderer.is_ready is True, "load 成功但 is_ready=False"
+                assert renderer.unsupported is False, "不应处于 unsupported"
+                assert renderer.model_path, "model_path 为空"
+                continue
+            getattr(renderer, name)(*a)
+        except Exception as e:  # noqa: BLE001
+            failures.append((name, f"{type(e).__name__}: {e}"))
+    for p in props:
+        try:
+            getattr(renderer, p)
+        except Exception as e:  # noqa: BLE001
+            failures.append((f"属性 {p}", f"{type(e).__name__}: {e}"))
+    return failures
 
 
 def _spin(app, seconds: float) -> None:
