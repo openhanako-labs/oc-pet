@@ -60,6 +60,7 @@ class DelegateResult:
     reply: str = ""
     error: str = ""
     elapsed: float = 0.0
+    acked: bool = False        # 是否已被"开口问"取走（门铃方案的另一半）
 
     def to_dict(self) -> dict:
         return {
@@ -70,6 +71,7 @@ class DelegateResult:
             "reply": self.reply,
             "error": self.error,
             "elapsed": round(self.elapsed, 2),
+            "acked": self.acked,
         }
 
 
@@ -167,6 +169,52 @@ class Delegator:
 
     # ── 派活 ──────────────────────────────────────────────
 
+    def delegate_async(self, task: str, agent_id: str) -> bool:
+        """起后台线程派活，**立刻**返回（``send_and_wait`` 一等等三分钟，
+        绝不能堵在对话主路径上）。
+
+        Returns:
+            True = 已受理（线程起了）；False = 策略拒绝（未启用/白名单/配额/任务不合法）。
+
+        注意：**True 不代表派活成功**——结果只由 ``on_result`` 与 ``results``
+        队列给出（失败也会响铃，不给"悄悄失败了"留缝）。
+        """
+        if not self._accepts(task, agent_id):
+            return False
+        t = threading.Thread(
+            target=self.delegate, args=(task.strip(), agent_id),
+            name=f"oc-pet-a2a-{agent_id}", daemon=True,
+        )
+        t.start()
+        return True
+
+    def _accepts(self, task: str, agent_id: str) -> bool:
+        """受理前的快速判（真正的执行在 ``delegate`` 里再判一次）。"""
+        ok, _ = self.check(agent_id)
+        if not ok:
+            return False
+        text = (task or "").strip()
+        return bool(text) and len(text) <= MAX_TASK_CHARS
+
+    # ── 门铃方案的另一半：等你开口问 ────────────────────────
+
+    def take_unread(self) -> list[DelegateResult]:
+        """取走**未读**结果并标记已读。
+
+        这就是"门铃 + 等你问"里"等你问"那一半：派活完成只响一声铃，
+        结论一直躺在这儿，直到他开口。
+        """
+        with self._lock:
+            out = [r for r in self.results if not r.acked]
+            for r in out:
+                r.acked = True
+        return out
+
+    @property
+    def unread_count(self) -> int:
+        with self._lock:
+            return sum(1 for r in self.results if not r.acked)
+
     def delegate(self, task: str, agent_id: str) -> DelegateResult:
         """同步派活（调用方负责放到线程里，别堵住主线程）。
 
@@ -227,8 +275,10 @@ class Delegator:
             # 结果队列有界，避免长跑堆积
             if len(self.results) > 50:
                 del self.results[:-50]
-        if self._on_result is not None and result.ok:
+        if self._on_result is not None:
             try:
+                # **失败也响铃**：3 分钟过去什么都没交出去，如果既不响也不存，
+                # 就等于替他吞掉了失败。ok 标志区分铃的内容，由上层决定怎么说。
                 self._on_result(result)
             except Exception:  # noqa: BLE001
                 logger.debug("A2A on_result 回调失败（忽略）", exc_info=True)

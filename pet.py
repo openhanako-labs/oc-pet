@@ -1026,6 +1026,69 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         except Exception as e:
             logger.warning("口型配置失败（非致命）: %s", e)
 
+    def _init_a2a(self, session_manager):
+        """G2/A4：把活派给 Hana 的 agent。
+
+        默认**关**（``config.a2a.enabled``），护栏全在 ``core/a2a.py``。
+        这里只做三件事：把会话管理器接到派活通道上、按配置起 Delegator、
+        开启时把两条对话能力挂上去。
+
+        结果**不自动念**——(b) 方案：只响一声门铃，他问才讲。
+        """
+        try:
+            from core.a2a import build_from_config
+
+            if session_manager is None:
+                logger.info("A2A: 无会话管理器，跳过")
+                return
+            bound = session_manager
+
+            def _create(agent_id):
+                # create_session 的 agent_id 是**关键字参数**
+                return bound.create_session(agent_id=agent_id)
+
+            def _send(session, text, timeout):
+                # send_and_wait 的 timeout 也是关键字参数，
+                # 且返回 ReplyResult 而不是 str——两处都跟默认假设不一样
+                r = bound.send_and_wait(session, text, timeout=timeout)
+                return getattr(r, "text", "") or ""
+
+            d = build_from_config(
+                getattr(self, "config", {}) or {}, _create, _send,
+                on_result=self._on_a2a_result,
+            )
+            self._a2a = d
+            if not d.enabled:
+                logger.info("A2A 未启用（config.a2a.enabled=false），派活能力不注册")
+                return
+            from core.a2a_capability import register_a2a
+
+            register_a2a(d)
+            logger.info("A2A 就绪：%s", d.stats())
+        except Exception as e:
+            logger.warning("A2A 初始化失败（非致命）: %s", e)
+
+    def _on_a2a_result(self, result):
+        """(b) 方案：**只响门铃，不念结论**。
+
+        讲不讲、什么时候讲由他决定；结论在 ``Delegator.results`` 里等他问。
+        **失败也响**（内容不同）——三分钟过去什么都没交出去，
+        如果既不响也不存，就等于替他吞掉了失败。
+
+        本方法在派活的**后台线程**里被调，所以只走线程安全的气泡入口。
+        """
+        try:
+            from core.a2a_capability import label_of
+
+            label = label_of(getattr(result, "agent_id", ""))
+            if getattr(result, "ok", False):
+                text, emotion = f"{label} 那边有结果了，想听就说一声～", "happy"
+            else:
+                text, emotion = f"{label} 那边没办成…要我细说吗？", "sad"
+            self._show_bubble(text, emotion=emotion, source="a2a", duration_ms=8000)
+        except Exception as e:
+            logger.debug("A2A 门铃失败（忽略）: %s", e)
+
     def _init_llm_gate(self):
         """O1-P2：按 ``config.llm_gate`` 配置全局闸门（启动时一次）。
 
@@ -1162,6 +1225,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 # 不转播其他 agent 的活动（一个桌宠对应一个助手）
                 if hasattr(self._hanako_monitor, 'set_agent_context'):
                     self._hanako_monitor.set_agent_context(self._agent_id, session_manager)
+            # G2/A4：会话管理器到手，顺势把派活通道接上（默认关）
+            self._init_a2a(session_manager)
             logger.info("Hanako WS injected into PetWindow")
         except Exception as e:
             logger.warning("set_hanako_ws failed: %s", e)

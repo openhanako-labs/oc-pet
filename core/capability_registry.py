@@ -55,17 +55,26 @@ logger = logging.getLogger(__name__)
 _CJK_RE = re.compile(r'[\u4e00-\u9fff]')
 
 
-def _is_valid_capability_match(text: str, pattern: str) -> bool:
+def _is_valid_capability_match(text: str, pattern: str, allow_embedded: bool = False) -> bool:
     """判断 pattern 是否作为"独立关键词"命中 text（而非嵌在大词里被夹住）。
 
     纯子串 `pattern in text` 对中文会产生碰撞：'下一个' 会命中 '接管一下一个对话'
     （下-一-个 恰好连续）。规则：仅当关键词前后都被中文字符夹住时，视为误匹配
     （嵌在更大词内），放过给 LLM；其余情况（开头/结尾/被标点/空格/英文/数字包围）
     视为有效命中。
+
+    ``allow_embedded=True`` 时**只跳过"被中文夹住"那道保护**，
+    "关键词到底在不在文本里"这段始终执行。
+
+    （2026-09-19 踩坑：最初写成 `allow_embedded or _is_valid_capability_match(...)`，
+    短路把 ``text.find()`` 也一起跳了——于是所有声明豁免的关键词**无条件命中**，
+    每一句话都被劫持。是测试抓出来的。）
     """
     idx = text.find(pattern)
     if idx < 0:
         return False
+    if allow_embedded:
+        return True
     before = text[idx - 1] if idx > 0 else ''
     after = text[idx + len(pattern)] if idx + len(pattern) < len(text) else ''
     if _CJK_RE.match(before or ' ') and _CJK_RE.match(after or ' '):
@@ -86,6 +95,7 @@ class Capability:
     emotion: str = "happy"          # 执行后的情绪
     anim: str = "extra"             # 执行后的动画
     callable: Callable = None       # handler="callable" 时的处理函数 (text) -> RouteResult|str
+    allow_embedded: bool = False    # True = 跳过"被中文夹住即误匹配"保护（见下）
 
 
 @dataclass
@@ -216,6 +226,15 @@ class CapabilityRouter:
 
         Returns:
             RouteResult 如果匹配成功，None 如果需要回退到 LLM
+
+        关于 ``allow_embedded``：默认走 :func:`_is_valid_capability_match`，
+        纯中文关键词被中文字夹住时判为误匹配（防"接管一下一个对话"被
+        "下一个"劫持）。但有一类能力的关键词**天然就嵌在中文句子里**，
+        例如派活关键词"交给红莉栖"——只要用户写"把这件事交给红莉栖总结一下"，
+        它两侧都是中文字，默认规则永远不命中（等于功能装上了却不触发）。
+        这类能力由注册方**显式声明** ``allow_embedded=True`` 换成自己的
+        约束：pattern 必须自带足够独特的限定（如带具体助手名），
+        以避开它想避开的碰撞。默认 False = 原有行为一模一样。
         """
         text_lower = text.strip().lower()
         if not text_lower:
@@ -223,7 +242,9 @@ class CapabilityRouter:
 
         for cap in (CAPABILITIES + EXTERNAL_CAPABILITIES):
             for pattern in cap.patterns:
-                if _is_valid_capability_match(text_lower, pattern):
+                if _is_valid_capability_match(
+                        text_lower, pattern,
+                        allow_embedded=getattr(cap, "allow_embedded", False)):
                     logger.info("Capability matched: %s (pattern='%s')", cap.name, pattern)
                     try:
                         if cap.handler == "tool":

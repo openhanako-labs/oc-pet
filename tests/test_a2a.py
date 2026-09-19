@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import time
+
 from core.a2a import (
     DEFAULT_MAX_PER_DAY,
     DEFAULT_MAX_PER_HOUR,
@@ -261,12 +263,14 @@ def test_results_queue_is_bounded():
     assert len(d.results) <= 50
 
 
-def test_on_result_only_fires_on_success():
+def test_on_result_fires_for_success_and_failure():
+    """**失败也响铃**：3 分钟过去什么都没交出去，不响不存就等于替他吞掉了失败。
+
+    铃的内容由 ``ok`` 区分，由上层决定怎么说。
+    """
     seen = []
-    calls = []
 
     def create(agent):
-        calls.append(agent)
         return _Session(agent)
 
     d = Delegator(create, lambda s, t, to: "ok",
@@ -275,7 +279,87 @@ def test_on_result_only_fires_on_success():
     d.delegate("成功", "kurisu")
     d._send = lambda s, t, to: (_ for _ in ()).throw(RuntimeError("炸"))
     d.delegate("失败", "kurisu")
-    assert len(seen) == 1 and seen[0].ok
+    assert len(seen) == 2
+    assert seen[0].ok is True and seen[1].ok is False
+
+
+# ── 异步派活（对话主路径用这个） ────────────────────────────
+
+
+def _wait(pred, timeout=5.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if pred():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_delegate_async_returns_immediately():
+    """``send_and_wait`` 一等等三分钟，绝不能堵在对话主路径上。"""
+    import time as _t
+
+    def slow(session, text, timeout):
+        _t.sleep(0.4)
+        return "ok"
+
+    d = Delegator(lambda a: _Session(a), slow,
+                  {"enabled": True, "allowed_agents": ["kurisu"]})
+    t0 = _t.monotonic()
+    assert d.delegate_async("任务", "kurisu") is True
+    assert _t.monotonic() - t0 < 0.3, "delegate_async 不能阻塞"
+    assert _wait(lambda: len(d.results) == 1)
+
+
+def test_delegate_async_rejects_before_threading():
+    """策略拒绝时**不**起线程（省一个空转）。"""
+    d, calls, _ = _mk()
+    assert d.delegate_async("任务", "alice") is False      # 不在白名单
+    assert d.delegate_async("", "kurisu") is False          # 空任务
+    assert d.delegate_async("啊" * (MAX_TASK_CHARS + 1), "kurisu") is False
+    assert calls == []
+
+
+def test_delegate_async_survives_failure_in_thread():
+    d = Delegator(lambda a: _Session(a),
+                  lambda s, t, to: (_ for _ in ()).throw(RuntimeError("炸")),
+                  {"enabled": True, "allowed_agents": ["kurisu"]})
+    assert d.delegate_async("任务", "kurisu") is True
+    assert _wait(lambda: len(d.results) == 1)
+    assert d.results[0].ok is False and "炸" in d.results[0].error
+
+
+# ── 门铃的另一半：未读 ────────────────────────────────────
+
+
+def test_take_unread_marks_acked():
+    """结论只能被念一次——念完就标已读。"""
+    d, _, _ = _mk()
+    d.delegate("一", "kurisu")
+    d.delegate("二", "kurisu")
+    assert d.unread_count == 2
+    got = d.take_unread()
+    assert len(got) == 2 and all(r.acked for r in got)
+    assert d.unread_count == 0
+    assert d.take_unread() == []
+
+
+def test_take_unread_returns_chronological_order():
+    d, _, _ = _mk()
+    d.delegate("先把这件事办了", "kurisu")
+    d.delegate("再把这个办了", "kurisu")
+    got = d.take_unread()
+    assert "先把这件事办了" in got[0].reply
+    assert "再把这个办了" in got[1].reply
+
+
+def test_failed_result_is_also_unread():
+    """失败也得等他问——不能只在成功时留痕。"""
+    d, _, _ = _mk()
+    d._send = lambda s, t, to: (_ for _ in ()).throw(RuntimeError("炸"))
+    d.delegate("任务", "kurisu")
+    assert d.unread_count == 1
+    assert d.take_unread()[0].ok is False
 
 
 def test_stats_shape():
