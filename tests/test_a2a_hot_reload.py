@@ -144,13 +144,15 @@ def test_hot_reload_never_touches_builtin_capabilities():
 def test_startup_and_reload_share_one_path():
     """pet.py 里必须只有一条装卸路径，否则会出现'启动时对、保存后不对'。"""
     src = Path(__file__).resolve().parents[1].joinpath("pet.py").read_text(encoding="utf-8")
+    assert "def _apply_runtime_config" in src
     assert "def _apply_a2a_config" in src
-    assert "_init_a2a" in src and "_apply_a2a_config()" in src
-    # 启动路径要转发到同一个方法，而不是自己再装一次
+    # 启动路径要转发到统一入口，而不是自己再装一次
     init_body = src[src.index("def _init_a2a"):]
     init_body = init_body[:init_body.index("def _apply_a2a_config")]
-    assert "return self._apply_a2a_config()" in init_body
+    assert "return self._apply_runtime_config()" in init_body
     assert "register_a2a" not in init_body, "启动路径不该自己装能力"
+    # 也不能绕开记账直接调（真机日志里因此多装了一次）
+    assert "return self._apply_a2a_config()" not in init_body
 
 
 def test_settings_save_triggers_reload():

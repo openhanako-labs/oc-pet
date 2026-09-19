@@ -1118,7 +1118,10 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         这里只负责把会话管理器存下来，真正的装卸在 :meth:`_apply_a2a_config`。
         """
         self._a2a_session_manager = session_manager
-        return self._apply_a2a_config()
+        # 走**统一入口**（不是直接调 _apply_a2a_config）：这样"记账"也一致。
+        # 2026-09-19 真机日志里的证据：直接调会因为没记账，
+        # 导致第一次 config.json 变动时把 a2a 又重装一遍（20:43:45 多了一次 applied）。
+        return self._apply_runtime_config().get("a2a")
 
     def _apply_a2a_config(self):
         """按**当前** ``self.config`` 装/卸派活能力。
