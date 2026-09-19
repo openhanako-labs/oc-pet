@@ -9,6 +9,8 @@ import random
 from pathlib import Path
 
 from core.liveliness import (
+    ACTIONS,
+    INTENSITY_RANGE,
     POOLS,
     LineBank,
     greeting,
@@ -196,7 +198,7 @@ def test_behavior_uses_liveliness():
     s = _src("pet_mixins/behavior_mixin.py")
     assert "_greet_on_return(" in s and "def _greet_on_return" in s
     assert "_say_from(" in s and "def _say_from" in s
-    assert 'get_bank().pick(' in s
+    assert "get_bank()" in s and ".pick(" in s
 
 
 def test_return_greeting_no_longer_inline():
@@ -204,3 +206,124 @@ def test_return_greeting_no_longer_inline():
     s = _src("pet_mixins/behavior_mixin.py")
     assert 'self._show_bubble("你回来啦~", emotion="happy")' in s   # 只剩保底那一处
     assert s.count('self._show_bubble("你回来啦~", emotion="happy")') == 1
+
+
+# ── 动作层（生动：不只换话了，动作也换）─────────────────
+
+
+def test_every_scene_with_lines_has_actions():
+    for key in POOLS:
+        assert key in ACTIONS, f"{key} 有台词却没有动作池"
+        assert len(ACTIONS[key]) >= 2, f"{key} 的动作池太小（<2 就必重复）"
+
+
+def test_action_pools_have_no_duplicates():
+    for key, pool in ACTIONS.items():
+        assert len(pool) == len(set(pool)), f"{key} 动作重复"
+
+
+def test_action_names_are_real_alias_keys():
+    """**关键守卫**：动作名必须是 Live2DRenderer 的语义别名键。
+
+    编一个不存在的动作名 → ``_trigger_gesture`` 归一到未知关键字 → 掉兜底，
+    等于“设了不做”。这条测试就是为了让那种名字进不来。
+    """
+    import pytest
+
+    renderer_mod = pytest.importorskip(
+        "avatar.live2d_renderer", reason="需要 Live2D 渲染器才能核对动作词表"
+    )
+    aliases = set(renderer_mod.Live2DRenderer._AI_DO_ALIASES)
+    for key, pool in ACTIONS.items():
+        for name in pool:
+            assert name in aliases, f"{key} 里的动作 {name!r} 不是合法别名"
+
+
+def test_pick_action_returns_alias_name():
+    a = LineBank().pick_action("return_brief")
+    assert a in ACTIONS["return_brief"]
+
+
+def test_pick_action_unknown_key_is_none():
+    assert LineBank().pick_action("nope") is None
+    assert LineBank(actions={"empty": ()}).pick_action("empty") is None
+
+
+def test_action_does_not_repeat_back_to_back():
+    b = LineBank(rng=random.Random(21))
+    prev = None
+    for _ in range(60):
+        cur = b.pick_action("return_long")
+        assert cur != prev, "连续两次用了同一个动作"
+        prev = cur
+
+
+def test_two_action_pool_alternates():
+    b = LineBank(actions={"pair": ("甲", "乙")}, history=99, rng=random.Random(4))
+    seq = [b.pick_action("pair") for _ in range(10)]
+    assert all(seq[i] != seq[i + 1] for i in range(len(seq) - 1))
+
+
+def test_action_history_is_separate_from_line_history():
+    """台词与动作各自记历史，不能互相污染。"""
+    b = LineBank(rng=random.Random(6))
+    b.pick("return_mid")
+    assert b.recent("return_mid")
+    assert b.recent("action:return_mid") == []
+
+
+def test_intensity_is_jittered_within_range():
+    b = LineBank(rng=random.Random(8))
+    vals = {b.intensity() for _ in range(30)}
+    assert vals, "强度没有抖动"
+    lo, hi = INTENSITY_RANGE
+    assert all(lo <= v <= hi for v in vals)
+    assert len(vals) > 1, "强度只有一个值 = 没抖动"
+
+
+def test_greeting_carries_action_and_intensity():
+    g = greeting(60, hour=14, bank=LineBank(rng=random.Random(12)))
+    assert "gesture" in g and "intensity" in g
+    assert g["gesture"] is None or g["gesture"] in ACTIONS["return_brief"]
+    lo, hi = INTENSITY_RANGE
+    assert lo <= g["intensity"] <= hi
+
+
+def test_greeting_survives_empty_action_pools():
+    b = LineBank(actions={}, rng=random.Random(13))
+    g = greeting(60, hour=14, bank=b)
+    assert g["text"] and g["gesture"] is None      # 没动作也照常说话
+
+
+def test_with_action_appends_parseable_tag():
+    """直接调那个函数，验它与 **气泡解析器的格式契约**。
+
+    只用源码断言的话，标签格式写错了也照样绿——这里真的拿 bubble_mixin
+    用的那条正则去解一次。
+    """
+    import json
+    import re
+
+    from pet_mixins.behavior_mixin import BehaviorMixin
+
+    out = BehaviorMixin._with_action(
+        {"text": "回来啦～", "emotion": "happy", "gesture": "挥手", "intensity": 0.62}
+    )
+    assert out.startswith("回来啦～")
+
+    # 与 bubble_mixin.py 里的正则保持一致
+    m = re.search(r"\[action:(\{.*?\})\]", out, re.DOTALL)
+    assert m, "标签没拼成气泡能认的形状"
+    payload = json.loads(m.group(1))
+    assert payload["gesture"] == "挥手"
+    assert payload["intensity"] == 0.62
+
+    # 标签会被剥掉，用户看到的只有正文
+    assert re.sub(r"\[action:\{.*?\}\]", "", out, flags=re.DOTALL).strip() == "回来啦～"
+
+
+def test_with_action_without_gesture_stays_plain():
+    from pet_mixins.behavior_mixin import BehaviorMixin
+
+    assert BehaviorMixin._with_action({"text": "回来啦～"}) == "回来啦～"
+    assert BehaviorMixin._with_action({"text": "回来啦～", "gesture": None}) == "回来啦～"

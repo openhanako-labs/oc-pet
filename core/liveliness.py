@@ -95,6 +95,22 @@ _GAP_TIERS: tuple[tuple[float, str], ...] = (
     (float("inf"), "return_long"),  # 更久
 )
 
+# 情境 → 候选动作（**必须是 `Live2DRenderer._AI_DO_ALIASES` 的键**——
+# 那是唯一经归一处理的词表；自己编名字会掉兜底、等于设了不做。
+# 守卫见 tests/test_liveliness.py::test_action_names_are_real_alias_keys）。
+ACTIONS: dict[str, tuple[str, ...]] = {
+    "return_brief": ("挥手", "点头", "微笑"),
+    "return_mid": ("挥手", "开心跳", "打招呼"),
+    "return_long": ("挥手", "摸头", "开心跳"),
+    # 深夜不该蹦蹦跳跳
+    "return_night": ("困", "眨眼", "点头"),
+    "observing": ("思考", "疑惑"),
+    "screen_fallback": ("疑惑", "叹气"),
+}
+
+# 动作强度的抖动区间（同一个动作也別每次都一模一样）
+INTENSITY_RANGE = (0.5, 0.8)
+
 DEFAULT_HISTORY = 6
 
 
@@ -112,8 +128,10 @@ class LineBank:
         pools: Optional[dict] = None,
         history: int = DEFAULT_HISTORY,
         rng: Optional[random.Random] = None,
+        actions: Optional[dict] = None,
     ):
         self._pools = dict(pools) if pools is not None else dict(POOLS)
+        self._actions = dict(actions) if actions is not None else dict(ACTIONS)
         self._history = max(0, int(history))
         self._rng = rng or random.Random()
         self._lock = threading.Lock()
@@ -158,6 +176,30 @@ class LineBank:
             self.picked += 1
         return {"text": text, "emotion": emotion}
 
+    def pick_action(self, key: str) -> Optional[str]:
+        """取一个动作名（语义名，如 ``"挥手"``）；没有对应动作池返回 None。
+
+        与台词同样带"最近用过"记忆——动作也别每次都一样。
+        """
+        pool = self._actions.get(key) or ()
+        if not pool:
+            return None
+        bucket = f"action:{key}"
+        with self._lock:
+            recent = self._recent.get(bucket, [])
+            limit = min(self._history, max(0, len(pool) - 1))
+            banned = set(recent[-limit:]) if limit else set()
+            candidates = [a for a in pool if a not in banned] or list(pool)
+            action = self._rng.choice(candidates)
+            recent = [t for t in recent if t != action] + [action]
+            self._recent[bucket] = recent[-(self._history + 1):]
+        return action
+
+    def intensity(self) -> float:
+        """动作强度抖动（避免每次同一个幅度）。"""
+        lo, hi = INTENSITY_RANGE
+        return round(self._rng.uniform(lo, hi), 2)
+
 
 # ── 情境选择（"逻辑要生动"的那一半）──────────────────────
 
@@ -198,14 +240,18 @@ def get_bank() -> LineBank:
 
 def greeting(gap_seconds: float, hour: Optional[int] = None,
              bank: Optional[LineBank] = None) -> dict:
-    """回到电脑前该说什么 —— 直接给 ``_show_bubble`` 用。
+    """回到电脑前该说什么 + 配什么动作 —— 直接给 ``_show_bubble`` 用。
 
     Returns:
-        ``{"text", "emotion"}``；池子异常时给一条保底，**永不返回 None**
-        （打招呼是"该说话"的场合，静默比说错更怪）。
+        ``{"text", "emotion", "gesture", "intensity"}``；
+        ``gesture`` 可能为 None（没有动作池 / 池子为空）；
+        池子异常时给一条保底，**永不返回 None**。
     """
     b = bank or get_bank()
-    picked = b.pick(greeting_key(gap_seconds, hour))
+    key = greeting_key(gap_seconds, hour)
+    picked = b.pick(key)
     if picked is None:
-        return {"text": "回来啦～", "emotion": "happy"}
+        picked = {"text": "回来啦～", "emotion": "happy"}
+    picked["gesture"] = b.pick_action(key)
+    picked["intensity"] = b.intensity()
     return picked

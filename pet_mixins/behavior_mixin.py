@@ -672,30 +672,54 @@ class BehaviorMixin:
 
     # ── 生动层：别每次都一模一样（见 core/liveliness.py）──
 
-    def _greet_on_return(self, away_seconds: float):
-        """回到电脑前打招呼：按“离开多久 + 现在几点”选话，且不立刻重复。
+    @staticmethod
+    def _with_action(picked: dict) -> str:
+        """把生动层选中的动作拼成气泡标签（走已有的 ``[action:{...}]`` 解析路径）。
 
-        原实现是**每次都同一句**「你回来啦~」+ 同一个 happy —— 再智能的东西，
-        只要每次一样，就会显出是机器。
+        **不直接调 renderer**：气泡实现体本就会解析这个标签并交给
+        ``apply_action_intent`` → ``_trigger_gesture`` → 语义别名归一。
+        复用那条路比自己接线稳——动作名会被归一校验，编错了不会假装触发。
+        """
+        import json
+
+        text = picked.get("text") or ""
+        gesture = picked.get("gesture")
+        if not gesture:
+            return text
+        tag = json.dumps(
+            {"gesture": gesture,
+             "intensity": float(picked.get("intensity") or 0.6)},
+            ensure_ascii=False,
+        )
+        return f"{text}[action:{tag}]"
+
+    def _greet_on_return(self, away_seconds: float):
+        """回到电脑前打招呼：按“离开多久 + 现在几点”选话与动作，且不立刻重复。
+
+        原实现是**每次都同一句**「你回来啦~」+ 同一个 happy + 没有动作 ——
+        再智能的东西，只要每次一样，就会显出是机器。
         """
         try:
             from core.liveliness import greeting
 
             g = greeting(away_seconds, hour=time.localtime().tm_hour)
-            self._show_bubble(g["text"], emotion=g["emotion"])
+            self._show_bubble(self._with_action(g), emotion=g["emotion"])
             return
         except Exception:
             logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         self._show_bubble("你回来啦~", emotion="happy")  # 生动层不可用时的保底
 
     def _say_from(self, key: str, fallback: str, fallback_emotion: str = "neutral"):
-        """从生动层台词池取一句显示；池子不可用时退回写死的那句。"""
+        """从生动层台词池取一句（+配一个动作）显示；池子不可用时退回写死的那句。"""
         try:
             from core.liveliness import get_bank
 
-            picked = get_bank().pick(key)
+            bank = get_bank()
+            picked = bank.pick(key)
             if picked:
-                self._show_bubble(picked["text"], emotion=picked["emotion"])
+                picked["gesture"] = bank.pick_action(key)
+                picked["intensity"] = bank.intensity()
+                self._show_bubble(self._with_action(picked), emotion=picked["emotion"])
                 return
         except Exception:
             logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
