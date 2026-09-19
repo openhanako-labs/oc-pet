@@ -138,13 +138,23 @@
     "hybrid_bm25": true,
     "embedding": {
       "enabled": false,
+      "provider": "local",
       "model_path": "",
       "model_name": "jinaai/jina-embeddings-v5-text-nano-retrieval",
       "dim": 256,
       "quantization": "auto",
       "max_length": 1024,
       "timeout_seconds": 8.0,
-      "load_timeout_seconds": 60.0
+      "load_timeout_seconds": 60.0,
+      "api": {
+        "provider": "",
+        "base_url": "",
+        "api_key": "",
+        "model": "",
+        "dim": 0,
+        "timeout_seconds": 8.0,
+        "batch_size": 32
+      }
     },
     "recall": {
       "enabled": true,

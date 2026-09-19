@@ -317,12 +317,25 @@ def _memory_config() -> dict:
 
 
 def _default_embedding_provider() -> EmbeddingProvider | None:
-    """按 config ``memory.embedding.enabled`` 返回默认 provider（P1-1）。
+    """按 config 返回默认 provider。
 
-    - 开启 → ``core.memory_embedding`` 进程单例（首次 recall 懒加载 ONNX 模型；
-      模型缺失/加载失败 → sticky DISABLED，此处返回的服务不可用，走纯 BM25）
-    - 关闭 / 模块不可用 → None（调用方回退 NoopEmbeddingProvider，P0 行为不变）
+    provider 选择（``memory.embedding.provider``）：
+    - ``"api"`` → ``core.memory_embedding_api``（OpenAI 兼容 /v1/embeddings，
+      免本地模型、免 onnxruntime 版本约束）
+    - ``"local"``（默认） → ``core.memory_embedding`` 进程单例（本地 ONNX）
+
+    任一：未启用 / 未配置齐 / 模块不可用 → None（调用方回退
+    NoopEmbeddingProvider，cosine 路径自动跳过，行为等同纯 BM25）。
     """
+    emb_cfg = _memory_config().get("embedding") or {}
+    kind = str(emb_cfg.get("provider", "local") or "local").strip().lower()
+    if kind == "api":
+        try:
+            from .memory_embedding_api import default_api_embedding_provider as _api_factory
+            return _api_factory()
+        except Exception as exc:
+            logger.debug("[memory_hybrid] api embedding provider 不可用: %s", exc)
+            return None
     try:
         from .memory_embedding import default_embedding_provider as _factory
         return _factory()

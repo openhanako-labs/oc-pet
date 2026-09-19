@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.memory_hybrid import (
@@ -24,6 +26,15 @@ from core.memory_hybrid import (
     rrf_fuse,
 )
 from core.memory_keywords import extract_keywords, fold_script, tokenize
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_embedding(monkeypatch):
+    """测试隔离：``HybridMemoryRecall(embedding_provider=None)`` 会从用户实时
+    config 自动选 provider；若不掐掉，用户 config.json 一开 embedding，测试
+    就会真发网络请求、结果随配置漂移。显式传 provider 的用例不受影响。"""
+    import core.memory_hybrid as mh
+    monkeypatch.setattr(mh, "_default_embedding_provider", lambda: None)
 
 # ── 5 条中文场景（验收标准用例）──────────────────────────────────────────
 

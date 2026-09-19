@@ -147,6 +147,8 @@ DEFAULT_CONFIG = {
         # cosine 路径提供语义向量；onnxruntime 不可用/模型缺失时自动降级纯 BM25（fallback gate）
         "embedding": {
             "enabled": False,
+            # provider："local"（本地 ONNX，默认）| "api"（OpenAI 兼容 /v1/embeddings）
+            "provider": "local",
             # 本地 ONNX 模型文件路径（或含 onnx/ 子目录的模型目录，按 N.E.K.O.
             # 布局找 model_quantized.onnx / model.onnx）；不配置/不存在 → 自动降级纯 BM25，
             # 绝不自动下载大模型
@@ -165,6 +167,16 @@ DEFAULT_CONFIG = {
             "timeout_seconds": 8.0,
             # 模型加载超时（秒）：首次懒加载的有界等待上限
             "load_timeout_seconds": 60.0,
+            # ── 远程 API 向量（provider="api" 时生效；免下载模型 / 免 onnxruntime 版本约束）──
+            "api": {
+                "provider": "",   # Hana 供应商名（provider-catalog 的 key），如 siliconflow；留空则按 model 名自动匹配
+                "base_url": "",   # OpenAI 兼容根地址（不含 /embeddings）；留空则从 provider-catalog 取
+                "api_key": "",    # 留空则从 provider-catalog 取
+                "model": "",      # 如 BAAI/bge-m3 / text-embedding-3-small
+                "dim": 0,         # 服务端原生维度（仅一致性校验）；0 = 不校验
+                "timeout_seconds": 8.0,
+                "batch_size": 32,
+            },
         },
         # D 场景回忆（proactive 命中历史场景时主动说一句带记忆的话）
         "recall": {

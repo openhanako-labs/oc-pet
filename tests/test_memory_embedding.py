@@ -14,6 +14,8 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.memory_embedding import (
@@ -22,6 +24,15 @@ from core.memory_embedding import (
     reset_embedding_service_for_tests,
 )
 from core.memory_hybrid import HybridMemoryRecall
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_embedding(monkeypatch):
+    """测试隔离：``HybridMemoryRecall(embedding_provider=None)`` 会从用户实时
+    config 自动选 provider；若不掐掉，用户 config.json 一开 embedding，测试
+    就会真发网络请求、结果随配置漂移。显式传 provider 的用例不受影响。"""
+    import core.memory_hybrid as mh
+    monkeypatch.setattr(mh, "_default_embedding_provider", lambda: None)
 
 # ── 5 条中文场景（与 test_memory_hybrid.py 同款验收用例）────────────────
 
