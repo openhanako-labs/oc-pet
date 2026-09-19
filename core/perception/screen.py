@@ -777,12 +777,22 @@ class ScreenPerception:
                     if not self._vision_config_error_logged:
                         logger.warning(
                             "屏幕感知已停用：视觉 API 返回 %d"
-                            "（通常是视觉模型/Key 未正确配置）。"
+                            "(通常是视觉模型/Key 未正确配置)。"
                             "请在设置面板检查视觉模型，或保持留空以关闭屏幕感知。",
                             resp.status_code,
                         )
                         self._vision_config_error_logged = True
                     self._vision_disabled = True
+                    return None
+                if resp.status_code == 429:
+                    # 限流信号：不要等累计 3 次失败才退避，立即拉长轮询间隔，
+                    # 避免 429 期间每个周期仍打 API 反复撞墙（深度分析04 方案 C）。
+                    self._consecutive_failures += 1
+                    self._interval = self._next_interval() + self.BASE_BACKOFF_SECONDS
+                    logger.warning(
+                        "屏幕感知遇 429 限流，立即退避: interval=%ds",
+                        self._interval,
+                    )
                     return None
                 logger.warning("Vision API error: %d", resp.status_code)
                 self._consecutive_failures += 1

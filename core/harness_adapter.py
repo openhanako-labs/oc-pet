@@ -395,6 +395,20 @@ class HanakoPetAdapter:
                     try:
                         resp = self._call_api(messages, tools=tools)
                         break  # 成功，跳出重试
+                    except requests.exceptions.HTTPError as _http_e:
+                        # 429 限流是「稍后重试」的临时信号，纳入指数退避（避免
+                        # 立即失败后下个 tick 再次撞墙）；其它 HTTP 错误（400/401
+                        # 等配置类）不重试，直接抛给外层 except 分支。
+                        _status = getattr(getattr(_http_e, "response", None), "status_code", None)
+                        if _status == 429 and _attempt < _max_retries - 1:
+                            logger.warning(
+                                "LLM 429 限流 (attempt %d/%d, source=%s)，%.1fs 后重试",
+                                _attempt + 1, _max_retries, source, _retry_delay,
+                            )
+                            _t.sleep(_retry_delay)
+                            _retry_delay *= 2  # 指数退避
+                        else:
+                            raise  # 非 429，或最后一次失败
                     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as _retry_e:
                         if _attempt < _max_retries - 1:
                             logger.warning("LLM 调用失败 (attempt %d/%d): %s, %.1fs 后重试",
