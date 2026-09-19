@@ -6,17 +6,17 @@
       1. pet.json 中的 "format" 字段（显式声明，最权威）：
            - "q6"     -> Q6 帧精灵（本项目原生格式，atlas / 精灵图网格）
            - "live2d" -> Live2D (Cubism)
-           - "vrm"    -> VRM（3D，未来扩展钩子，尚未实现）
+           - "vrm"    -> VRM（3D，QWebEngineView + three.js + three-vrm）
       2. 目录结构推断（无 format 字段时）：
            - live2d/*.model3.json 或 *.model.json -> Live2D (Cubism)
-           - *.vrm (含 vrm/ 子目录)               -> VRM（3D，未来钩子）
+           - *.vrm (含 vrm/ 子目录)               -> VRM（3D）
            - 其他                                  -> Q6 帧精灵（原生格式）
 
 重要区分：
     Q6 是本桌宠项目的【原生 2D 帧精灵格式】（精灵图 + 网格 pet.json，
     见 phoebe / yuexinmiao），由 SpriteRenderer 渲染。
-    Q6 与 VRM 是两件不同的事：VRM 是独立的 3D 模型格式，目前仅作未来
-    扩展钩子保留，尚未实现真实渲染。
+    Q6 与 VRM 是两件不同的事：VRM 是独立的 3D 模型格式，由 VRMRenderer
+    （QWebEngineView + three.js）渲染。
 
 live2d-py 未安装 / Live2DRenderer 构造失败时，自动回退到 Q6 SpriteRenderer，
 保证 pet 始终能跑。
@@ -86,7 +86,7 @@ def detect_format(character_id: str) -> str:
             if low.endswith(".model3.json") or low.endswith(".model.json"):
                 return "live2d"
 
-    # VRM：任意位置有 .vrm（未来 3D 扩展钩子，当前未实现真实渲染）
+    # VRM：任意位置有 .vrm
     for root, _, files in os.walk(char_dir):
         for f in files:
             if f.lower().endswith(".vrm"):
@@ -137,11 +137,8 @@ def create_renderer(character_id: str, parent, override_format: str = None) -> A
             logger.warning("Live2DRenderer 不可用 (%s)，回退 Q6 Sprite：%s", type(e).__name__, e)
 
     if fmt == "vrm":
-        # 未来 3D 扩展钩子：当前 VRMRenderer 为占位，load() 返回 False。
-        # 若需要立即可用的角色，请改用 Q6 / Live2D 格式。
-        logger.warning(
-            "create_renderer('%s'): VRM 格式尚未实现，将显示占位（空白/未实现提示）。"
-            "请改用 Q6 或 Live2D 角色。", character_id)
+        # 3D VRM：QWebEngineView + three.js + three-vrm（见 avatar/vrm_renderer.py）。
+        # 找不到 .vrm / WebEngine 不可用时，VRMRenderer 自身会降级为占位提示。
         from avatar.vrm_renderer import VRMRenderer
         return VRMRenderer(parent)
 
@@ -189,7 +186,10 @@ def resource_available(character_id: str) -> tuple[bool, str]:
             return False, "缺少 Live2D 模型文件（*.model3.json，请按 README 下载放置）"
         return True, ""
     if fmt == "vrm":
-        return False, "VRM 格式尚未实现，暂不可加载"
+        from avatar.vrm_renderer import find_vrm_model
+        if not find_vrm_model(char_dir):
+            return False, "缺少 VRM 模型文件（*.vrm，放在角色目录或 vrm/ 子目录）"
+        return True, ""
     # sprite / Q6 原生帧精灵
     if os.path.isdir(os.path.join(char_dir, "frames")):
         return True, ""

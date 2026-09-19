@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>oc-pet · VRM 视图</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: transparent; }
+  #stage { position: fixed; inset: 0; opacity: 0; transition: opacity .25s ease; }
+  #stage.on { opacity: 1; }
+  #canvas-host { position: absolute; inset: 0; }
+  #msg {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    font: 12px/1.6 system-ui, sans-serif; color: #e6e6f0; text-align: center;
+    max-width: 82%; white-space: pre-wrap; opacity: .9; pointer-events: none;
+  }
+</style>
+<!--
+  import map：three 与 three/addons 都指向本目录下 vendor/ 的本地副本（离线可用）。
+  three-vrm 只裸导入 "three"，因此这一条映射就够了。
+-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/": "./vendor/addons/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="stage"><div id="canvas-host"></div></div>
+<div id="msg">VRM 视图加载中…</div>
+
+<!-- 诊断前置层（classic script，先于 module 执行）：
+     模块导入失败时 window.VRM 永远不会被赋值，此时靠这一层把错误交回 Python。 -->
+<script>
+(function () {
+  var errors = [];
+  window.__vrmErrors = errors;
+  function push(text) { errors.push(String(text).slice(0, 300)); }
+  window.addEventListener('error', function (e) {
+    if (e && e.target && e.target.tagName) {
+      push('resource-error: ' + (e.target.src || e.target.href || e.target.tagName));
+    } else {
+      push('js-error: ' + (e && e.message ? e.message : e));
+    }
+  }, true);
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    push('js-reject: ' + (r && r.message ? r.message : String(r)));
+  });
+  // 预置状态：模块没跑起来时，Python 轮询也能拿到「模块未执行」这个事实
+  window.VRM = {
+    status: function () {
+      return { ready: false, error: '', name: '', version: '', bootstrapped: false, events: errors };
+    },
+    snapshot: function () { return ''; }
+  };
+  window.__vrmMarkReadyToBootstrap = function () { window.VRM.bootstrapped = true; };
+})();
+</script>
+
+<!-- Qt 自带的 QWebChannel 客户端（资源路径）。拿不到时下面的 connectChannel()
+     会记 no-qwebchannel，Python 侧自动改用轮询 status()。 -->
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as VRMLIB from './vendor/three-vrm.module.js';
+
+const VRMLoaderPlugin = VRMLIB.VRMLoaderPlugin;
+const VRMUtils = VRMLIB.VRMLUtils || {};
+
+// ── 供 Python 轮询的状态（QWebChannel 不可用时的后备通道）──────────────
+const bootEvents = (window.__vrmErrors || []);
+const state = { ready: false, error: '', name: '', version: '', bootstrapped: true, events: bootEvents };
+window.VRM = {
+  status() { return JSON.parse(JSON.stringify(state)); },
+  metrics,
+  snapshot,
+  setAlpha, setMouth, setEmotion, setExpression, lookAt, setSpeaking, setFacing, reset
+};
+
+const msgEl = document.getElementById('msg');
+const stageEl = document.getElementById('stage');
+
+function say(text) { msgEl.textContent = text; }
+function clearMsg() { msgEl.textContent = ''; }
+function fail(text) {
+  state.error = String(text);
+  say('VRM 视图错误：\n' + state.error);
+  report('reportError', state.error);
+}
+function note(text) { state.events.push(String(text).slice(0, 200)); }
+
+// 把 JS 异常也记进 status()，否则模块导入失败会表现为「永远白屏但无报错」
+window.addEventListener('error', (e) => note('js-error: ' + (e && e.message ? e.message : e)));
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e && e.reason;
+  note('js-reject: ' + (r && r.message ? r.message : String(r)));
+});
+
+// ── Qt 通道（有则上报；无则 Python 轮询 status()）──────────────────────
+let bridge = null;
+function report(method, payload) {
+  try { if (bridge && typeof bridge[method] === 'function') bridge[method](String(payload)); }
+  catch (e) { /* 通道不可用不影响渲染 */ }
+}
+(function connectChannel() {
+  if (typeof QWebChannel === 'undefined') { note('no-qwebchannel'); return; }
+  try {
+    new QWebChannel(qt.webChannelTransport, (ch) => { bridge = ch.objects.bridge || null; note('channel-ok'); });
+  } catch (e) { note('channel-fail:' + e.message); }
+})();
+
+// ── 渲染器 ─────────────────────────────────────────────────────────────
+const host = document.getElementById('canvas-host');
+const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
+renderer.setClearColor(0x000000, 0);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+host.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, 1, 0.01, 50);
+camera.position.set(0, 1.4, 1.0);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const key = new THREE.DirectionalLight(0xffffff, 1.1);
+key.position.set(0.6, 1.2, 1.4);
+scene.add(key);
+const rim = new THREE.DirectionalLight(0xbfd4ff, 0.35);
+rim.position.set(-0.8, 0.6, -1.2);
+scene.add(rim);
+
+// 视线目标（lookAt 用；Python 通过 lookAt(nx, ny) 移动它）
+const gazeTarget = new THREE.Object3D();
+scene.add(gazeTarget);
+
+function resize() {
+  const w = host.clientWidth || window.innerWidth;
+  const h = host.clientHeight || window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / Math.max(1, h);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+
+// ── 模型 ───────────────────────────────────────────────────────────────
+let vrm = null;
+let expressionManager = null;
+let clock = new THREE.Clock();
+let blinkTimer = 0;
+let blinkValue = 0;
+let speaking = false;
+let mouthTarget = 0;
+let mouthValue = 0;
+
+const MOUTH = ['aa', 'ih', 'ou', 'ee', 'oh'];
+const EMOTIONS = ['happy', 'angry', 'sad', 'relaxed', 'surprised', 'neutral'];
+// 取景缩放：1=默认（头+上半身）；?zoom=0.8 拉近，1.4 拉远
+let zoomFactor = 1.0;
+try {
+  const _z = parseFloat(new URLSearchParams(location.search).get('zoom'));
+  if (isFinite(_z) && _z > 0.2 && _z < 5) zoomFactor = _z;
+} catch (e) {}
+
+function hasExpression(name) {
+  try { return !!(expressionManager && expressionManager.getExpression(name)); }
+  catch (e) { return false; }
+}
+function setValue(name, value) {
+  try { if (expressionManager) expressionManager.setValue(name, value); } catch (e) {}
+}
+
+function frameModel() {
+  // 按**真实骨骼尺度**取景，而不是固定距离滴：
+  // 头胯距 dh 作为模型尺度基准 → 可见纵向高度 ≈ 1.9·dh（头 + 上半身），
+  // 直接把 dh 换成 VRM 之外的单位也不会跑掉。
+  let cx = 0, cz = 0, headY = 1.4, dh = 0.45, headZ = 0;
+  try {
+    const boneNode = (name) => (vrm && vrm.humanoid && vrm.humanoid.getNormalizedBoneNode)
+      ? vrm.humanoid.getNormalizedBoneNode(name) : null;
+    const h = boneNode('head'), p = boneNode('hips');
+    if (h && p) {
+      scene.updateMatrixWorld(true);
+      const hp = new THREE.Vector3(), pp = new THREE.Vector3();
+      h.getWorldPosition(hp);
+      p.getWorldPosition(pp);
+      cx = hp.x; cz = hp.z; headZ = hp.z;
+      headY = hp.y;
+      dh = Math.max(0.12, hp.y - pp.y);
+    }
+  } catch (e) { note('frame-head-fail'); }
+  const top = headY + 0.55 * dh;          // 略高于头顶
+  const bottom = headY - 1.35 * dh;       // 到胯以下
+  const centerY = (top + bottom) / 2;
+  const height = (top - bottom) * zoomFactor;
+  const vFov = camera.fov * Math.PI / 180;
+  const dist = (height / 2) / Math.tan(vFov / 2);
+  camera.position.set(cx, centerY, (headZ || cz) + dist);
+  camera.lookAt(cx, centerY, headZ || cz);
+  camera.updateProjectionMatrix();
+}
+
+function loadModel(url) {
+  if (!url) { fail('未指定模型路径（?model=…）'); return; }
+  const loader = new GLTFLoader();
+  loader.register((parser) => new VRMLoaderPlugin(parser));
+  say('载入模型…\n' + url);
+  loader.load(url, (gltf) => {
+    try {
+      const model = gltf.userData && gltf.userData.vrm;
+      if (!model) { fail('该文件不含 VRM 数据（gltf.userData.vrm 为空）'); return; }
+      vrm = model;
+      expressionManager = vrm.expressionManager || null;
+
+      // VRM0 需要转向 +Z；同时清掉无用顶点（three-vrm 官方建议）
+      const isV0 = !!(vrm.meta && String(vrm.meta.metaVersion) === '0');
+      try { if (isV0 && VRMUtils.rotateVRM0) VRMUtils.rotateVRM0(vrm); } catch (e) { note('rotateVRM0-fail'); }
+      try { if (VRMUtils.removeUnnecessaryVertices) VRMUtils.removeUnnecessaryVertices(gltf.scene); } catch (e) {}
+      try { if (VRMUtils.combineSkeletons) VRMUtils.combineSkeletons(gltf.scene); } catch (e) {}
+
+      vrm.scene.traverse((o) => { o.frustumCulled = false; });
+      scene.add(vrm.scene);
+
+      try { if (vrm.lookAt) vrm.lookAt.target = gazeTarget; } catch (e) { note('lookAt-target-fail'); }
+
+      state.name = (vrm.meta && vrm.meta.name) || '';
+      state.version = (vrm.meta && String(vrm.meta.metaVersion)) || '';
+      state.ready = true;
+
+      frameModel();
+      resize();
+      stageEl.classList.add('on');
+      clearMsg();
+      report('reportReady', (state.name || 'VRM') + ' (VRM' + state.version + ')');
+    } catch (e) { fail('模型初始化失败：' + (e && e.message ? e.message : e)); }
+  },
+  (ev) => { if (ev && ev.total) say('载入模型… ' + Math.round(ev.loaded / ev.total * 100) + '%'); },
+  (err) => { fail('模型加载失败：' + (err && err.message ? err.message : err)); });
+}
+
+// ── 对外 API（Python 经 runJavaScript 调用）────────────────────────────
+function setAlpha(a) {
+  const v = Math.max(0, Math.min(1, Number(a)));
+  stageEl.style.opacity = String(v);
+  stageEl.classList.toggle('on', v > 0.001);
+  return v;
+}
+function setSpeaking(on) { speaking = !!on; if (!speaking) mouthTarget = 0; return speaking; }
+function setMouth(level) {
+  const v = Math.max(0, Math.min(1, Number(level) || 0));
+  mouthTarget = v;
+  if (!speaking) setValue('aa', v);   // 非说话态：直接写值（供参数直驱）
+  return v;
+}
+function setEmotion(preset, intensity = 1) {
+  const i = Math.max(0, Math.min(1, Number(intensity) || 0));
+  for (const name of EMOTIONS) if (hasExpression(name)) setValue(name, 0);
+  if (preset && preset !== 'neutral' && hasExpression(preset)) setValue(preset, i);
+  return preset || 'neutral';
+}
+function setExpression(name, value) {
+  if (!name) return false;
+  setValue(String(name), Math.max(0, Math.min(1, Number(value) || 0)));
+  return true;
+}
+function lookAt(nx, ny) {
+  const x = Math.max(-1, Math.min(1, Number(nx) || 0));
+  const y = Math.max(-1, Math.min(1, Number(ny) || 0));
+  // 视线目标放在相机前方一小段，按归一化坐标偏移
+  gazeTarget.position.set(x * 0.5, 1.35 + y * 0.35, 1.2);
+  return [x, y];
+}
+function setFacing(right) { camera.scale.x = right ? 1 : -1; return !!right; }
+function snapshot() {
+  // 直接读 WebGL canvas（preserveDrawingBuffer=true）——比抓 QWidget 可靠得多
+  try { return renderer.domElement.toDataURL('image/png'); } catch (e) { return ''; }
+}
+function metrics() {
+  // 取景/诊断用的真实数字：画布尺寸、相机位、头/胯骨骼世界坐标、包围盒
+  const out = {
+    canvas: [renderer.domElement.width, renderer.domElement.height],
+    view: [host.clientWidth, host.clientHeight],
+    camera: camera.position.toArray().map(n => Math.round(n * 1000) / 1000),
+    ready: state.ready,
+  };
+  try {
+    if (vrm && vrm.scene) scene.updateMatrixWorld(true);
+    const bone = (name) => {
+      if (!vrm || !vrm.humanoid || !vrm.humanoid.getNormalizedBoneNode) return null;
+      const n = vrm.humanoid.getNormalizedBoneNode(name);
+      if (!n) return null;
+      const p = new THREE.Vector3();
+      n.getWorldPosition(p);
+      return p.toArray().map(v => Math.round(v * 1000) / 1000);
+    };
+    out.head = bone('head');
+    out.hips = bone('hips');
+    if (vrm && vrm.scene) {
+      const box = new THREE.Box3().setFromObject(vrm.scene);
+      out.bbox = {
+        min: box.min.toArray().map(v => Math.round(v * 1000) / 1000),
+        max: box.max.toArray().map(v => Math.round(v * 1000) / 1000)
+      };
+    }
+  } catch (e) { out.err = String(e); }
+  return out;
+}
+function reset() {
+  setEmotion('neutral', 0); setMouth(0); setSpeaking(false);
+  lookAt(0, 0); setAlpha(1); return true;
+}
+
+// ── 主循环 ─────────────────────────────────────────────────────────────
+function tick() {
+  requestAnimationFrame(tick);
+  const dt = Math.min(clock.getDelta(), 0.1);
+  if (vrm) {
+    // 说话时口型平滑逼近目标；空闲时缓慢合上
+    mouthValue += (mouthTarget - mouthValue) * Math.min(1, dt * 14);
+    if (speaking) setValue('aa', mouthValue);
+
+    // 简易眨眼（VRM 模型不自带）
+    blinkTimer -= dt;
+    if (blinkTimer <= 0) { blinkValue = 1; blinkTimer = 2.4 + Math.random() * 2.6; }
+    if (blinkValue > 0) {
+      blinkValue = Math.max(0, blinkValue - dt * 9);
+      if (hasExpression('blink')) setValue('blink', blinkValue);
+    }
+    try { vrm.update(dt); } catch (e) { note('vrm-update-fail:' + (e && e.message ? e.message : e)); }
+  }
+  renderer.render(scene, camera);
+}
+
+// ── 启动 ───────────────────────────────────────────────────────────────
+try {
+  const params = new URLSearchParams(location.search);
+  resize();
+  tick();
+  loadModel(params.get('model') || '');
+} catch (e) { fail('页面初始化失败：' + (e && e.message ? e.message : e)); }
+</script>
+</body>
+</html>
