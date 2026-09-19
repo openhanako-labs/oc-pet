@@ -19,8 +19,13 @@
 - `_init_*` 只在 Qt 主线程调用（PetWindow.__init__ 内）
 - `*_action_sink` / `*_state_provider` 会被 **HTTP/MCP 线程**调用——
   它们只做「发事件」或「读快照」，绝不直接碰 Qt 对象
-- 真正的动作应用（`_apply_mcp_action` / `_apply_external_trigger`）经
-  QTimer.singleShot(0, ...) 或 EventBus 绕回主线程
+- 真正的动作应用（`_apply_mcp_action` / `_apply_external_trigger`）**经 Qt 信号**
+  回主线程（`mcp_action_signal` / `external_trigger_signal`）。
+
+**2026-09-19 修正**：原来用 `QTimer.singleShot(0, ...)` 回主线程，但那段代码跑在
+**没有 Qt 事件循环的 HTTP/MCP 线程**里（`EventBus.emit` 是同步调用订阅者），
+定时器永不触发——**MCP 的 5 个表现类工具（say/play_anim/expression/
+set_emotion/celebrate）全部静默失效**，而且工具还回“已派发”。改走 Qt 信号。
 
 搬家自 pet.py（2026-09-17，技术债①）。行为零变化。
 """
@@ -44,7 +49,7 @@ class InterfaceMixin:
         Hana 侧对桌宠一无所知。这里反过来把桌宠自己的状态/能力/表现暴露成 MCP 工具。
 
         默认关（config mcp_server.enabled=false），零行为、不占端口。
-        线程安全：action_sink 只做 EventBus.emit，实际动作由主线程订阅者执行。
+        线程安全：action_sink 只做 EventBus.emit → Qt 信号排队、主线程执行。
         """
         try:
             from core.mcp_server import build_from_config
@@ -62,15 +67,19 @@ class InterfaceMixin:
             from core.event_bus import EventBus
 
             def _on_mcp_action(action, params):
+                # 本回调跑在 **emit 的那个线程**（HTTP/MCP 线程）里：EventBus.emit
+                # 是同步调用订阅者的。Qt 信号跨线程会自动排队到接收者所在线程，
+                # 所以走信号。**不要用 QTimer.singleShot**——在没有 Qt 事件循环
+                # 的线程里它不会触发（2026-09-19 实测：动作全部静默失效）。
                 try:
-                    from PySide6.QtCore import QTimer
-                    QTimer.singleShot(
-                        0, lambda: self._apply_mcp_action(action, params)
-                    )
+                    self.mcp_action_signal.emit(str(action), dict(params or {}))
                 except Exception as e:
                     logger.warning("MCP 动作调度失败: %s", e)
 
             self._mcp_action_handler = _on_mcp_action
+            # 连接放在**订阅之前**：服务一起来就可能收到动作，
+            # 信号没连上就会静静丢掉（2026-09-19 测试抓到的顺序问题）。
+            self.mcp_action_signal.connect(self._apply_mcp_action)
             EventBus.on("mcp_action", _on_mcp_action)
             srv.start()
             self._mcp_server = srv
@@ -381,12 +390,16 @@ class InterfaceMixin:
             from core.event_bus import EventBus
             # P6: 订阅 EventBus 上的 external_trigger 事件（与 phone_receiver 共享）
             def _on_external_trigger_event(action, text, emotion, source="unknown"):
+                # 同 _on_mcp_action：本回调跑在 emit 的线程（HTTP/MCP）里，
+                # Qt 信号会自己排队回主线程。不要用 QTimer.singleShot。
                 try:
-                    from PySide6.QtCore import QTimer
-                    QTimer.singleShot(0, lambda: self._apply_external_trigger(action, text, emotion, source))
+                    self.external_trigger_signal.emit(
+                        str(action), str(text), str(emotion), str(source)
+                    )
                 except Exception as e:
                     logger.warning("外部触发调度失败（via EventBus）: %s", e)
             self._ext_trigger_event_handler = _on_external_trigger_event
+            self.external_trigger_signal.connect(self._apply_external_trigger)
             EventBus.on("external_trigger", _on_external_trigger_event)
             self._external_trigger = ExternalTriggerReceiver(
                 on_trigger=lambda a, t, e: None,  # 已改走 EventBus，on_trigger 空操作
@@ -400,10 +413,9 @@ class InterfaceMixin:
             self._external_trigger = None
 
     def _on_external_trigger(self, action: str, text: str, emotion: str):
-        """外部触发回调（HTTP 线程）→ QTimer 转主线程应用。"""
+        """外部触发回调（HTTP 线程）→ **Qt 信号**转主线程应用。"""
         try:
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._apply_external_trigger(action, text, emotion))
+            self.external_trigger_signal.emit(action, text, emotion, "callback")
         except Exception as e:
             logger.warning("外部触发调度失败: %s", e)
 

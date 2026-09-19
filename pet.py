@@ -105,6 +105,15 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
     chat_state_signal = Signal(str)  # 语音输入文本 -> 主线程更新聊天状态
     screen_emotion_signal = Signal(str, float)  # emotion, intensity
     screen_proactive_signal = Signal(str)  # prompt
+    # MCP 写操作（say / play_anim / expression / set_emotion / celebrate）：
+    # HTTP 线程 emit → Qt 自动排队回主线程执行。
+    # 2026-09-19：原来用 QTimer.singleShot 绕主线程，但那个调用发生在**没有 Qt 事件
+    # 循环的 HTTP 线程**里 → 定时器永不触发 → MCP 表现类工具全部静默失效
+    # （工具还回“已派发”，日志里却连一条应用记录都没有）。
+    mcp_action_signal = Signal(str, dict)
+    # 外部触发（手机活动 / HTTP 8988）：同样跑在 HTTP 线程里。
+    # 2026-09-19：这里原来也是 QTimer.singleShot(0, ...) —— 同一个错误的第二处。
+    external_trigger_signal = Signal(str, str, str, str)  # action, text, emotion, source
     screen_update_signal = Signal(str)  # screen analysis update (description)
     hanako_state_signal = Signal(str, str, str, str, str)  # anim, msg, emotion, state, audio_path
     idle_chatter_signal = Signal(str, str)  # text, emotion
