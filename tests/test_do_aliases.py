@@ -191,7 +191,15 @@ class _Stub:
     _AI_DO_PROMPT = Live2DRenderer._AI_DO_PROMPT
 
 
-def test_prompt_mentions_do_tag_and_examples():
+def test_prompt_teaches_the_tag_the_model_actually_uses():
+    """2026-09-19：教学标签改成 `[action:{...}]`（模型真在用的那条）。
+
+    依据：`logs/oc_pet.log` 的 79 条“标签检测”里 do=True **0** 次、
+    action=True **31** 次——prompt 教 `[do:]` 期间它一次没被用过，
+    而模型一直在用 `[action:]`（旧标签仍被解析，所以功能没坏）。
+
+    停教 ≠ 停解析：`[do:]` / `[feel:]` 的解析仍由 test_va_expression.py 覆盖。
+    """
     from core.harness_adapter import HanakoPetAdapter
 
     a = HanakoPetAdapter.__new__(HanakoPetAdapter)
@@ -199,7 +207,9 @@ def test_prompt_mentions_do_tag_and_examples():
 
     p = a._build_action_prompt()
 
-    assert "[do:" in p
+    assert "[action:" in p
+    assert "gesture" in p, "必须说明字段名，否则模型不知道怎么写这个标签"
+    assert "[do:" not in p, "不该再教一个实测从未被采用的写法"
     assert "害羞" in p
     assert "[feel:" in p, "示例里应同时出现 [feel:]，暗示两者搭配"
     assert "就不加" in p, "应允许模型不加——否则会硬凑"

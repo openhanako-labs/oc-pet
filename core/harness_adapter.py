@@ -1165,12 +1165,22 @@ class HanakoPetAdapter:
     def _build_action_prompt(self) -> str:
         """构建可选表情/动作提示（注入输出规则）。
 
-        2026-09-11 收敛：原来把 53 个预设名 + 13 个 motion 名（共 66 个）
-        挤成一行给模型，**实测 `[do:]` 全历史 0 次使用**——选项太多、无说明、
-        无分类，模型根本无法选择。
+        2026-09-11 曾把 66 个原始预设/motion 名收敛成少量语义标签，
+        同时把教学标签换成 `[do:名字]`、并标注“旧标签不再要求模型输出”。
 
-        改为只暴露少量语义标签（中文），内部归一到具体预设/motion
-        （见 Live2DRenderer._AI_DO_ALIASES，参照 Amadeus 的 TRIGGER_ALIASES）。
+        **但实测那条从未被采用**（`logs/oc_pet.log` 的 79 条“标签检测”）：
+
+            feel=True      23 次   ← 情绪坐标，正常在用
+            action=True    31 次   ← 动作**实际走的这条**
+            do=True         0 次   ← prompt 正在教的那条，空转
+            emotion/expression/duration = 0 次（兜底路径）
+
+        模型一直在用旧标签 `[action:{...}]`（它仍被解析，所以**功能没坏**），
+        而 prompt 教的那条一次也没出现。
+
+        2026-09-19：改为**只教模型真在用的那条**，并把语义白名单挪到它上面——
+        白名单是防“模型自己编动作名”的唯一栅栏，挂在没人用的标签上等于没挂。
+        （`[do:]` 仍然照旧解析，向后兼容不变。）
         """
         try:
             renderer = getattr(self, '_renderer', None) or getattr(self, '_pet_renderer', None)
@@ -1181,10 +1191,13 @@ class HanakoPetAdapter:
             if not options:
                 return ""
             return (
-                "3. 可选：想配合一个表情或小动作时加 [do:名字]，"
-                "**只能从这些里选**："
+                "3. 可选：想配合一个表情或小动作时加 "
+                '[action:{"gesture":"名字","intensity":0.7}]，'
+                "gesture **只能从这些里选**："
                 + options
-                + "。例：[feel:0.8,0.6] [do:开心]，[feel:-0.3,-0.2] [do:叹气]。"
+                + "。intensity 可省（默认 0.7）。"
+                '例：[feel:0.8,0.6] [action:{"gesture":"开心"}]，'
+                '[feel:-0.3,-0.2] [action:{"gesture":"叹气"}]。'
                 "没有合适的就不加——不加也自然。"
             )
         except Exception:

@@ -111,11 +111,14 @@ class _StubRenderer:
     _AI_DO_PROMPT = _L._AI_DO_PROMPT
 
 
-def test_action_prompt_mentions_do_tag():
+def test_action_prompt_mentions_action_tag():
     """只接线不改 prompt 等于没接——AI 不知道能点什么。
 
     2026-09-11 变更：prompt 不再列 53 个预设名（实测那样 `[do:]` 全历史
-    0 次使用），改为少量语义标签。本测试只锁「必须提到 [do:] 且给出选项」，
+    0 次使用），改为少量语义标签。
+    2026-09-19 再修：实测模型从不输出 `[do:]`，一直是 `[action:{...}]`
+    （79 条检测里 31 vs 0），所以教学标签改成后者，白名单跟着走。
+    本测试只锁「必须提到真在用的那条标签且给出选项与字段名」，
     具体选项集与别名映射由 test_do_aliases.py 覆盖。
     """
     from core.harness_adapter import HanakoPetAdapter
@@ -125,9 +128,11 @@ def test_action_prompt_mentions_do_tag():
 
     prompt = a._build_action_prompt()
 
-    assert "[do:" in prompt
+    assert "[action:" in prompt
+    assert "gesture" in prompt, "要给出字段名"
+    assert "[do:" not in prompt, "停教已无人使用的旧缩写"
     assert "害羞" in prompt, "语义选项必须出现在 prompt 里"
-    assert "[feel:" in prompt, "示例应体现 [do:] 与 [feel:] 搭配"
+    assert "[feel:" in prompt, "示例应体现动作与 [feel:] 搭配"
 
 
 def test_action_prompt_survives_missing_renderer():
