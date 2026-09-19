@@ -194,7 +194,7 @@ class BehaviorMixin:
             going = self._idle_stage
             self._idle_stage = None
             if going is not None:
-                self._show_bubble("你回来啦~", emotion="happy")
+                self._greet_on_return(idle_secs)
         elif self._idle_stage is None and idle_secs >= 300:
             self._idle_stage = "idle"
 
@@ -254,9 +254,10 @@ class BehaviorMixin:
     def _on_foreground_change(self, app_name: str, app_category: str, title: str):
         """前台窗口变化 → 重置 idle 计时器 + 窗口互动 + 事件触发截图"""
         going = self._idle_stage
+        away = time.time() - getattr(self, "_last_interaction", time.time())
         self._mark_user_interaction()
         if going is not None:
-            self._show_bubble("你回来啦~", emotion="happy")
+            self._greet_on_return(away)
 
         # 窗口互动：桌宠靠近当前窗口（带冷却）——仅当显式开启 auto_walk 时触发。
         # 默认关闭：用户不希望在每次切换前台窗口时桌宠自动跳过去（位置漂移、
@@ -669,6 +670,37 @@ class BehaviorMixin:
         except Exception:
             logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
 
+    # ── 生动层：别每次都一模一样（见 core/liveliness.py）──
+
+    def _greet_on_return(self, away_seconds: float):
+        """回到电脑前打招呼：按“离开多久 + 现在几点”选话，且不立刻重复。
+
+        原实现是**每次都同一句**「你回来啦~」+ 同一个 happy —— 再智能的东西，
+        只要每次一样，就会显出是机器。
+        """
+        try:
+            from core.liveliness import greeting
+
+            g = greeting(away_seconds, hour=time.localtime().tm_hour)
+            self._show_bubble(g["text"], emotion=g["emotion"])
+            return
+        except Exception:
+            logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
+        self._show_bubble("你回来啦~", emotion="happy")  # 生动层不可用时的保底
+
+    def _say_from(self, key: str, fallback: str, fallback_emotion: str = "neutral"):
+        """从生动层台词池取一句显示；池子不可用时退回写死的那句。"""
+        try:
+            from core.liveliness import get_bank
+
+            picked = get_bank().pick(key)
+            if picked:
+                self._show_bubble(picked["text"], emotion=picked["emotion"])
+                return
+        except Exception:
+            logger.debug("behavior_mixin: 非致命异常(已静默吞掉)", exc_info=True)
+        self._show_bubble(fallback, emotion=fallback_emotion)
+
     def _do_screen_proactive(self, prompt: str):
         """在主线程处理屏幕内容主动对话
 
@@ -678,7 +710,7 @@ class BehaviorMixin:
         try:
             # 不显示原始提示词（那是内部 prompt，不是给用户看的）
             # 只显示思考状态
-            self._show_bubble("🔍 正在观察...", emotion="thinking")
+            self._say_from("observing", "🔍 正在观察...", "thinking")
             self._is_thinking = True
             
             # 发送给对话引擎生成回复（会触发 TTS）
@@ -688,14 +720,15 @@ class BehaviorMixin:
                     self._engine.send(prompt, source="proactive")
                 except Exception as e:
                     logger.error("Screen proactive LLM 调用失败: %s", e)
-                    # 显示默认回复
-                    self._show_bubble("你看了个有趣的视频啊～", emotion="happy")
+                    # 显示默认回复（**不猜内容**：原来的“你看了个有趣的视频啊～”
+                    # 是在断言自己根本没看清的东西）
+                    self._say_from("screen_fallback", "我刚才没看清。", "neutral")
             elif hasattr(self, '_conversation_engine') and self._conversation_engine:
                 try:
                     self._conversation_engine.send(prompt)
                 except Exception as e:
                     logger.error("Screen proactive LLM 调用失败: %s", e)
-                    self._show_bubble("你看了个有趣的视频啊～", emotion="happy")
+                    self._say_from("screen_fallback", "我刚才没看清。", "neutral")
             
             # 记录日志
             logger.info("Screen proactive: %s", prompt[:80])
@@ -725,7 +758,7 @@ class BehaviorMixin:
                 logger.debug("Screen proactive 主动动作触发失败: %s", e)
         except Exception as e:
             logger.error("Screen proactive failed: %s", e)
-            self._show_bubble("你看了个有趣的视频啊～", emotion="happy")
+            self._say_from("screen_fallback", "我刚才没看清。", "neutral")
 
     def _on_screen_update(self, description: str):
         """屏幕分析结果更新（后台线程回调，通过信号绕回主线程）"""
