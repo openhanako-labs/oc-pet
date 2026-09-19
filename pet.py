@@ -69,6 +69,7 @@ from pet_mixins.bubble_mixin import BubbleMixin
 from pet_mixins.interface_mixin import InterfaceMixin
 from pet_mixins.perception_mixin import PerceptionMixin
 from pet_mixins.panels_mixin import PanelsMixin
+from pet_mixins.perch_mixin import PerchMixin
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ except ImportError:
 
 # ─── 设置对话框 ─────────────────────────────────────────
 
-class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, BehaviorMixin, VoiceProviderMixin, PlayMixin, BubbleMixin, InterfaceMixin, PerceptionMixin, PanelsMixin, QWidget):
+class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, BehaviorMixin, VoiceProviderMixin, PlayMixin, BubbleMixin, InterfaceMixin, PerceptionMixin, PanelsMixin, PerchMixin, QWidget):
     """透明桌面宠物窗口"""
 
     # 跨线程信号：后台线程 -> 主线程
@@ -1878,6 +1879,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         x = max(sg.left(), min(x, sg.right() - w + 1))
         self.move(x, y)
 
+    # （栖息行为按项目规矩在 pet_mixins/perch_mixin.py；这里只留菜单与 tick 接线）──────────────────────────────
+
     def fit_window_to_model(self, w: int, h: int):
         """窗口贴合到模型实际大小（Live2D 渲染器测量后回调）。
 
@@ -2159,6 +2162,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         # 7. 鼠标追逐：持续跟随光标
         if getattr(self, '_chasing', False):
             self._update_chase()
+        # 8. 栖息：站在窗口上（O1-P4）——跟着目标窗口走，该下来时自己下来
+        if getattr(self, '_perch', None):
+            self._perch_tick()
 
     # ── TTS 口型 ──
 
@@ -2251,6 +2257,10 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._interact_menu.setStyleSheet(self._menu_qss())
         a_chat = self._interact_menu.addAction("💬 对话", self._toggle_input)
         a_chat.setShortcut(_get_shortcut("toggle_input"))
+        # O1-P4 栖息：站到当前前台窗口上（miku 太大 ⇒ 会临时缩小，下来恢复）
+        self._perch_action = self._interact_menu.addAction("🪟 站在窗口上", self._toggle_perch)
+        self._perch_action.setCheckable(True)
+        self._perch_action.setChecked(False)
         self._voice_action = self._interact_menu.addAction("🎤 说话", self._toggle_voice)
         self._voice_action.setShortcut(_get_shortcut("toggle_voice"))
         self._voice_continuous_action = self._interact_menu.addAction("🎤 持续监听", self._toggle_voice_continuous)
