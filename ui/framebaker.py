@@ -133,37 +133,36 @@ def stop_framebaker() -> bool:
         logger.warning("停止 FrameBaker 失败: %s", e)
         return False
 
-# MCP 客户端（未来实现）
+# MCP 客户端（占位，**未实现**；本机未安装 FrameBaker，无调用方）
 class FrameBakerMCP:
-    """FrameBaker MCP 客户端
-    
-    通过 HTTP POST /mcp 与 FrameBaker 通信
-    支持 34 个 AI 工具：
-    - 项目管理
-    - 帧编辑
-    - 材质管理
-    - 生成/遮罩
-    - 导出 spritesheet
+    """FrameBaker MCP 客户端（占位类，未实现）。
+
+    ⚠️ 本类目前**没有任何调用方**（全库仅此定义）；本机也未检测到 FrameBaker
+    实例。因此不凭空实现：方法一律抛 ``NotImplementedError``（而不是静默返回
+    ``None``），避免将来误把它当成可用接口。
+
+    设计意图（未经验证）：通过 HTTP POST ``{endpoint}/mcp`` 与 FrameBaker 通信。
+    真要落地时，需先拿到 FrameBaker 的 MCP 协议规格 + 一个可用实例。
     """
-    
+
     def __init__(self, endpoint: str = FRAMEBAKER_MCP_ENDPOINT):
         self.endpoint = endpoint
         self._session_id = None
-    
+
     def initialize(self) -> bool:
-        """初始化 MCP 连接"""
-        # TODO: 实现 MCP 协议握手
-        pass
-    
+        """初始化 MCP 连接（未实现）。"""
+        raise NotImplementedError(
+            "FrameBakerMCP.initialize 未实现：无 FrameBaker 实例与 MCP 协议规格")
+
     def call_tool(self, tool_name: str, arguments: dict) -> dict:
-        """调用 FrameBaker 工具"""
-        # TODO: 实现 MCP 工具调用
-        pass
-    
+        """调用 FrameBaker 工具（未实现）。"""
+        raise NotImplementedError(
+            "FrameBakerMCP.call_tool 未实现：无 FrameBaker 实例与 MCP 协议规格")
+
     def export_spritesheet(self, project_id: str, output_path: str) -> bool:
-        """导出 spritesheet"""
-        # TODO: 调用 FrameBaker 导出 API
-        pass
+        """导出 spritesheet（未实现）。"""
+        raise NotImplementedError(
+            "FrameBakerMCP.export_spritesheet 未实现：无 FrameBaker 实例与 MCP 协议规格")
 
 # 菜单集成（供 pet.py 调用）
 def get_framebaker_menu_items():
