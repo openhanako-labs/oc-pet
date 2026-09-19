@@ -39,9 +39,15 @@ EventBus.emit 在 MCP 线程同步执行，但 handler 只做状态登记/信号
     {
       "enabled": false,
       "port": 8979,
-      "auth_token": "",
       "allow_actions": true
     }
+
+⚠ 关于鉴权（2026-09-19 核实）
+--------------------------------------
+只绑 127.0.0.1，**未实现 token 校验**。config 里曾记过 `auth_token` 键，但
+代码从未读取它（只存在于文档字符串）——已从上面的示例里删掉，避免误以为
+“填了 token 就安全”。本机任意进程都能调 `pet_say` / `pet_set_emotion` 等
+写工具；要真鉴权需另行实现（需要时再说）。
 
 端口选择：8977(状态) / 8988(外部触发) / 8077(手机) / 8889(SkyrimNet) 已占，
 取 **8979**。
@@ -378,6 +384,8 @@ def build_from_config(
         enabled (bool)        默认 False
         port (int)            默认 8979
         allow_actions (bool)  默认 True
+
+    注：不含鉴权（无 token 校验），见模块顶部说明。
     """
     cfg = (config or {}).get("mcp_server") or {}
     if not cfg.get("enabled", False):
