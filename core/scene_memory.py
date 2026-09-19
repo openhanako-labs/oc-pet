@@ -208,8 +208,8 @@ class SceneMemory:
         if self._hybrid is not None or self._hybrid_failed:
             return self._hybrid
         try:
-            from .memory_hybrid import HybridMemoryRecall
-            self._hybrid = HybridMemoryRecall()
+            from .memory_hybrid import HybridMemoryRecall, default_score_patch
+            self._hybrid = HybridMemoryRecall(score_patch=default_score_patch())
         except Exception as e:
             logger.warning("SceneMemory 混合召回初始化失败（用精确匹配）: %s", e)
             self._hybrid_failed = True

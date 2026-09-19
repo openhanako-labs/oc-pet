@@ -325,3 +325,70 @@ def test_find_matching_skips_in_progress_scene():
     sm._scenes = scenes
     assert sm.find_matching(category="work", scenario="late_night_work",
                             tags=["work"], max_results=3) == []
+
+
+# ── G4① score_patch 显著度加权 ──────────────────────────────────────────
+
+
+def test_salience_patch_gain_zero_is_identity():
+    from core.memory_hybrid import make_salience_patch
+    p = make_salience_patch(0.0)
+    assert p({"id": "f", "importance": 10, "confidence": 1.0}, 0.03) == 0.03
+
+
+def test_salience_patch_boosts_high_importance_fact():
+    from core.memory_hybrid import make_salience_patch
+    p = make_salience_patch(0.5)
+    assert p({"id": "a", "importance": 1, "confidence": 1.0}, 0.02) == pytest.approx(0.02)
+    assert p({"id": "b", "importance": 10, "confidence": 1.0}, 0.02) == pytest.approx(0.02 * 1.5)
+    # confidence 缺失 → 按 1.0（不得因 None 反而被押低）
+    assert p({"id": "c", "importance": 10, "confidence": None}, 0.02) == pytest.approx(0.02 * 1.5)
+
+
+def test_salience_patch_scene_uses_count_capped():
+    from core.memory_hybrid import make_salience_patch
+    p = make_salience_patch(0.5)
+    assert p({"id": "s", "count": 0}, 0.02) == pytest.approx(0.02)
+    assert p({"id": "s", "count": 5}, 0.02) == pytest.approx(0.02 * 1.5)
+    assert p({"id": "s", "count": 99}, 0.02) == pytest.approx(0.02 * 1.5)  # 封顶
+
+
+def test_recall_score_patch_promotes_and_records_raw():
+    """加权能把重要项顶到第一，并留下加权前分数（_rrf_raw）。"""
+    from core.memory_hybrid import make_salience_patch
+    docs = [
+        {"id": "plain", "text": "深夜写代码 深夜 工作"},
+        {"id": "vip", "text": "深夜写代码 深夜 工作",
+         "importance": 10, "confidence": 1.0},
+    ]
+    recall = HybridMemoryRecall(hybrid_enabled=True,
+                                embedding_provider=NoopEmbeddingProvider(),
+                                score_patch=make_salience_patch(0.5))
+    hits = recall.recall("深夜写代码", docs)
+    assert [h["id"] for h in hits] == ["vip", "plain"]
+    assert hits[0]["_rrf_raw"] is not None
+    assert hits[0]["_rrf_score"] > hits[0]["_rrf_raw"]
+    # 无 importance → 恒等，分数不变
+    assert hits[1]["_rrf_raw"] == pytest.approx(hits[1]["_rrf_score"])
+
+
+def test_recall_score_patch_exception_keeps_base_score():
+    def boom(doc, base):
+        raise RuntimeError("bad patch")
+
+    r = HybridMemoryRecall(hybrid_enabled=True,
+                           embedding_provider=NoopEmbeddingProvider(),
+                           score_patch=boom)
+    hits = r.recall("深夜写代码", DOCS)
+    assert hits, "patch 抛异常不应导致召回失败"
+    for d in hits:
+        assert d["_rrf_score"] == pytest.approx(d["_rrf_raw"])
+
+
+def test_default_score_patch_respects_config(monkeypatch):
+    import core.memory_hybrid as mh
+    monkeypatch.setattr(mh, "_memory_config", lambda: {"score_patch": False})
+    assert mh.default_score_patch() is None
+    monkeypatch.setattr(mh, "_memory_config",
+                        lambda: {"score_patch": True, "score_patch_gain": 0.5})
+    assert mh.default_score_patch() is not None

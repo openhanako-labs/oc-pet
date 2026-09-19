@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import math
 import logging
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .memory_keywords import tokenize
 
@@ -302,6 +302,59 @@ def rrf_fuse(
     return out
 
 
+# ── 显著度加权（score_patch：RRF 之后的二次修正）──────────────────────
+
+#: ``(doc, base_score) -> 新分``。丢错不抛：调用方自行防御。
+ScorePatch = Callable[[dict, float], float]
+
+
+def _clamp01(x: Any) -> float:
+    try:
+        return max(0.0, min(1.0, float(x)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def make_salience_patch(gain: float = 0.5) -> ScorePatch:
+    """构造「显著度加权」 score_patch：``score = base * (1 + gain * w)``，w ∈ [0,1]。
+
+    w 的来源按 doc 字段优先级：
+      1. 事实（有 ``importance``）：``w = imp_norm * (0.5 + 0.5 * confidence)``，
+         ``imp_norm = (clamp(importance,1,10) - 1) / 9``；``confidence`` 缺省按 1.0
+      2. 场景（有 ``count``）：``w = min(count / 5, 1)``（出现频次）
+      3. 其它：``salience`` 字段直接取（clamp 0..1）
+
+    性质：``gain=0`` → 恒等；w ≥ 0 → factor ≥ 1（只放大、不缩小），既不改
+    变「谁入选」/不改入选集，只调入选者之间的名次。base 是 RRF（量级 ≈ 1/60），
+    加权不足以盖过强词法命中，只动近邻名次。
+    """
+    g = max(0.0, float(gain or 0.0))
+
+    def _patch(doc: dict, base: float) -> float:
+        if g == 0.0 or not isinstance(doc, dict):
+            return base
+        if "importance" in doc:
+            try:
+                imp = int(doc.get("importance") or 1)
+            except (TypeError, ValueError):
+                imp = 1
+            imp_norm = (max(1, min(10, imp)) - 1) / 9.0
+            conf = doc.get("confidence", 1.0)
+            if conf is None:
+                conf = 1.0
+            w = imp_norm * (0.5 + 0.5 * _clamp01(conf))
+        elif "count" in doc:
+            try:
+                w = min(max(0.0, float(doc.get("count") or 0)) / 5.0, 1.0)
+            except (TypeError, ValueError):
+                w = 0.0
+        else:
+            w = _clamp01(doc.get("salience", 0.0))
+        return base * (1.0 + g * w)
+
+    return _patch
+
+
 # ── 配置读取 ──────────────────────────────────────────────────────────
 
 
@@ -314,6 +367,19 @@ def _memory_config() -> dict:
     except Exception as exc:
         logger.debug("[memory_hybrid] 读取 memory 配置失败: %s", exc)
         return {}
+
+
+def default_score_patch() -> ScorePatch | None:
+    """按 config 返回默认 score_patch；关闭 → None（行为与旧版完全一致）。
+
+    config ``memory`` 段：
+      - ``score_patch``（bool，默认 False）：总开关
+      - ``score_patch_gain``（float，默认 0.5）：放大系数
+    """
+    cfg = _memory_config()
+    if not bool(cfg.get("score_patch", False)):
+        return None
+    return make_salience_patch(cfg.get("score_patch_gain", 0.5))
 
 
 def _default_embedding_provider() -> EmbeddingProvider | None:
@@ -362,6 +428,8 @@ class HybridMemoryRecall:
         budget_each: 每路取 top N 进入融合。
         budget_total: 融合后返回条数上限。
         rrf_k: RRF 融合常数。
+        score_patch: RRF 融合后的二次修正 ``(doc, base) -> 新分``；None → 不修正
+            （见 ``make_salience_patch`` / ``default_score_patch``）。
     """
 
     def __init__(
@@ -375,6 +443,7 @@ class HybridMemoryRecall:
         budget_each: int = DEFAULT_BUDGET_EACH,
         budget_total: int = DEFAULT_BUDGET_TOTAL,
         rrf_k: int = DEFAULT_RRF_K,
+        score_patch: ScorePatch | None = None,
     ):
         if hybrid_enabled is None:
             hybrid_enabled = bool(_memory_config().get("hybrid_bm25", True))
@@ -388,6 +457,7 @@ class HybridMemoryRecall:
         self._budget_each = max(1, int(budget_each))
         self._budget_total = max(1, int(budget_total))
         self._rrf_k = max(1, int(rrf_k))
+        self._score_patch = score_patch
 
     # ── 属性 ──
 
@@ -447,12 +517,25 @@ class HybridMemoryRecall:
                 (d, s) for d, s in cosine_scored if s >= self._cosine_threshold
             ][:self._budget_each]
 
-        # 3) RRF 融合
+        # 3) RRF 融合（有 score_patch 时先不截断，让被加权项也能浮上来）
+        patch = self._score_patch
         fused = rrf_fuse(
             bm25_top, cosine_top,
             k=self._rrf_k,
-            budget_total=self._budget_total,
+            budget_total=(len(pool) if patch is not None else self._budget_total),
         )
+        # 4) score_patch 二次修正（记录 _rrf_raw，便于对照「加权前/后」）
+        if patch is not None and fused:
+            for d in fused:
+                base = float(d.get('_rrf_score', 0.0) or 0.0)
+                d['_rrf_raw'] = base
+                try:
+                    d['_rrf_score'] = float(patch(d, base))
+                except Exception as exc:
+                    logger.debug("[memory_hybrid] score_patch 失败(保持原分): %s", exc)
+                    d['_rrf_score'] = base
+            fused.sort(key=lambda d: float(d.get('_rrf_score', 0.0) or 0.0), reverse=True)
+            fused = fused[:self._budget_total]
         if fused:
             logger.debug(
                 "[memory_hybrid] query=%r bm25_scored=%d cosine_scored=%d fused=%d",
@@ -465,6 +548,9 @@ __all__ = [
     "HybridMemoryRecall",
     "EmbeddingProvider",
     "NoopEmbeddingProvider",
+    "ScorePatch",
+    "make_salience_patch",
+    "default_score_patch",
     "bm25_rank",
     "cosine_rank",
     "rrf_fuse",

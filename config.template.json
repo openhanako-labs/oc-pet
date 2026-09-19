@@ -136,6 +136,8 @@
     "budget_percent": 1.0,
     "budget_mode": "manual",
     "hybrid_bm25": true,
+    "score_patch": false,
+    "score_patch_gain": 0.5,
     "embedding": {
       "enabled": false,
       "provider": "local",

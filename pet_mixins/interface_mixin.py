@@ -252,7 +252,9 @@ class InterfaceMixin:
                     parts = [str(f.get(k, "")) for k in
                              ("text", "subject", "predicate", "object", "topic") if f.get(k)]
                     pool.append({"id": f"fact:{f.get('id', '')}", "kind": "fact",
-                                 "text": " ".join(parts)})
+                                 "text": " ".join(parts),
+                                 "importance": f.get("importance"),
+                                 "confidence": f.get("confidence")})
         except Exception as e:
             logger.debug("recall: 读事实失败: %s", e)
         try:
@@ -263,19 +265,24 @@ class InterfaceMixin:
                              + [str(t) for t in (s.tags or [])]
                              + [str(t) for t in (s.topics or [])])
                     pool.append({"id": f"scene:{s.scene_id}", "kind": "scene",
-                                 "text": " ".join(p for p in parts if p)})
+                                 "text": " ".join(p for p in parts if p),
+                                 "count": getattr(s, "count", 0)})
         except Exception as e:
             logger.debug("recall: 读场景失败: %s", e)
         try:
-            from core.memory_hybrid import HybridMemoryRecall
-            hits = HybridMemoryRecall().recall(q, pool)
+            from core.memory_hybrid import HybridMemoryRecall, default_score_patch
+            patch = default_score_patch()
+            hits = HybridMemoryRecall(score_patch=patch).recall(q, pool)
         except Exception as e:
             return {"ok": False, "error": f"召回失败: {e}"}
         return {
             "ok": True, "query": q, "pool_size": len(pool),
+            "weighted": patch is not None,
             "hits": [
                 {"id": d.get("id"), "kind": d.get("kind"),
                  "score": round(float(d.get("_rrf_score", 0.0) or 0.0), 4),
+                 "raw_score": (None if d.get("_rrf_raw") is None
+                               else round(float(d["_rrf_raw"]), 4)),
                  "text": (d.get("text", "") or "")[:160]}
                 for d in hits[:20]
             ],

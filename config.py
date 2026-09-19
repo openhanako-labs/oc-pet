@@ -143,6 +143,8 @@ DEFAULT_CONFIG = {
         # P0-3 BM25+RRF 混合检索开关（默认开）：场景/事件检索从"标签精确匹配"升级为
         # "CJK 2/3-gram 关键词 + BM25 + RRF" 混合召回；无 embedding 时自动退化为 BM25-only
         "hybrid_bm25": True,
+        "score_patch": False,
+        "score_patch_gain": 0.5,
         # P1-1 向量嵌入（默认关）：本地 ONNX EmbeddingService，为 hybrid 检索的
         # cosine 路径提供语义向量；onnxruntime 不可用/模型缺失时自动降级纯 BM25（fallback gate）
         "embedding": {
