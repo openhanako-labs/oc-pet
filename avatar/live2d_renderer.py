@@ -1493,6 +1493,31 @@ class Live2DRenderer(AvatarRenderer):
             # 失败 = 视觉不跟随鼠标，用户 100% 能感知，不能静默
             self._note_frame_failure("GazeParams", e)
 
+    def _slew_lip_open(self, target: float) -> float:
+        """音素级开口度过一道起音/收音（对齐 AgentAtelierR 40ms / 90ms）。
+
+        为什么只在这条路：`_update_mouth` 里振幅路径**本来就有**非对称包络
+        （``k = 0.55 if level > env else 0.18``，起快落慢）；音素路径是裸阶梯，
+        而且写入时 weight=1.0（SDK 不插值），所以 0.95 的 /a/ 接到 0.30 的 /i/
+        会一帧硬切。
+
+        与帧率无关（走 core.lip_sync.slew 的指数逆近）。首次调用直接采用目标值
+        （不从 0 慢慢爬，避免开口迟一步）。
+        """
+        from core.lip_sync import slew
+
+        now = time.monotonic()
+        last = getattr(self, "_mouth_slew_at", 0.0)
+        dt = 0.0 if last <= 0.0 else min(0.5, max(0.0, now - last))
+        self._mouth_slew_at = now
+        cur = getattr(self, "_mouth_slew_value", None)
+        if cur is None:
+            self._mouth_slew_value = float(target)
+            return float(target)
+        out = slew(cur, target, dt)
+        self._mouth_slew_value = out
+        return out
+
     def _update_mouth(self) -> None:
         """说话口型。三级优先（LIP-1 2026-09-14）：
 
@@ -1513,6 +1538,8 @@ class Live2DRenderer(AvatarRenderer):
             self._mouth_env = 0.0
             self._mouth_lip_open = 0.0
             self._mouth_lip_form = 0.0
+            self._mouth_slew_value = 0.0      # 起音/收音重新起算
+            self._mouth_slew_at = 0.0
             try:
                 self._model.SetParameterValue(P.ParamMouthOpenY, 0.0, 1.0)
             except Exception as e:
@@ -1525,6 +1552,9 @@ class Live2DRenderer(AvatarRenderer):
         if lip is not None:
             # ── 音素级：嘴型由发音决定 ──
             lip_open, lip_form = lip
+            # 起音/收音：时间轴给的是**阶梯**（每字保持 0.345s 后一帧跳变），
+            # 这里磨成曲线。振幅那条路径本就有非对称包络，所以只补这条。
+            lip_open = self._slew_lip_open(lip_open)
             self._mouth_lip_open = lip_open
             self._mouth_lip_form = lip_form
             # 振幅作为“音量缩放”：声大时形状更夸张，但不改变形状本身
@@ -1552,6 +1582,11 @@ class Live2DRenderer(AvatarRenderer):
             val = 0.5 + 0.5 * math.sin(self._mouth_phase * 3.0)
             val = 0.15 + val * 0.6
             form = 0.0
+
+        # 开口度上限（审美旋钮，核心默认 1.0 = 不压；见 core/lip_sync.set_mouth_peak）
+        from core.lip_sync import get_mouth_peak
+
+        val = min(val, get_mouth_peak())
 
         try:
             self._model.SetParameterValue(P.ParamMouthOpenY, val, 1.0)

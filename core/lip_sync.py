@@ -37,6 +37,7 @@ R2 实测 Paraformer 确实输出字符级时间戳（每字 start/end ms），�
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -50,6 +51,83 @@ except ImportError:  # pragma: no cover
     _PYPINYIN_OK = False
     Style = None  # type: ignore
     _pinyin = None  # type: ignore
+
+
+# ── 口型平滑（起音 / 收音）────────────────────────────
+#
+# 为什么要它：`sample()` 给的是**阶梯**——每个字保持恒定开口度 0.345s，
+# 字与字之间一帧跳变（写入 `SetParameterValue(..., 1.0)`，SDK 不插值）。
+# 而振幅那条路径**本来就有**非对称包络（`k = 0.55 if level > env else 0.18`，
+# 起快落慢）——音素这条路没有，于是一个 0.95 的 /a/ 接到 0.30 的 /i/ 会硬切。
+#
+# 对齐 AgentAtelierR：40ms 起音 / 90ms 收音（收比起慢）。
+# 这里的“秒”是**到达约 95% 目标**所需的时间，所以时间常数 τ = 秒/3。
+MOUTH_ATTACK_S = 0.04
+MOUTH_RELEASE_S = 0.09
+_TAU_RATIO = 1.0 / 3.0
+
+# 开口度上限（审美旋钮，默认 1.0 = 不压）。
+# AgentAtelierR 用 55% 避免“每次都张满嘴”；oc-pet 的 /a/ 是自己调到 0.95 的
+# （miku 模型实测值）——所以**不做默认压制**，留给你按自己眼睛调。
+_mouth_peak: float = 1.0
+
+
+def set_mouth_peak(peak) -> float:
+    """设置开口度上限（0~1）。无效输入回退 1.0（不压）。返回生效值。"""
+    global _mouth_peak
+    try:
+        v = float(peak)
+    except (TypeError, ValueError):
+        v = 1.0
+    if v <= 0.0 or v > 1.0:
+        v = 1.0
+    _mouth_peak = v
+    logger.info("口型开口上限 = %.2f%s", v, "（不压）" if v >= 1.0 else "")
+    return v
+
+
+def get_mouth_peak() -> float:
+    """当前开口度上限（默认 1.0）。"""
+    return _mouth_peak
+
+
+def slew(cur: float, target: float, dt: float, *, attack_s: float = MOUTH_ATTACK_S,
+         release_s: float = MOUTH_RELEASE_S, tau_ratio: float = _TAU_RATIO) -> float:
+    """指数逆近一步：把阶梯型目标磨成有起音/收音的曲线。
+
+    与帧率无关（用 dt 而不是固定系数）：``cur += (target-cur) * (1-exp(-dt/τ))``。
+    升（``target > cur``）用 ``attack_s``，降用 ``release_s``——**收比起慢**，
+    这是人说话的样子。
+
+    Args:
+        cur: 上一步的值。
+        target: 目标值。
+        dt: 距上一步的秒数；<=0 或非法时视为“无时间信息”→ 直接跳到目标
+            （宁可不管，也不要把嘴卡在旧值上）。
+        attack_s / release_s: 到达约 95% 目标所需秒数；<=0 表示该方向不平滑。
+        tau_ratio: 秒 → 时间常数的换算比（默认 1/3）。
+
+    Returns:
+        新的当前值（与输入同为浮点，不做 0~1 截断——截断是调用方的事）。
+    """
+    try:
+        cur = float(cur)
+        target = float(target)
+        dt = float(dt)
+    except (TypeError, ValueError):
+        return target
+    if dt <= 0.0 or not (dt == dt):          # 无 dt（NaN 也走这）→ 不做平滑
+        return target
+    reach = attack_s if target > cur else release_s
+    try:
+        reach = float(reach)
+    except (TypeError, ValueError):
+        reach = 0.0
+    if reach <= 0.0:
+        return target
+    tau = max(1e-4, reach * float(tau_ratio))
+    alpha = 1.0 - math.exp(-dt / tau)
+    return cur + (target - cur) * alpha
 
 
 # ── 语速与时长 ──

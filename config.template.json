@@ -256,6 +256,9 @@
     "disabled": [],
     "games": []
   },
+  "lip_sync": {
+    "mouth_peak": 1.0
+  },
   "llm_gate": {
     "enabled": true,
     "max_concurrent": 1,

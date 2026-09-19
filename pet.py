@@ -994,6 +994,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             self._init_game_watch()
             # O1-P2：初始化后台 LLM 全局闸门（并发上限 + 每源预算 + 429 全局冷却）
             self._init_llm_gate()
+            # O3：口型开口上限（默认不压，只留旋钮）
+            self._init_lip_sync()
             # 跨天首启问候（延迟到窗口稳定后弹气泡）
             from core.companion_hooks import build_morning_greeting
             greet = build_morning_greeting(self._companion_memory)
@@ -1005,6 +1007,24 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         except Exception as e:
             logger.warning("P2 陪伴记忆初始化失败（非致命）: %s", e)
             self._companion_memory = None
+
+    def _init_lip_sync(self):
+        """按 ``config.lip_sync`` 配置口型。
+
+        起音/收音（40ms/90ms）是常量，本身不需配置；这里只接**开口上限**：
+        ``mouth_peak`` 默认 1.0 = 不压（保持现行为）。
+
+        为何不给默认值：AgentAtelierR 用 55% 避免“每次都张满嘴”，但 oc-pet 的
+        ``/a/`` 是自己调到 0.95 的（miku 模型实测值）——压多少是**看脸决定**的事，
+        我看不见成品，不替你定。想试就把 ``lip_sync.mouth_peak`` 改成 0.75 或 0.55。
+        """
+        try:
+            from core.lip_sync import set_mouth_peak
+
+            cfg = (self.config.get("lip_sync", {}) if hasattr(self, "config") else {}) or {}
+            set_mouth_peak(cfg.get("mouth_peak", 1.0))
+        except Exception as e:
+            logger.warning("口型配置失败（非致命）: %s", e)
 
     def _init_llm_gate(self):
         """O1-P2：按 ``config.llm_gate`` 配置全局闸门（启动时一次）。
