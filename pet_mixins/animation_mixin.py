@@ -70,7 +70,12 @@ class AnimationMixin:
         全程 try/except 兜底：过渡若异常，降级为 snap 瞬切，绝不崩溃。
         """
         try:
-            self._renderer.play_anim(seq_name, emotion=emotion)
+            # 2026-09-19：**必须看返回值**。这个契约渲染器早就写着
+            # （“False 表示无匹配（调用方不得声称已触发）”），但没人守——
+            # 切换失败时又继续把 _anim_seq/_anim_idx 抄成渲染器的值，状态就错开了。
+            if not self._renderer.play_anim(seq_name, emotion=emotion):
+                logger.warning("_set_anim_seq: %r 不是可用动作，已忽略（不切状态）", seq_name)
+                return False
             self._anim_seq = self._renderer._anim_seq
             self._anim_idx = self._renderer._anim_idx
             self._anim_range = self._renderer._anim_range
@@ -79,11 +84,12 @@ class AnimationMixin:
             if tr is None or style == "snap":
                 if tr is not None:
                     tr.reset(1.0)  # 确保全亮（snap 不做过渡）
-                return
+                return True
 
-            # fade / spring：先压暗再弹性淡入，表现"旧动作收尾、新动作登场"
+            # fade / spring：先压暗再弹性淡入，表现“旧动作收尾、新动作登场”
             tr.reset(0.0)
             tr.go(1.0, style=style)
+            return True
         except Exception:
             logger.exception("情绪过渡异常，降级 snap: %s", seq_name)
             try:

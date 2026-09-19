@@ -2610,24 +2610,33 @@ class Live2DRenderer(AvatarRenderer):
             2026-09-10：原来返回 None，调用方无法区分「播了」与「没播」，
             导致 apply_action_intent 无条件打「已触发动作」。
         """
-        self._current_anim = anim
+        # 2026-09-19 修：**先解析、成功了再改状态**。
+        # 原来第一行就是 self._current_anim = anim，于是一个不存在的名字
+        # （外部触发打错字 / MCP 传了没听过的名字）会把动画状态改坏：
+        # 渲染循环随后去找一个不存在的序列 → **桌宠画面整体坏掉**
+        # （实测帧差 204 = 画面完全变了，而日志里没有任何报错）。
         if emotion:
             # 缺陷② 修复：播放指定动作时，情绪只同步表情、不再重复播情绪 motion，
             # 否则“情绪 motion + 动作 motion”连着播放，出现「生气表情 + 唱歌动作」错位。
             self.set_emotion_expression_only(emotion)
         # Live2D：按精灵动画名映射到 motion 文件名播放（组名是空串匹配不上）
         kws = self._ANIM_TO_MOTION_KW.get(anim) or self._ANIM_TO_MOTION_KW.get(emotion)
-        if kws:
-            if self._play_motion_kw(*kws):
-                return True
+        if kws and self._play_motion_kw(*kws):
+            self._current_anim = anim
+            return True
         # fallback：老逻辑（组名匹配）
         if self._model and anim in self._motion_groups:
             try:
                 self._model.StartRandomMotion(anim, self._live2d.MotionPriority.NORMAL)
                 self._note_motion_started("")  # 未知 motion → 按限时手势处理
+                self._current_anim = anim
                 return True
             except Exception:
                 logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+        logger.warning(
+            "Live2DRenderer.play_anim: 未知动作 %r，已忽略（不污染动画状态）可用: %s",
+            anim, ", ".join(sorted(self._ANIM_TO_MOTION_KW)[:12]),
+        )
         return False
 
     def set_emotion_expression_only(self, emotion: str) -> None:
