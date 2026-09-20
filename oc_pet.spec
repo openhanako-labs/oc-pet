@@ -14,6 +14,7 @@
 #     若你创建后需打包，取消对应 datas 行的注释即可。
 
 import os
+import re
 
 block_cipher = None
 
@@ -26,11 +27,86 @@ icon = icon_path if os.path.exists(icon_path) else None
 
 # ── 数据文件 / Data files (src, dst) ──
 # onedir 模式下 dst 为相对于产物根目录 (dist/oc_pet/) 的路径
-datas = [
-    ('characters', 'characters'),   # 内置角色精灵 / built-in character sprites
-    # ('assets', 'assets'),        # 取消注释以打包 assets/（如创建）
-    # ('config', 'config'),        # 取消注释以打包 config/（如创建）
-]
+#
+# ⚠️ 2026-09-20：**不打包 Live2D 模型文件**。
+#
+# 原写法 `datas = [('characters', 'characters')]` 会把整个目录打进去——
+# 实测带出 47.9MB 模型（kurisu 2.5 + miku 34.6 + Rory 10.8）。
+# 这与 README 的承诺相矛盾（“不随仓库分发任何 Live2D 模型文件”，
+# 见 .gitignore 的 `characters/*/live2d/*`），尤其 Rory 是**第三方模型**。
+#
+# 现在按文件粒度收集：
+#   ✓ 收：pet.json / manifest.json / profile.json / 角色说明等**配置**
+#   ✗ 不收：.moc3 / .model3.json / .model.json / 贴图 / 物理 / 表情 等**模型素材**
+#
+# 用户首次启动时按 README「第 3 步」自备模型（或跑
+# tools/fetch_free_live2d_sample.py）。缺模型时桌宠会提示“需下载模型”，
+# 不会白屏或崩溃。
+
+# 模型素材后缀（不打包）
+#
+# 注意 `.moc.json`（Cubism 2 的模型文件，kurisu 那个 93KB）与
+# `.model.json`（Cubism 2 清单）必须列在 `.json` 之前——本函数用
+# endswith 判断，顺序不重要，但两者都要在。
+# 另：`.bak` / `.orig` / `.tmp` 是本地备份，也不该随包分发。
+_MODEL_EXTS = (
+    '.moc3', '.moc', '.moc.json',        # 模型本体（Cubism 3 / 2）
+    '.model3.json', '.model.json',        # 模型清单
+    '.physics3.json', '.physics.json',    # 物理
+    '.cdi3.json', '.cdi.json',            # 参数显示信息
+    '.pose3.json', '.pose.json',          # 姿势
+    '.exp3.json', '.exp.json',            # 表情
+    '.motion3.json', '.mtn',              # 动作
+    '.png', '.jpg', '.jpeg', '.webp',     # 贴图（也含预览图）
+    # 本地备份（不是可分发内容）
+    '.bak', '.orig', '.tmp', '.old',
+)
+
+# 模型目录名（不整目录跳过——live2d/ 下的 profile.json 要保留，
+# 它是随仓库分发的参数映射配置）
+_MODEL_DIR_HINTS = ()
+
+
+def _collect_character_configs(root: str = 'characters'):
+    """收集 characters/ 下的**配置**文件，跳过模型素材。
+
+    按**文件后缀**过滤（而不是整目录跳过）——因为 `live2d/` 下混着
+    两种东西：
+      - profile.json（参数映射配置，随仓库分发）→ 要收
+      - *.moc3 / 贴图 / *.model3.json（模型素材）→ 不收
+
+    Returns:
+        list[(src, dst_rel)]，可直接喂给 PyInstaller 的 datas。
+    """
+    out = []
+    if not os.path.isdir(root):
+        return out
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root)
+        parts = [] if rel_dir == '.' else rel_dir.split(os.sep)
+        if any(p.lower() in _MODEL_DIR_HINTS for p in parts):
+            dirnames[:] = []
+            continue
+        # 模型子目录通常形如 "Roxy_V1.8192" / "kurisu.2048"（带尺寸后缀）
+        dirnames[:] = [d for d in dirnames
+                       if not re.search(r'\.\d{3,4}$', d)]
+        for fn in filenames:
+            low = fn.lower()
+            if any(low.endswith(ext) for ext in _MODEL_EXTS):
+                continue
+            src = os.path.join(dirpath, fn)
+            # 注意：PyInstaller 的 datas 元组是 (src_file, dst_DIR)。
+            # dst 是**目标目录**，文件名由 PyInstaller 自己取——
+            # 把文件名也拼进去会变成 `x.json/x.json`（多一层）。
+            dst_dir = os.path.join('characters', rel_dir) if rel_dir != '.' \
+                else 'characters'
+            out.append((src, dst_dir))
+    return out
+
+
+datas = _collect_character_configs('characters')
+# 若目录不存在（干净 checkout），退回一个空列表而不是报错
+datas = datas or []
 
 # ── 隐藏导入 / Hidden imports ──
 # PySide6 的子模块在部分使用场景下不会被自动探测，显式声明以避免运行时
