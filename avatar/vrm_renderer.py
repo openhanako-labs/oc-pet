@@ -529,6 +529,25 @@ class VRMRenderer(AvatarRenderer):
         """主导情绪推送：VRM 直接映射到预设表情（不触发动作）。"""
         self.set_emotion(emotion or "neutral", 1.0)
 
+    def set_va_target(self, valence: float, arousal: float,
+                      hold_sec: float = 3.0) -> bool:
+        """连续 VA 坐标 → VRM 表情参数（2026-09-20）。
+
+        VRM 侧已有 ``intent_to_commands`` 处理 ``{"va": [v, a]}``，
+        这里复用它，不另开一套映射。
+        """
+        try:
+            v = max(-1.0, min(1.0, float(valence)))
+            a = max(-1.0, min(1.0, float(arousal)))
+        except (TypeError, ValueError):
+            return False
+        try:
+            self.apply_action_intent({"va": [v, a]})
+        except Exception:
+            logger.debug("VRMRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+            return False
+        return True
+
     def apply_action_intent(self, intent: dict) -> None:
         cmds = intent_to_commands(intent)
         if not cmds:

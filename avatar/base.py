@@ -109,6 +109,26 @@ class AvatarRenderer(ABC):
         """
         self._current_emotion = emotion or "neutral"
 
+    def set_va_target(self, valence: float, arousal: float,
+                      hold_sec: float = 3.0) -> bool:
+        """推送**连续 VA 坐标**到渲染器（2026-09-20）。
+
+        与 ``set_master_emotion``（离散情绪名）的区别：这个收连续值，
+        由渲染器自己的插值层平滑过渡到目标参数。
+
+        何时用：已有可靠连续情绪信号时（如 ``core/emotion_classifier.py``
+        从文本分类出的 VAD）——比把离散情绪名查表成坐标更准。
+
+        Args:
+            valence: 效价 ∈[-1,1]（-1 很消极，+1 很积极）。
+            arousal: 唤起 ∈[-1,1]（-1 很平静，+1 很兴奋）。
+            hold_sec: 保持期内不被离散情绪覆盖（默认 3s）。
+
+        Returns:
+            是否采纳。默认实现返回 False（该渲染器不支持连续 VA）。
+        """
+        return False
+
     def set_procedural_smoothing(self, seconds: float) -> None:
         """P2-6: 配置程序化表情层插值时间常数（秒）。
 

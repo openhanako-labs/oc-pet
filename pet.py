@@ -3071,6 +3071,26 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._current_emotion = emotion or "neutral"
         self._emotion_source = "dialog"
         self._emotion_entered_at = time.monotonic()  # 对话情绪作为驻留窗口起点
+
+        # 2026-09-20：连续 VAD 接进渲染器（决策 C 的另一半）
+        #
+        # 渲染器只需连续 VA 坐标（_va_target → 每帧指数平滑 → 参数），
+        # 而分类器正好产出连续 VAD。这是 VA 的**正确来源**：
+        # 不是把离散情绪名查表成坐标（那是「二维承载不了细粒度」的老路），
+        # 而是从文本直接分类出的连续值。
+        #
+        # 必须在 _sync_renderer_master_emotion 之前写：那个方法里有
+        # _va_hold_until 保护，且它会用 _EMOTION_VA 表覆盖 _va_target。
+        try:
+            _vad = self._pending_reply_vad()
+            if _vad and r is not None:
+                setter = getattr(r, "set_va_target", None)
+                if callable(setter):
+                    setter(_vad[0], _vad[1], hold_sec=3.0)
+                    logger.info("分类 VAD → 渲染器 VA(%.2f, %.2f)", _vad[0], _vad[1])
+        except Exception:
+            logger.debug("pet: 写分类 VAD 失败", exc_info=True)
+
         # P2-6：对话情绪同步到渲染器程序化表情层（面部参数平滑过渡）
         self._sync_renderer_master_emotion(self._current_emotion)
         if self._current_emotion != "neutral":

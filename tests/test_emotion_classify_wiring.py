@@ -87,6 +87,18 @@ def test_init_sets_fields():
     assert s._last_user_emotion == ""
 
 
+def test_min_confidence_is_calibrated():
+    """min_confidence 是扫描定标的 0.40，不是拍的。
+
+    扫描结果（tools/verify_emotion_classifier.py 测试集）：
+        0.35 → pet 12/18, user 12/14
+        0.40 → pet 12/18, user 12/14   ← 选它
+        0.45 → pet 11/18, user 12/14   （原值，偏严）
+    0.40 与 0.35 同分但更保守。
+    """
+    assert _MIN_CONFIDENCE == pytest.approx(0.40)
+
+
 def test_no_pending_emotion_returns_empty():
     s = _Stub()
     assert s._resolved_reply_emotion() == ""
@@ -96,6 +108,20 @@ def test_low_confidence_rejected():
     s = _Stub()
     s._pending_reply_emotion = ("happy", 0.1)
     assert s._resolved_reply_emotion() == ""
+
+
+def test_confidence_just_below_threshold_rejected():
+    """刚低于阈值就要拒（0.39 < 0.40）。"""
+    s = _Stub()
+    s._pending_reply_emotion = ("happy", 0.39)
+    assert s._resolved_reply_emotion() == ""
+
+
+def test_confidence_at_threshold_adopted():
+    """恰好等于阈值应采纳（边界闭）。"""
+    s = _Stub()
+    s._pending_reply_emotion = ("happy", 0.40)
+    assert s._resolved_reply_emotion() == "happy"
 
 
 def test_neutral_not_adopted():
@@ -209,6 +235,69 @@ def test_classify_happens_before_signal_emit():
     i_cls = src.index("self._classify_reply_async(reply)")
     i_emit = src.index("self.engine_reply_signal.emit(reply, emotion, anim")
     assert i_cls < i_emit, "分类提交必须在 emit 之前"
+
+
+# ── 6. 连续 VAD 接线 ──
+
+def test_pending_reply_vad_returns_none_without_data():
+    s = _Stub()
+    assert s._pending_reply_vad() is None
+
+
+def test_pending_reply_vad_returns_tuple():
+    s = _Stub()
+    s._pending_reply_emotion = ("happy", 0.9)
+    s._pending_reply_vad_value = (0.75, 0.45, 0.35)
+    assert s._pending_reply_vad() == (0.75, 0.45, 0.35)
+
+
+def test_pending_reply_vad_rejected_on_low_confidence():
+    s = _Stub()
+    s._pending_reply_emotion = ("happy", 0.1)
+    s._pending_reply_vad_value = (0.75, 0.45, 0.35)
+    assert s._pending_reply_vad() is None
+
+
+def test_consume_clears_vad():
+    s = _Stub()
+    s._pending_reply_emotion = ("happy", 0.9)
+    s._pending_reply_vad_value = (0.75, 0.45, 0.35)
+    s._consume_reply_emotion()
+    assert s._pending_reply_vad() is None
+
+
+def test_renderers_expose_set_va_target():
+    """三个渲染器都要有 set_va_target（基类默认 + 两个重写）。"""
+    from avatar.base import AvatarRenderer
+    assert hasattr(AvatarRenderer, "set_va_target"), "基类缺默认实现"
+    src_l2d = open(os.path.join(ROOT, "avatar", "live2d_renderer.py"),
+                   encoding="utf-8").read()
+    assert "def set_va_target" in src_l2d, "Live2D 未实现"
+    src_vrm = open(os.path.join(ROOT, "avatar", "vrm_renderer.py"),
+                   encoding="utf-8").read()
+    assert "def set_va_target" in src_vrm, "VRM 未实现"
+
+
+def test_pet_py_writes_vad_before_master_emotion():
+    """VAD 必须在 _sync_renderer_master_emotion **之前**写。
+
+    因为那个方法里有 _va_hold_until 保护，且它会用 _EMOTION_VA 表
+    覆盖 _va_target（表里只有 7 个情绪，会盖掉分类器的连续值）。
+
+    注意：`_sync_renderer_master_emotion` 在 pet.py 里出现多次，
+    要比较的是**回复链路内**的那一次（紧跟 VAD 写入之后的）。
+    """
+    src = open(os.path.join(ROOT, "pet.py"), encoding="utf-8").read()
+    i_vad = src.index("self._pending_reply_vad()")
+    # 从 VAD 写入点往后找最近的一次同步
+    i_sync = src.index("self._sync_renderer_master_emotion(self._current_emotion)", i_vad)
+    assert i_vad < i_sync, "VAD 必须在 master emotion 同步之前写"
+
+
+def test_base_set_va_target_default_returns_false():
+    """基类默认实现返回 False（不支持连续 VA 的渲染器）。"""
+    from avatar.base import AvatarRenderer
+    assert AvatarRenderer.set_va_target(None, 0.5, 0.5) is False
 
 
 def test_config_has_emotion_classifier():

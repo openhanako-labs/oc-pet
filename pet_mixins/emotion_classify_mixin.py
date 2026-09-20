@@ -68,8 +68,18 @@ _CLASSIFIER_TO_DIRECTOR: dict[str, str] = {
     "angry": "angry",         # 别名（语料里两种写法都出现过）
 }
 
-# 置信度低于此值不采纳（宁可不动，不能乱动）
-_MIN_CONFIDENCE = 0.45
+# 置信度低于此值不采纳（宁可不动，不能乱动）。
+#
+# 2026-09-20 阈值扫描定标（tools/verify_emotion_classifier.py 的测试集）：
+#     阈值    pet 命中    user 命中
+#     0.35    12/18      12/14
+#     0.40    12/18      12/14   ← 选它
+#     0.45    11/18      12/14   （原值，偏严）
+#     0.60    10/18      12/14
+# 0.40 与 0.35 同分但更保守；0.45 会误杀 pet 视角 1 条。
+# 注：扫到 0.00 命中也不变——说明本测试集里没有「低置信但错」的样本，
+# 阈值保护的真实收益在这个小样本上看不出来。不要因此取消阈值。
+_MIN_CONFIDENCE = 0.40
 
 
 def _load_pet_corpus() -> dict[str, list[str]]:
@@ -95,6 +105,8 @@ class EmotionClassifyMixin:
         self._emotion_classifiers: dict[str, object] = {}
         self._last_user_emotion: str = ""
         self._last_user_confidence: float = 0.0
+        self._pending_reply_emotion = None
+        self._pending_reply_vad_value = None
         self._classify_ready = False
         self._classify_prepare_started = False
 
@@ -220,6 +232,33 @@ class EmotionClassifyMixin:
     def _consume_reply_emotion(self) -> None:
         """消费掉本轮的分类结果（防止下轮误用）。"""
         self._pending_reply_emotion = None
+        self._pending_reply_vad_value = None
+
+    def _pending_reply_vad(self) -> tuple[float, float, float] | None:
+        """取分类器给桌宠回复判定的连续 VAD（没就绪返回 None）。
+
+        ## 为什么单独一个入口
+
+        渲染器只需**连续 VA 坐标**（`_va_target` → 每帧指数平滑 → 参数）。
+        分类器正好产出连续 VAD —— 不用查 `_EMOTION_VA` 表
+        （那张表只有 7 个情绪，而分类器有 14 类）。
+
+        这是 VA 坐标的**正确来源**：不是把离散情绪名查表成坐标
+        （那是「二维承载不了细粒度」的老路），而是从文本直接分类出的连续值。
+
+        Returns:
+            ``(valence, arousal, dominance)``；不可用/低置信返回 None。
+        """
+        if not getattr(self, "_classify_enabled", False):
+            return None
+        cached = getattr(self, "_pending_reply_emotion", None)
+        if not cached:
+            return None
+        _emotion, conf = cached
+        if conf < getattr(self, "_classify_min_conf", _MIN_CONFIDENCE):
+            return None
+        vad = getattr(self, "_pending_reply_vad_value", None)
+        return vad if vad else None
 
     # ── 后台分类（供调用方在主线程外跑）────────────────────
     def _classify_reply_async(self, reply_text: str) -> None:
@@ -242,6 +281,7 @@ class EmotionClassifyMixin:
                 r = owner._classify_sync(reply_text, "pet")
                 if r is not None and r.emotion:
                     owner._pending_reply_emotion = (r.emotion, r.confidence)
+                    owner._pending_reply_vad_value = tuple(r.vad) if r.vad else None
 
         try:
             QThreadPool.globalInstance().start(_Task())

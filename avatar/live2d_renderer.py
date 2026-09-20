@@ -1721,6 +1721,34 @@ class Live2DRenderer(AvatarRenderer):
             except Exception:
                 logger.debug("Live2DRenderer: 非致命异常(已静默吞掉)", exc_info=True)
 
+    def set_va_target(self, valence: float, arousal: float,
+                      hold_sec: float = 3.0) -> bool:
+        """推送连续 VA 坐标（2026-09-20）。
+
+        与 ``apply_action_intent`` 里的 ``intent["va"]`` 路径写的是同一组字段，
+        但那个是「LLM 自报的 feel 坐标」（实测承载不了细粒度），
+        本入口是「分类器从文本算出的 VAD」——更可靠的连续信号源。
+
+        写入后设 ``_va_hold_until``，保持期内 ``set_master_emotion`` 不会用
+        ``_EMOTION_VA`` 表覆盖它（表里只有 7 个情绪，而分类器有 14 类）。
+
+        Returns:
+            是否采纳（数值非法时返回 False）。
+        """
+        try:
+            v = max(-1.0, min(1.0, float(valence)))
+            a = max(-1.0, min(1.0, float(arousal)))
+        except (TypeError, ValueError):
+            logger.debug("set_va_target: 数值非法 %r %r", valence, arousal)
+            return False
+        self._va_target = (v, a)
+        try:
+            hold = float(hold_sec)
+        except (TypeError, ValueError):
+            hold = 3.0
+        self._va_hold_until = time.monotonic() + max(0.0, hold)
+        return True
+
     def set_procedural_smoothing(self, seconds: float) -> None:
         """P2-6: 配置面部参数插值时间常数（秒，可配）。
 
