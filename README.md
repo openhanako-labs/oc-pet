@@ -592,12 +592,25 @@ QtOpenGLWidgets → QtOpenGL / QtGui
 
 `.github/workflows/build.yml`：**打 `v*` tag** 时自动构建并创建 GitHub Release。
 
+完整发版流程（三步）：
+
 ```bash
-git tag v0.1.0
-git push origin v0.1.0     # 触发构建 + 发布
+# 1) 改版本号：version.py 的 __version__ / BUILD_DATE / BUILD_NUMBER
+# 2) 在 CHANGELOG.md 顶部新增一节（写清本版改了什么）
+git add version.py CHANGELOG.md
+git commit -m "release: v0.15.0 —— …"
+git push origin master
+
+# 3) 打 tag 并推送 —— 这一步才触发构建
+git tag -a v0.15.0 -m "v0.15.0 — …"
+git push origin v0.15.0
 ```
 
 > 注意：普通 `push` 到 master **不会**触发打包，只跑测试（`test.yml`）。
+> **发版必须推 tag** —— 只推 commit 的话，源码更新了但 Release 不会出现。
+
+> CI 在**干净环境**用 `requirements-build.txt` 从零构建（不依赖你的本机
+> 环境），所以它构建成功 = 别人 clone 也能构建成功。
 
 ### 打包前检查
 
