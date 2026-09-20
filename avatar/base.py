@@ -129,6 +129,17 @@ class AvatarRenderer(ABC):
         """
         return False
 
+    def set_emotion_intensity(self, intensity: float) -> bool:
+        """推送**情绪强度**（0~1），缩放程序化表情的参数幅度。
+
+        与 ``set_va_target`` 的分工：那个管情绪**方向**（哪一类），
+        这个管情绪**程度**（多强）。分类器两者都产出，分别喂。
+
+        Returns:
+            是否采纳。默认实现返回 False（该渲染器不支持强度缩放）。
+        """
+        return False
+
     def set_procedural_smoothing(self, seconds: float) -> None:
         """P2-6: 配置程序化表情层插值时间常数（秒）。
 

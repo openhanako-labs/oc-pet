@@ -318,6 +318,13 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
         # 连接跨线程信号
         self.engine_reply_signal.connect(self._do_engine_reply)
+        # 2026-09-20：情绪分类结果（后台就绪）→ 主线程驱动表情。
+        # 分类要 100-300ms 走网络，而 engine_reply_signal 是即时投递的
+        # —— 单靠主线程读字段拿不到结果（真机实测）。
+        # 信号定义在 EmotionClassifyMixin（避免 pet.py 新增 Qt 引用）。
+        _ec_sig = getattr(self, "emotion_classified_signal", None)
+        if _ec_sig is not None:
+            _ec_sig.connect(self._apply_classified_emotion)
         self.engine_status_signal.connect(self._do_engine_status)
         # P1: 流式 chunk 信号连接
         self.engine_chunk_signal.connect(self._do_engine_chunk)
@@ -3008,15 +3015,15 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         # 交付：文字与音频的时序契约（见 _deliver_reply）
         self._deliver_reply(display_text, emotion, audio_path)
 
-        # 2026-09-20：情绪分类器接接线（决策 C）
+        # 2026-09-20：情绪分类器接线（决策 C）
         #
         # 主链路上 `emotion` 变量**恒为 "neutral"**（实测：[emotion:] 标签
         # 只有兜底才补，补的就是 neutral）。而它有多个消费者：
         # set_emotion_expression_only / _set_anim_seq(emotion=) / _current_emotion。
-        # 分类器给出的情绪词直接替换这个空值。
         #
-        # **不依赖决策器是否启用**——决策器是另一层（从候选里挑具体预设），
-        # 而本层只负责把「情绪是什么」填对。
+        # 快路径：若分类结果**已就绪**（上一轮缓存 / 分类很快），立即替换。
+        # 未就绪则不动 —— 慢路径（emotion_classified_signal →
+        # _apply_classified_emotion）会在结果到达时补一次。
         _classified = self._resolved_reply_emotion()
         if _classified:
             emotion = _classified
@@ -3072,26 +3079,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._emotion_source = "dialog"
         self._emotion_entered_at = time.monotonic()  # 对话情绪作为驻留窗口起点
 
-        # 2026-09-20：连续 VAD 接进渲染器（决策 C 的另一半）
-        #
-        # 渲染器只需连续 VA 坐标（_va_target → 每帧指数平滑 → 参数），
-        # 而分类器正好产出连续 VAD。这是 VA 的**正确来源**：
-        # 不是把离散情绪名查表成坐标（那是「二维承载不了细粒度」的老路），
-        # 而是从文本直接分类出的连续值。
-        #
-        # 必须在 _sync_renderer_master_emotion 之前写：那个方法里有
-        # _va_hold_until 保护，且它会用 _EMOTION_VA 表覆盖 _va_target。
-        try:
-            _vad = self._pending_reply_vad()
-            if _vad and r is not None:
-                setter = getattr(r, "set_va_target", None)
-                if callable(setter):
-                    setter(_vad[0], _vad[1], hold_sec=3.0)
-                    logger.info("分类 VAD → 渲染器 VA(%.2f, %.2f)", _vad[0], _vad[1])
-        except Exception:
-            logger.debug("pet: 写分类 VAD 失败", exc_info=True)
-
         # P2-6：对话情绪同步到渲染器程序化表情层（面部参数平滑过渡）
+        #
+        # 注：连续 VAD 的写入已移到 _apply_classified_emotion（慢路径）。
+        # 那里写才能保证在 _sync_renderer_master_emotion 之后、
+        # 且不会被 _EMOTION_VA 表覆盖（它只有 7 个情绪，会盖掉连续值）。
         self._sync_renderer_master_emotion(self._current_emotion)
         if self._current_emotion != "neutral":
             self._emotion_expiry_timer.start(3000)

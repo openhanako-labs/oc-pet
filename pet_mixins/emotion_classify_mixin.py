@@ -17,13 +17,35 @@
 而两个接入点都跑在**主线程**：
 
 - ``_send_message`` 是 Qt 按钮/回车回调
-- ``_do_engine_reply`` 经 ``engine_reply_signal`` 排到主线程
+- ``_on_engine_reply`` 经 ``_real_on_reply`` 也在主线程
 
 之前踩过的坑：``expression_director.decide()`` 同步阻塞跑在主线程，
 引擎卡死时每次回复卡满 8 秒。**同类错误不再犯第二次。**
 
-所以：分类丢进 ``QThreadPool``，结果经信号回主线程。
-分类未就绪 / 失败 → 静默跳过，**不阻塞、不报错**。
+## 时序问题（2026-09-20 真机发现）
+
+第一版接线是「提交任务 + 主线程稍后读结果」，**实测不工作**：
+
+```
+_on_engine_reply（主线程）
+  ├─ 提交分类任务 → QThreadPool（要 100-300ms 走网络）
+  └─ emit engine_reply_signal → 主线程事件队列
+                                    ↓
+                              _do_engine_reply 立刻执行
+                                    ↓
+                              读 _pending_reply_emotion → 还是 None ✗
+```
+
+**信号投递是即时的，而分类要 100-300ms。** 主线程读的时候结果永远还没好。
+
+**修法**：双路。
+
+1. **快路径**：主线程读 `_resolved_reply_emotion()`——若结果已就绪
+   （如上一轮的缓存、或分类很快），无延迟应用。
+2. **慢路径**：分类任务完成后经 `emotion_classified_signal` 把结果送回主线程，
+   `_apply_classified_emotion` 直接驱动表情（滞后 100-300ms，但保证能到）。
+
+这样“结果已就绪”和“结果稍后才到”两种情况都能覆盖。
 
 ## 与既有 VA 路径的关系
 
@@ -39,6 +61,27 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
+
+try:  # Qt 可选：无 Qt 环境下模块仍可导入（单测用）
+    from PySide6.QtCore import Signal as _QtSignal
+except Exception:  # noqa: BLE001
+    _QtSignal = None
+
+
+def _make_signal(*types):
+    """构造 Qt 信号；无 Qt 时返回 None。
+
+    为什么信号定义在 mixin 里：`tests/test_architecture_boundary.py`
+    有一条护栏「pet.py 的 Qt 引用只降不升」（基线 115）。
+    把信号放 mixin，pet.py 不必新增 Qt 引用，护栏不必放宽。
+    """
+    if _QtSignal is None:
+        return None
+    try:
+        return _QtSignal(*types)
+    except Exception:  # noqa: BLE001
+        return None
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +142,13 @@ def _load_pet_corpus() -> dict[str, list[str]]:
 class EmotionClassifyMixin:
     """情绪分类接线（由 PetWindow 继承）。"""
 
+    # 2026-09-20：分类结果回主线程（后台任务完成 → 驱动表情）。
+    # 为什么需要：分类要 100-300ms 走网络，而 engine_reply_signal 是**即时**投递的
+    # ——主线程读 _pending_reply_emotion 时结果永远还没好（真机实测到的时序 bug）。
+    # 定义在 mixin 而非 pet.py：避免 pet.py 新增 Qt 引用（护栏只降不升）。
+    # 签名 (emotion, confidence, vad, intensity)。
+    emotion_classified_signal = _make_signal(str, float, object, float)
+
     # ── 初始化 ──────────────────────────────────────────────
     def _init_emotion_classifier(self) -> None:
         """构造两个视角的分类器（延迟 prepare，不在启动时打网络）。"""
@@ -107,6 +157,8 @@ class EmotionClassifyMixin:
         self._last_user_confidence: float = 0.0
         self._pending_reply_emotion = None
         self._pending_reply_vad_value = None
+        self._last_applied_classified = ""
+        self._last_applied_classified_at = 0.0
         self._classify_ready = False
         self._classify_prepare_started = False
 
@@ -262,10 +314,17 @@ class EmotionClassifyMixin:
 
     # ── 后台分类（供调用方在主线程外跑）────────────────────
     def _classify_reply_async(self, reply_text: str) -> None:
-        """后台分类桌宠回复，结果存 ``_pending_reply_emotion``。
+        """后台分类桌宠回复；结果**就绪时经信号回主线程驱动**。
 
-        **必须在收到回复时就提交**，这样 ``_do_engine_reply`` 跑到主线程时
-        结果大概率已就位。未就位就静默跳过——不阻塞、不等。
+        ## 为什么要信号，不是只存字段
+
+        第一版只把结果存 `_pending_reply_emotion`，等主线程读。真机实测
+        **不工作**：`engine_reply_signal` 是即时投递的，而分类要 100-300ms
+        走网络 —— 主线程读的时候结果永远还没好。
+
+        现在双路：
+          1. 存字段（快路径：若结果已就绪，主线程立即用）
+          2. 发信号（慢路径：就绪时回主线程，直接驱动表情）
         """
         if not getattr(self, "_classify_enabled", False) or not reply_text:
             return
@@ -279,14 +338,95 @@ class EmotionClassifyMixin:
         class _Task(QRunnable):
             def run(self_inner):
                 r = owner._classify_sync(reply_text, "pet")
-                if r is not None and r.emotion:
-                    owner._pending_reply_emotion = (r.emotion, r.confidence)
-                    owner._pending_reply_vad_value = tuple(r.vad) if r.vad else None
+                if r is None or not r.emotion:
+                    return
+                vad = tuple(r.vad) if r.vad else None
+                owner._pending_reply_emotion = (r.emotion, r.confidence)
+                owner._pending_reply_vad_value = vad
+                # 慢路径：就绪时回主线程驱动（信号 emit 是线程安全的）
+                try:
+                    sig = getattr(owner, "emotion_classified_signal", None)
+                    if sig is not None:
+                        sig.emit(r.emotion, float(r.confidence), vad,
+                                 float(getattr(r, "intensity", 0.5)))
+                except Exception:  # noqa: BLE001
+                    pass
 
         try:
             QThreadPool.globalInstance().start(_Task())
         except Exception as exc:  # noqa: BLE001
             logger.debug("提交桌宠情绪分类失败：%s", exc)
+
+    def _apply_classified_emotion(self, emotion: str, confidence: float,
+                                  vad=None, intensity: float = 0.0) -> None:
+        """分类结果到达主线程 → 驱动表情（信号槽，**必在主线程**）。
+
+        这是慢路径的落点：分类晚 100-300ms 到达，直接补一次表情驱动。
+        快路径（`_resolved_reply_emotion`）已经应用过时，这里会**重复驱动一次**
+        —— 无害（同一个表情目标，渲染器平滑插值不会跳），但为了减少重复，
+        若同一情绪刚应用过就跳过。
+        """
+        if not getattr(self, "_classify_enabled", False):
+            return
+        if not emotion or confidence < getattr(self, "_classify_min_conf", _MIN_CONFIDENCE):
+            return
+        word = _CLASSIFIER_TO_DIRECTOR.get(emotion, "")
+        if not word or word == "neutral":
+            return
+        # 去重：同一情绪在短时间内不重复驱动
+        now = time.time()
+        if (getattr(self, "_last_applied_classified", None) == emotion
+                and now - getattr(self, "_last_applied_classified_at", 0.0) < 2.0):
+            return
+        self._last_applied_classified = emotion
+        self._last_applied_classified_at = now
+        logger.info("情绪分类（桌宠视角）→ %s → %s（置信 %.2f）",
+                    emotion, word, confidence)
+
+        # 顺序关键：先同步 master emotion（它可能用 _EMOTION_VA 表覆盖 _va_target），
+        # 再写连续 VAD。反过来会被表覆盖掉。
+        try:
+            self._current_emotion = word
+            self._emotion_source = "dialog_classified"
+            self._emotion_entered_at = time.monotonic()
+            sync = getattr(self, "_sync_renderer_master_emotion", None)
+            if callable(sync):
+                sync(word)
+        except Exception:
+            logger.debug("同步分类情绪到渲染器失败", exc_info=True)
+
+        # 驱动表情（不依赖决策器：决策器是另一层）
+        try:
+            self._direct_expression(word, "对话回复(分类)")
+        except Exception:
+            logger.debug("应用分类情绪失败", exc_info=True)
+
+        # 连续 VAD → 渲染器（比离散情绪名更准的连续信号）
+        if vad:
+            try:
+                r = getattr(self, "_renderer", None)
+                setter = getattr(r, "set_va_target", None) if r is not None else None
+                if callable(setter):
+                    setter(vad[0], vad[1], hold_sec=3.0)
+                    logger.info("分类 VAD → 渲染器 VA(%.2f, %.2f)", vad[0], vad[1])
+            except Exception:
+                logger.debug("写分类 VAD 失败", exc_info=True)
+
+        # 2026-09-20（A 项）：强度 → 渲染器
+        #
+        # `_emotion_intensity` 早就存在（每帧读它缩放参数幅度），
+        # 但**从未有人写过** —— 所有调用方都走默认 1.0。
+        # 于是「我有点累」和「我累死了」表现完全一样。
+        # 分类器算出的 intensity 正好填这个空。
+        if intensity and intensity > 0:
+            try:
+                r = getattr(self, "_renderer", None)
+                setter = getattr(r, "set_emotion_intensity", None) if r is not None else None
+                if callable(setter):
+                    setter(float(intensity))
+                    logger.info("分类强度 → 渲染器 %.2f", intensity)
+            except Exception:
+                logger.debug("写分类强度失败", exc_info=True)
 
     # ── 用户消息：分类 → 记状态 ─────────────────────────────
     def _classify_user_async(self, text: str) -> None:

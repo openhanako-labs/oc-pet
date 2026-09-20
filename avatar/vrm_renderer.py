@@ -548,6 +548,24 @@ class VRMRenderer(AvatarRenderer):
             return False
         return True
 
+    def set_emotion_intensity(self, intensity: float) -> bool:
+        """情绪强度 → VRM 表情权重（2026-09-20，A 项）。
+
+        VRM 的 set_emotion 本就接受 intensity（作为表情权重），
+        直接复用。
+        """
+        try:
+            val = max(0.0, min(1.0, float(intensity)))
+        except (TypeError, ValueError):
+            return False
+        emo = getattr(self, "_current_emotion", "neutral") or "neutral"
+        try:
+            self.set_emotion(emo, val)
+        except Exception:
+            logger.debug("VRMRenderer: 非致命异常(已静默吞掉)", exc_info=True)
+            return False
+        return True
+
     def apply_action_intent(self, intent: dict) -> None:
         cmds = intent_to_commands(intent)
         if not cmds:

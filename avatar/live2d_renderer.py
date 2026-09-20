@@ -146,23 +146,68 @@ class Live2DRenderer(AvatarRenderer):
             "mouth_form": 0.35, "mouth_open": 0.1, "eye_ball_x": 0.02, "eye_ball_y": 0.06,
             "head_angle_x": 0.0, "head_angle_y": 0.0, "breath_amp": 1.1, "breath_rate": 1.05,
         },
+        # ── 2026-09-20 新增 4 个锚点（B 项）──
+        #
+        # 为什么：原 7 个锚点在 V/A 空间分布不均——
+        #   V>0 且 A<0 的区域（「平静的愉快 / 温柔」）**完全空白**。
+        # 实测后果：分类器的 affectionate(0.65,0.10)、calm(0.25,-0.45)
+        # 落进去后只能被拉向 happy 或 thinking，做不出「柔和」的味。
+        # 这四个新锚点直接对着分类器 14 类的 VAD 预设填（见
+        # core/emotion_classifier.py::EMOTION_VAD_PRESETS）。
+        "affectionate": {
+            # 温柔/亲昵：眼微弯、嘴柔、呼吸缓（比 happy 淡，比 neutral 暖）
+            "eye_open": 0.88, "eye_smile": 0.55, "brow_angle": 0.22, "brow_form": 0.2,
+            "mouth_form": 0.32, "mouth_open": 0.04, "eye_ball_x": 0.0, "eye_ball_y": 0.03,
+            "head_angle_x": 0.0, "head_angle_y": 0.0, "breath_amp": 1.02, "breath_rate": 0.92,
+        },
+        "calm": {
+            # 平静/放松：眼半闭、呼吸慢（比 neutral 更低唤起）
+            "eye_open": 0.75, "eye_smile": 0.3, "brow_angle": 0.12, "brow_form": 0.08,
+            "mouth_form": 0.18, "mouth_open": 0.0, "eye_ball_x": 0.0, "eye_ball_y": -0.02,
+            "head_angle_x": 0.0, "head_angle_y": 0.0, "breath_amp": 0.92, "breath_rate": 0.78,
+        },
+        "confused": {
+            # 困惑：眉压、嘴形偏、眼神偏一侧（比 thinking 更「不确定」）
+            "eye_open": 0.82, "eye_smile": -0.05, "brow_angle": -0.15, "brow_form": -0.1,
+            "mouth_form": -0.22, "mouth_open": 0.02, "eye_ball_x": 0.16, "eye_ball_y": 0.04,
+            "head_angle_x": 0.1, "head_angle_y": 0.0, "breath_amp": 1.0, "breath_rate": 1.0,
+        },
+        "tired": {
+            # 疲倦：眼睑下沉、呼吸深而慢（比 sad 更「低能量」而非「低情绪」）
+            "eye_open": 0.6, "eye_smile": -0.1, "brow_angle": -0.1, "brow_form": -0.12,
+            "mouth_form": -0.15, "mouth_open": 0.06, "eye_ball_x": 0.0, "eye_ball_y": -0.1,
+            "head_angle_x": 0.0, "head_angle_y": 0.0, "breath_amp": 1.1, "breath_rate": 0.65,
+        },
     }
 
     # ── T10: V/A (valence-arousal) 坐标 ──
     # 每种情绪映射到 2D 情感空间，情绪切换变成 V/A 空间路径插值。
     # valence: -1(消极) → +1(积极), arousal: -1(平静) → +1(兴奋)
+    #
+    # 2026-09-20（B 项）：7 → 11 个锚点。新增的四个直接对着
+    # core/emotion_classifier.py 的 14 类 VAD 预设，填的是原来
+    # 「V>0 且 A<0」（温柔/平静）与「V<0 且 A≈0」（困惑/疲倦）的空白。
+    # 坐标取自 EMOTION_VAD_PRESETS，不另编。
     _EMOTION_VA: dict[str, tuple[float, float]] = {
-        "neutral":   (0.0,  0.0),
-        "happy":     (0.8,  0.7),
-        "cute":      (0.7,  0.5),
-        "surprised": (0.3,  0.9),
-        "thinking":  (0.2,  0.2),
-        "sad":       (-0.7, -0.3),
-        "angry":     (-0.6,  0.8),
+        "neutral":      (0.0,  0.0),
+        "happy":        (0.8,  0.7),
+        "cute":         (0.7,  0.5),
+        "surprised":    (0.3,  0.9),
+        "thinking":     (0.2,  0.2),
+        "sad":          (-0.7, -0.3),
+        "angry":        (-0.6,  0.8),
+        # 新增（对着分类器 VAD 预设）
+        "affectionate": (0.65, 0.10),
+        "calm":         (0.25, -0.45),
+        "confused":     (-0.10, 0.35),
+        "tired":        (-0.25, -0.70),
     }
 
-    # V/A → 参数插值用的情绪集合（按 V/A 坐标排序，用于 bilinear 查找）
-    _VA_EMOTIONS = ["neutral", "happy", "cute", "surprised", "thinking", "sad", "angry"]
+    # V/A → 参数插值用的情绪集合（用于最近邻查找）
+    _VA_EMOTIONS = [
+        "neutral", "happy", "cute", "surprised", "thinking", "sad", "angry",
+        "affectionate", "calm", "confused", "tired",
+    ]
 
     def _va_interpolate_targets(self, va_cur: tuple[float, float]) -> dict[str, float]:
         """T10: 从 V/A 坐标插值参数目标值。
@@ -1760,6 +1805,36 @@ class Live2DRenderer(AvatarRenderer):
         except (TypeError, ValueError):
             val = -1.0
         self._proc_smooth_tau = val if val > 0.0 else float(self.PROCEDURAL_SMOOTH_TAU)
+
+    def set_emotion_intensity(self, intensity: float) -> bool:
+        """设置情绪强度（缩放程序化表情的参数幅度）。
+
+        ## 为什么单独一个入口
+
+        `_emotion_intensity` 早就存在（每帧读它缩放参数，见
+        `_update_procedural_emotion` 第 3 步），但**从未有人写过**
+        —— 所有调用方都走 `set_emotion(emo)`，强度默认 1.0。
+        于是「我有点累」和「我累死了」表现完全一样。
+
+        ## 与 set_va_target 的分工
+
+        - `set_va_target(v, a)` —— 情绪**方向**（哪一类）
+        - `set_emotion_intensity(i)` —— 情绪**程度**（多强）
+
+        两者独立：分类器同时给出 VAD 和 intensity，分别喂。
+
+        Args:
+            intensity: 0~1。0 = 几乎无表情，1 = 满幅。
+
+        Returns:
+            是否采纳（数值非法返回 False）。
+        """
+        try:
+            val = float(intensity)
+        except (TypeError, ValueError):
+            return False
+        self._emotion_intensity = max(0.0, min(1.0, val))
+        return True
 
     def _update_procedural_emotion(self) -> None:
         """每帧程序化驱动情绪表情 + 眼神 + 呼吸（叠加在 motion 之上）。

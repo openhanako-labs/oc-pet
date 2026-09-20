@@ -278,26 +278,179 @@ def test_renderers_expose_set_va_target():
     assert "def set_va_target" in src_vrm, "VRM 未实现"
 
 
-def test_pet_py_writes_vad_before_master_emotion():
-    """VAD 必须在 _sync_renderer_master_emotion **之前**写。
+def test_pet_py_writes_vad_after_master_emotion():
+    """VAD 写入必须在 master emotion 同步**之后**。
 
-    因为那个方法里有 _va_hold_until 保护，且它会用 _EMOTION_VA 表
-    覆盖 _va_target（表里只有 7 个情绪，会盖掉分类器的连续值）。
+    为什么：`_sync_renderer_master_emotion` 会用 `_EMOTION_VA` 表
+    覆盖 `_va_target`（表里只有 7 个情绪，会盖掉分类器的连续值）。
+    先同步、后写 VA，顺序反了连续值就没了。
 
-    注意：`_sync_renderer_master_emotion` 在 pet.py 里出现多次，
-    要比较的是**回复链路内**的那一次（紧跟 VAD 写入之后的）。
+    注意：两处都在 mixin 的 `_apply_classified_emotion` 里，
+    pet.py 只负责连信号。
+    """
+    src = open(os.path.join(ROOT, "pet_mixins", "emotion_classify_mixin.py"),
+               encoding="utf-8").read()
+    i_sync = src.index('sync = getattr(self, "_sync_renderer_master_emotion"')
+    i_vad = src.index("setter(vad[0], vad[1]")
+    assert i_sync < i_vad, "必须先同步 master emotion，再写 VAD"
+
+
+def test_pet_py_connects_classified_signal():
+    """分类结果信号必须连到槽——否则慢路径不通。
+
+    信号定义在 mixin（避开 pet.py 的 Qt 引用护栏），pet.py 只负责连接。
+    """
+    mixin = open(os.path.join(ROOT, "pet_mixins", "emotion_classify_mixin.py"),
+                 encoding="utf-8").read()
+    assert "emotion_classified_signal = _make_signal(" in mixin, "mixin 未定义信号"
+    src = open(os.path.join(ROOT, "pet.py"), encoding="utf-8").read()
+    assert "emotion_classified_signal" in src, "pet.py 未连接信号"
+    assert "_ec_sig.connect(self._apply_classified_emotion)" in src, "信号未连到槽"
+
+
+def test_signal_moved_to_mixin_to_respect_qt_guard():
+    """信号不得定义在 pet.py —— 那会顶破 Qt 引用基线（只降不升）。
+
+    背景：加信号后 `test_pet_py_qt_refs_do_not_regrow` 报 116 > 115。
+    正确做法是挪到 mixin，不是放宽基线。
     """
     src = open(os.path.join(ROOT, "pet.py"), encoding="utf-8").read()
-    i_vad = src.index("self._pending_reply_vad()")
-    # 从 VAD 写入点往后找最近的一次同步
-    i_sync = src.index("self._sync_renderer_master_emotion(self._current_emotion)", i_vad)
-    assert i_vad < i_sync, "VAD 必须在 master emotion 同步之前写"
+    assert "emotion_classified_signal = Signal(" not in src, \
+        "信号定义在 pet.py 了 —— 请挪到 mixin（Qt 引用护栏只降不升）"
+
+
+def test_classify_task_emits_signal():
+    """后台任务完成后必须 emit 信号（不能只存字段）。"""
+    src = open(os.path.join(ROOT, "pet_mixins", "emotion_classify_mixin.py"),
+               encoding="utf-8").read()
+    i = src.index("def _classify_reply_async")
+    body = src[i:i + 2200]
+    assert "emotion_classified_signal" in body, "后台任务未发信号（慢路径不通）"
+    assert "sig.emit(" in body, "未 emit"
 
 
 def test_base_set_va_target_default_returns_false():
     """基类默认实现返回 False（不支持连续 VA 的渲染器）。"""
     from avatar.base import AvatarRenderer
     assert AvatarRenderer.set_va_target(None, 0.5, 0.5) is False
+
+
+def test_base_set_emotion_intensity_default_returns_false():
+    """基类默认实现返回 False（不支持强度缩放的渲染器）。"""
+    from avatar.base import AvatarRenderer
+    assert AvatarRenderer.set_emotion_intensity(None, 0.5) is False
+
+
+# ── 7. A 项：强度接线 ──
+
+def test_renderers_expose_set_emotion_intensity():
+    """三个渲染器都要有 set_emotion_intensity。"""
+    from avatar.base import AvatarRenderer
+    assert hasattr(AvatarRenderer, "set_emotion_intensity"), "基类缺默认实现"
+    for rel in ("live2d_renderer.py", "vrm_renderer.py"):
+        src = open(os.path.join(ROOT, "avatar", rel), encoding="utf-8").read()
+        assert "def set_emotion_intensity" in src, f"{rel} 未实现"
+
+
+def test_classified_signal_carries_intensity():
+    """信号要带 intensity（4 个参数）—— 否则 A 项白做。"""
+    src = open(os.path.join(ROOT, "pet_mixins", "emotion_classify_mixin.py"),
+               encoding="utf-8").read()
+    assert "emotion_classified_signal = _make_signal(str, float, object, float)" in src, \
+        "信号签名未含 intensity"
+    i = src.index("def _classify_reply_async")
+    body = src[i:i + 2400]
+    assert "float(getattr(r, \"intensity\"" in body or "r.intensity" in body, \
+        "后台任务未传递 intensity"
+
+
+def test_apply_writes_intensity_to_renderer():
+    """槽里要把 intensity 写进渲染器。"""
+    src = open(os.path.join(ROOT, "pet_mixins", "emotion_classify_mixin.py"),
+               encoding="utf-8").read()
+    i = src.index("def _apply_classified_emotion")
+    body = src[i:i + 4000]
+    assert "set_emotion_intensity" in body, "槽未写强度到渲染器"
+
+
+def test_intensity_write_after_vad():
+    """强度要在 VAD 之后写 —— VAD 会重设 _va_target，顺序无所谓但保持一致。"""
+    src = open(os.path.join(ROOT, "pet_mixins", "emotion_classify_mixin.py"),
+               encoding="utf-8").read()
+    i_vad = src.index("setter(vad[0], vad[1]")
+    i_int = src.index("setter(float(intensity))")
+    assert i_vad < i_int, "强度应在 VAD 之后写"
+
+
+# ── 8. B 项：VA 锚点扩展 ──
+
+def test_emotion_va_has_new_anchors():
+    """B 项新增的 4 个锚点必须在表里。"""
+    src = open(os.path.join(ROOT, "avatar", "live2d_renderer.py"),
+               encoding="utf-8").read()
+    for name in ("affectionate", "calm", "confused", "tired"):
+        assert f'"{name}":' in src, f"缺少锚点 {name}"
+
+
+def test_va_anchors_cover_positive_low_arousal():
+    """新增锚点必须填补「V>0 且 A<0」的空白。
+
+    原来 7 个锚点里，正价区只有 happy(0.8,0.7)/cute(0.7,0.5)，
+    A 都不低 —— 「平静的愉快/温柔」无处可去。
+    affectionate(0.65,0.10) 与 calm(0.25,-0.45) 补上这一块。
+    """
+    import importlib
+    mod = importlib.import_module("avatar.live2d_renderer")
+    va = getattr(mod.Live2DRenderer, "_EMOTION_VA", {})
+    positive_low = [(n, v) for n, v in va.items() if v[0] > 0 and v[1] < 0.2]
+    assert positive_low, "正价低唤起区仍然空白"
+
+
+def test_va_anchors_match_classifier_presets():
+    """新锚点的坐标应与分类器的 VAD 预设一致（不另编）。"""
+    import importlib
+    mod = importlib.import_module("avatar.live2d_renderer")
+    va = getattr(mod.Live2DRenderer, "_EMOTION_VA", {})
+    from core.emotion_classifier import EMOTION_VAD_PRESETS as P
+    for name in ("affectionate", "calm", "confused", "tired"):
+        assert name in P, f"分类器预设缺 {name}"
+        assert va[name][0] == pytest.approx(P[name][0]), f"{name} valence 与预设不一致"
+        assert va[name][1] == pytest.approx(P[name][1]), f"{name} arousal 与预设不一致"
+
+
+def test_va_emotions_list_matches_dict():
+    """_VA_EMOTIONS 必须与 _EMOTION_VA 的键一致。
+
+    插值函数遍历 _VA_EMOTIONS 查 _EMOTION_VA —— 两边不一致会 KeyError 或漏锚点。
+    """
+    import importlib
+    mod = importlib.import_module("avatar.live2d_renderer")
+    R = mod.Live2DRenderer
+    assert set(R._VA_EMOTIONS) == set(R._EMOTION_VA.keys()), (
+        f"不一致：_VA_EMOTIONS={sorted(set(R._VA_EMOTIONS) - set(R._EMOTION_VA))} "
+        f"多余；_EMOTION_VA 缺 {sorted(set(R._EMOTION_VA) - set(R._VA_EMOTIONS))}"
+    )
+
+
+def test_all_va_anchors_have_facial_targets():
+    """每个 VA 锚点都必须有对应的面部参数表 —— 否则插值 KeyError。"""
+    import importlib
+    mod = importlib.import_module("avatar.live2d_renderer")
+    R = mod.Live2DRenderer
+    missing = [n for n in R._VA_EMOTIONS if n not in R._EMOTION_FACIAL_TARGETS]
+    assert not missing, f"这些锚点缺面部参数表: {missing}"
+
+
+def test_facial_targets_have_consistent_keys():
+    """所有面部参数表的键集合要一致 —— 插值时按 tgt0 的键遍历。"""
+    import importlib
+    mod = importlib.import_module("avatar.live2d_renderer")
+    R = mod.Live2DRenderer
+    keysets = {n: set(t.keys()) for n, t in R._EMOTION_FACIAL_TARGETS.items()}
+    base_name = "neutral"
+    base = keysets[base_name]
+    bad = {n: sorted(k - base) + sorted(base - k) for n, k in keysets.items() if k != base}
+    assert not bad, f"参数键不一致: {bad}"
 
 
 def test_config_has_emotion_classifier():
