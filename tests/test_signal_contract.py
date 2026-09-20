@@ -311,7 +311,7 @@ def _init_call_order() -> list:
     return re.findall(r"self\.(_init_[a-z0-9_]+)\(\)", seg)
 
 
-# 实测快照（2026-09-17）。
+# 实测快照（2026-09-17，2026-09-20 增 _init_emotion_classifier）。
 #
 # 关键事实：`__init__` 只有 37 行，**只直接调 10 个** `_init_*`。
 # 其余 10 个是嵌套调用（如 _init_neko_p1 内部调 p1_* 系列），
@@ -319,12 +319,18 @@ def _init_call_order() -> list:
 #
 # 顺序有语义：_init_states 必须先于 _init_engine（引擎依赖状态字段）；
 # _init_visual_startup 依赖渲染器已就绪。
+#
+# 2026-09-20 新增 `_init_emotion_classifier`（情绪分类层，见
+# docs/情绪分类层-2026-09-20.md）。插在 _init_engine 之后：
+# 它在对话链路上（回复回调要用），且只依赖 self.config（__init__ 开头已 load），
+# 对前后各项均无依赖。
 EXPECTED_INIT_ORDER = [
     "_init_diag_switches",
     "_init_states",
     "_init_schedulers",
     "_init_interaction",
     "_init_engine",
+    "_init_emotion_classifier",
     "_init_voice_audio",
     "_init_mcp_server",
     "_init_visual_startup",
@@ -354,6 +360,19 @@ def test_init_call_order_preserved():
     assert actual == EXPECTED_INIT_ORDER, (
         f"__init__ 调用顺序改变:\n  预期 {EXPECTED_INIT_ORDER}\n  实得 {actual}"
     )
+
+
+def test_init_emotion_classifier_exists_in_mixin():
+    """`_init_emotion_classifier` 在 mixin 里，不在 pet.py。
+
+    上面那条嵌套检查只搜 pet.py 源码，盖不到 mixin ——
+    单独守一道，防止「调了但方法不存在」的导入期崩溃。
+    """
+    p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "pet_mixins", "emotion_classify_mixin.py")
+    src = open(p, encoding="utf-8").read()
+    assert re.search(r"def _init_emotion_classifier\(self", src), \
+        "mixin 里缺 _init_emotion_classifier"
 
 
 def test_nested_init_methods_exist():

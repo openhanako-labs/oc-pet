@@ -68,6 +68,7 @@ from pet_mixins.play_mixin import PlayMixin
 from pet_mixins.bubble_mixin import BubbleMixin
 from pet_mixins.interface_mixin import InterfaceMixin
 from pet_mixins.perception_mixin import PerceptionMixin
+from pet_mixins.emotion_classify_mixin import EmotionClassifyMixin
 from pet_mixins.panels_mixin import PanelsMixin
 from pet_mixins.perch_mixin import PerchMixin
 
@@ -83,7 +84,7 @@ except ImportError:
 
 # ─── 设置对话框 ─────────────────────────────────────────
 
-class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, BehaviorMixin, VoiceProviderMixin, PlayMixin, BubbleMixin, InterfaceMixin, PerceptionMixin, PanelsMixin, PerchMixin, QWidget):
+class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, BehaviorMixin, VoiceProviderMixin, PlayMixin, BubbleMixin, InterfaceMixin, PerceptionMixin, EmotionClassifyMixin, PanelsMixin, PerchMixin, QWidget):
     """透明桌面宠物窗口"""
 
     # 跨线程信号：后台线程 -> 主线程
@@ -160,6 +161,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         self._init_schedulers()
         self._init_interaction()
         self._init_engine()
+        self._init_emotion_classifier()
         self._init_voice_audio()
         self._init_mcp_server()
         self._init_visual_startup()
@@ -2807,6 +2809,20 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
     def _on_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str, action_intent=None):
         """对话引擎回复回调 - 从后台线程调用，通过信号转到主线程"""
+        # 2026-09-20：**在后台线程就提交情绪分类**。
+        #
+        # 为什么在这里：本方法已经跑在后台线程，而分类要走网络（实测 100-300ms）。
+        # 提前提交，等 engine_reply_signal 排到主线程时结果大概率已就位。
+        # 未就位就静默跳过（_resolved_reply_emotion 返回空）——不阻塞、不等。
+        #
+        # 为什么不用 [feel:] 的 VA：实测 VA 二维承载不了情绪细粒度
+        # （正价区全塌成 happy，「记得让眼睛歇一歇」被判开心，实际是关心）。
+        try:
+            if reply and self._classify_enabled:
+                self._classify_reply_async(reply)
+        except Exception:
+            logger.debug("pet: 提交情绪分类失败", exc_info=True)
+
         # 从 Python threading.Thread 调 QTimer.singleShot 不可靠
         # 用 Signal 发射，Qt 会自动跨线程投递到主线程
         self.engine_reply_signal.emit(reply, emotion, anim, audio_path, action_intent)
@@ -2991,6 +3007,20 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
         # 交付：文字与音频的时序契约（见 _deliver_reply）
         self._deliver_reply(display_text, emotion, audio_path)
+
+        # 2026-09-20：情绪分类器接接线（决策 C）
+        #
+        # 主链路上 `emotion` 变量**恒为 "neutral"**（实测：[emotion:] 标签
+        # 只有兜底才补，补的就是 neutral）。而它有多个消费者：
+        # set_emotion_expression_only / _set_anim_seq(emotion=) / _current_emotion。
+        # 分类器给出的情绪词直接替换这个空值。
+        #
+        # **不依赖决策器是否启用**——决策器是另一层（从候选里挑具体预设），
+        # 而本层只负责把「情绪是什么」填对。
+        _classified = self._resolved_reply_emotion()
+        if _classified:
+            emotion = _classified
+        self._consume_reply_emotion()
 
         # 动画（收窄：surprised/angry 不切瞪眼帧，避免对话时高频瞪眼）
         try:

@@ -461,6 +461,17 @@ class ChatMixin:
         # P2 关系：记录用户话题到陪伴记忆（隔天能接上）
         self._record_topic(text)
 
+        # 2026-09-20：后台分类用户情绪（决策 C 的 user 视角）
+        #
+        # 为什么要分类：让桌宠知道用户此刻什么情绪（实测 11/14 = 79%）。
+        # 为什么异步：要走网络，而本方法跑在 Qt 主线程（按钮/回车回调）。
+        # 为什么分类结果不直接改表情：用户的情绪不该立刻改变桌宠的脸——
+        # 那会让桌宠显得没有自我。结果存 _last_user_emotion，供行为层参考。
+        try:
+            self._classify_user_async(text)
+        except Exception:
+            logger.debug("chat_mixin: 提交用户情绪分类失败", exc_info=True)
+
         # ── 用户发新消息 → 立即截停旧 TTS(P2 可中断管线)──
         self._tts_player.stop()
         # P1 全链路打断：推进代际 + 中断 LLM 层（旧消息作废，转入新对话）

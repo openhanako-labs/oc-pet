@@ -69,6 +69,10 @@ class PerceptionMixin:
         "cute": "害羞",
         "shy": "害羞",
         "neutral": "平静",
+        # 2026-09-20：情绪分类器（core/emotion_classifier.py）会产出这两个词，
+        # 而决策器的候选分组里没有对应中文——不补就静默落空。
+        "confused": "疑惑",
+        "sleepy": "困",
     }
 
     # ── VA 坐标 → 情绪词（2026-09-20 修正接线）──
