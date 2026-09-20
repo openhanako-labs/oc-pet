@@ -42,7 +42,7 @@ from ui.theme.palette import rgb, rgba
 from ui.theme import get_default, rgb, rgba
 
 from motion.action_linker import ActionLinker
-from core.game.session import GameSessionWatcher, emit_session_events
+from core.game.session import emit_session_events
 from motion.foreground_watcher import ForegroundWatcher
 from ui.tts_player import TTSTtsPlayer
 from ui.streaming_pcm_player import StreamingPcmPlayer
@@ -1103,24 +1103,10 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             logger.warning("配置热生效失败（非致命）: %s", e)
 
     def _init_lip_sync(self):
-        """按 ``config.lip_sync`` 配置口型。
+        """按 ``config.lip_sync`` 配置口型（实现见 core.hot_config_appliers）。"""
+        from core.hot_config_appliers import apply_lip_sync
 
-        起音/收音（40ms/90ms）是常量，本身不需配置；这里只接**开口上限**：
-        ``mouth_peak`` 默认 1.0 = 不压（保持现行为）。
-
-        为何不给默认值：AgentAtelierR 用 55% 避免“每次都张满嘴”，但 oc-pet 的
-        ``/a/`` 是自己调到 0.95 的（miku 模型实测值）——压多少是**看脸决定**的事，
-        我看不见成品，不替你定。想试就把 ``lip_sync.mouth_peak`` 改成 0.75 或 0.55。
-        """
-        try:
-            from core.lip_sync import set_mouth_peak
-
-            cfg = (self.config.get("lip_sync", {}) if hasattr(self, "config") else {}) or {}
-            set_mouth_peak(cfg.get("mouth_peak", 1.0))
-            return True          # 供 _apply_runtime_config 判断"真装上了"
-        except Exception as e:
-            logger.warning("口型配置失败（非致命）: %s", e)
-            return False
+        return apply_lip_sync(getattr(self, "config", {}) or {})
 
     def _init_a2a(self, session_manager):
         """G2/A4：把活派给 Hana 的 agent（**启动路径**）。
@@ -1143,38 +1129,15 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         默认**关**（``config.a2a.enabled``），护栏全在 ``core/a2a.py``。
         结果**不自动念**——(b) 方案：只响一声门铃，他问才讲。
         """
-        try:
-            from core.a2a_capability import apply_config
+        from core.hot_config_appliers import apply_a2a
 
-            sm = getattr(self, "_a2a_session_manager", None)
-            if sm is None:
-                logger.info("A2A: 无会话管理器，跳过")
-                # 返回 False = 没装成功 → 调用方**不记账**，
-                # 否则 _init_a2a 拿到会话管理器后会被"配置没变"挡掉
-                return False
-
-            def _create(agent_id):
-                # create_session 的 agent_id 是**关键字参数**
-                return sm.create_session(agent_id=agent_id)
-
-            def _send(session, text, timeout):
-                # send_and_wait 的 timeout 也是关键字参数，
-                # 且返回 ReplyResult 而不是 str——两处都跟默认假设不一样
-                r = sm.send_and_wait(session, text, timeout=timeout)
-                return getattr(r, "text", "") or ""
-
-            d = apply_config(
-                getattr(self, "config", {}) or {}, _create, _send,
-                on_result=self._on_a2a_result,
-            )
-            self._a2a = d
-            logger.info("A2A %s：%s",
-                        "已生效" if (d is not None and d.enabled) else "未启用",
-                        d.stats() if d is not None else "无会话管理器")
-            return d
-        except Exception as e:
-            logger.warning("A2A 应用配置失败（非致命）: %s", e)
-            return None
+        d = apply_a2a(
+            getattr(self, "config", {}) or {},
+            getattr(self, "_a2a_session_manager", None),
+            on_result=self._on_a2a_result,
+        )
+        self._a2a = d if d is not False else getattr(self, "_a2a", None)
+        return d
 
     def _on_a2a_result(self, result):
         """(b) 方案：**只响门铃，不念结论**。
@@ -1212,10 +1175,51 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
             g = configure_gate(getattr(self, "config", {}) or {})
             logger.info("O1-P2 全局闸门就绪：%s", g.stats())
+            self._init_llm_gate_attribution_log(g)
             return True
         except Exception as e:
             logger.warning("O1-P2 全局闸门配置失败（非致命）: %s", e)
             return False
+
+    def _init_llm_gate_attribution_log(self, gate):
+        """每 10 分钟打一条 LLM 归因日志（2026-09-19）。
+
+        动机：三条流（vision / utility / chat）配额是分开的，但 429 此前只有
+        一个全局计数，撞墙时无法回答「到底是哪条流在撞」。于是只能笼统归因为
+        「共用 provider」，进而把**已经拉到位**的杠杆再拉一次。
+
+        这条日志是查清归因的最小成本手段——先看清，再动杠杆。
+
+        为什么不用 ``_unified_tick``：那是 50ms（20fps）高频循环，
+        在里面拼字符串打日志不合适。独立低频定时器更干净。
+        """
+        try:
+            from PySide6.QtCore import QTimer
+
+            cfg = ((getattr(self, "config", {}) or {})
+                   .get("llm_gate", {}) or {})
+            # 0 或负 = 关闭归因日志
+            minutes = int(cfg.get("attribution_log_minutes", 10) or 0)
+            if minutes <= 0:
+                return
+            timer = QTimer(self)
+            timer.setInterval(max(1, minutes) * 60 * 1000)
+
+            def _emit():
+                try:
+                    from core.llm_gate import get_gate
+
+                    # 每次现取：闸门可能被热替换（config_watch）
+                    logger.info("%s", get_gate().attribution_report())
+                except Exception:
+                    logger.debug("pet: 归因日志失败（忽略）", exc_info=True)
+
+            timer.timeout.connect(_emit)
+            timer.start()
+            self._llm_attribution_timer = timer
+            logger.info("LLM 归因日志已启用：每 %d 分钟一条", minutes)
+        except Exception as e:
+            logger.debug("pet: 归因日志定时器不可用（非致命）: %s", e)
 
     def _init_game_watch(self):
         """P0-1（陪玩）：按 ``config.game`` 建游戏会话状态机。
@@ -1227,23 +1231,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         白名单来自内置表（零配置可用）+ ``config.game.games`` 覆盖，
         ``config.game.disabled`` 可剔除条目，全部关闭用 ``enabled=false``。
         """
-        self._game_watch = None
-        try:
-            cfg = (self.config.get("game", {}) if hasattr(self, "config") else {}) or {}
-            if not cfg.get("enabled", True):
-                logger.info("陪玩 P0-1：游戏识别未启用（config game.enabled=false）")
-                return True
-            from core.game.registry import load_games
+        from core.hot_config_appliers import apply_game_watch
 
-            games = load_games(cfg)
-            self._game_watch = GameSessionWatcher(games=games)
-            logger.info("陪玩 P0-1：游戏识别就绪，白名单 %d 款（%s）",
-                        len(games), "、".join(g.name for g in games[:5]))
-            return True
-        except Exception as e:
-            logger.warning("陪玩 P0-1 初始化失败（非致命）: %s", e)
-            self._game_watch = None
-            return False
+        ok, watcher = apply_game_watch(getattr(self, "config", {}) or {})
+        self._game_watch = watcher
+        return ok
 
     def _on_foreground_change_with_memory(self, app_name: str, app_category: str, title: str):
         """前台变化：记录活动到陪伴记忆 + A 事件流 + 原有回调。"""
@@ -2677,20 +2669,12 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             self._show_bubble("…信号不太好", emotion="sad")
 
     def _clear_hanako_bubble(self):
-        """清除气泡（超时回调）；如有排队的低优先级通知，依次弹出"""
-        if hasattr(self, 'bubble'):
-            try:
-                self.bubble.hide_bubble()
-            except Exception:
-                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
-            self._bubble_message = ""
-            self._bubble_priority = 0
-            # 弹出最早排队的通知
-            while self._pending_bubbles:
-                text, emotion, priority = self._pending_bubbles.pop(0)
-                if text:
-                    self._show_bubble(text, emotion=emotion, priority=priority)
-                    return
+        """清除气泡（超时回调）—— 实现见 BubbleMixin._clear_hanako_bubble_impl。
+
+        2026-09-19：实质逻辑搬进 bubble_mixin（pet.py 有行数护栏，
+        且这段本就属于气泡职责）。此处只保留薄入口。
+        """
+        self._clear_hanako_bubble_impl()
 
     def _on_emotion_expired(self):
         """A2: 情绪过期 — 3秒无新情绪后回到 idle
@@ -3005,35 +2989,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 logger.warning("气泡文本疑似关键词堆，已拦截: %r", display_text[:60])
                 display_text = ""
 
-        # 是否有即将播放的音频（有则延到 on_tts_start 显示）
-        will_play = bool(
-            audio_path and os.path.exists(audio_path)
-            and (self.config.get("tts", {}) or {}).get("enabled", True)
-        )
-        if will_play and display_text:
-            # 暂存：等 TTS 真正开始播放时再显示（避免两次气泡）
-            self._pending_bubble_text = display_text
-            self._pending_bubble_emotion = emotion
-            logger.debug("气泡延后到 TTS 开播时显示: %r", display_text[:30])
-        elif display_text:
-            # 无音频：直接显示（否则用户什么都看不到）
-            self._pending_bubble_text = ""
-            self._show_bubble(display_text, emotion=emotion, priority=1)
-        else:
-            # 空回复也要清除“思考中”气泡
-            self._pending_bubble_text = ""
-            try:
-                self.bubble.hide_bubble()
-            except Exception:
-                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
-
-        # 播放音频（和文字一起）
-        if audio_path and os.path.exists(audio_path):
-            tts_cfg = self.config.get("tts", {})
-            if tts_cfg.get("enabled", True):
-                logger.info("Playing TTS: %s", audio_path)
-                self._last_tts_emotion = emotion or "neutral"
-                self._tts_player.play(audio_path)
+        # 交付：文字与音频的时序契约（见 _deliver_reply）
+        self._deliver_reply(display_text, emotion, audio_path)
 
         # 动画（收窄：surprised/angry 不切瞪眼帧，避免对话时高频瞪眼）
         try:
@@ -3057,7 +3014,21 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 self._set_anim_seq(body_anim, emotion=emotion, style=get_transition_style(emotion))
                 # 表达决策器：LLM 没点动作时，由本地引擎把情绪翻译成具体预设。
                 # 只在这条分支调（LLM 已给 [action:] 时尊重它的选择，不抢）。
-                self._direct_expression(emotion, "对话回复")
+                #
+                # 2026-09-20 接线修正：**优先用 VA 坐标，而不是 emotion 变量**。
+                # 实测（tools/verify_emotion_wiring.py）：主链路上 LLM 输出的是
+                # `[feel:v,a]`，而 `[emotion:xxx]` 只有兜底才补、补的是 neutral
+                # ——emotion 变量在真实对话里恒为 "neutral"，决策器只能选
+                # 「平静」组预设。VA 才是真实情绪信号，且已在 action_intent["va"] 里。
+                _va = None
+                if isinstance(action_intent, dict):
+                    _va = action_intent.get("va")
+                if isinstance(_va, (list, tuple)) and len(_va) >= 2:
+                    self._direct_expression_from_va(
+                        _va[0], _va[1], "对话回复(VA)")
+                else:
+                    # 无 VA 时才回退到离散情绪词（显式 [emotion:] 路径）
+                    self._direct_expression(emotion, "对话回复")
             # 面部表情独立于身体动作：始终同步对话情绪（P2-10 修复，不依赖
             # play_anim 的 if emotion 守卫，强制清渲染器表情）
             if r is not None and hasattr(r, "set_emotion_expression_only"):
@@ -3365,6 +3336,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             '_anim_timer', '_drag_poll_timer', '_hanako_poll_timer',
             '_break_timer', '_foreground_timer', '_bubble_timer',
             '_mouse_tracker_timer',
+            '_llm_attribution_timer',   # 2026-09-19 LLM 归因日志
         ]
         for tname in timers:
             t = getattr(self, tname, None)
@@ -3414,8 +3386,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self._engine.stop()
                 # 等后台线程退出，避免 TTS 文件被截断
-                if self._engine._thread and self._engine._thread.is_alive():
-                    self._engine._thread.join(timeout=3)
+                # 2026-09-19：走引擎语义接口，不再直接碰 _thread
+                if not self._engine.join_thread(timeout=3):
+                    logger.debug("pet: 引擎线程 3s 内未退出（继续关闭）")
             except Exception:
                 logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 

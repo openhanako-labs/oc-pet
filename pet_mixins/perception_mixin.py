@@ -71,6 +71,63 @@ class PerceptionMixin:
         "neutral": "平静",
     }
 
+    # ── VA 坐标 → 情绪词（2026-09-20 修正接线）──
+    #
+    # 为什么需要：主链路上 LLM 输出的是 `[feel:valence,arousal]`（VA 坐标），
+    # 而 `[emotion:xxx]` 标签**只有兜底才会补，补的是 neutral**。
+    # 实测（tools/verify_emotion_wiring.py）：带 [feel:]/[action:] 的样本
+    # parse_emotion 全部返回 "neutral"。
+    #
+    # 后果：决策器永远收到 neutral → 只能选「平静」组的预设。
+    # （之前的 12/12 验证是**直接喂情绪**，绕过了这条接线，所以没发现。）
+    #
+    # 阈值取法：先按 valence 定正负向，再用 arousal 分强弱/细分。
+    # 边界故意选在 ±0.15 / ±0.4——让「轻微倾向」不触发（宁可不动，不能乱动，
+    # 与决策器自身的回退闸同一原则）。
+    # 阈值取法（2026-09-20 用实测样本调）：
+    #   消极区的分界取 arousal ≥ 0.7（而不是 0.4）——实测「唉，今天又被领导骂了」
+    #   给的是 VA(-0.6, +0.4)，那是**失落**不是生气；真正的生气唤起会更高。
+    #   愤怒与悲伤在 VA 上的差别主要在 arousal，0.7 是个保守分界。
+    _VA_EMOTION_RULES: tuple = (
+        # (valence 下限, valence 上限, arousal 下限, arousal 上限, 情绪词)
+        (0.15, 1.01, -1.01, 1.01, "happy"),       # 积极 → 开心（不分唤起）
+        (-0.15, 0.15, 0.40, 1.01, "surprised"),   # 中性价 + 高唤起 → 惊讶
+        (-1.01, -0.15, 0.70, 1.01, "angry"),      # 消极 + **很高**唤起 → 生气
+        (-1.01, -0.15, -1.01, 0.70, "sad"),       # 消极 + 其余 → 失落
+    )
+
+    @classmethod
+    def _va_to_emotion(cls, valence: float, arousal: float) -> str:
+        """把 [feel:v,a] 坐标翻成决策器认的英文情绪词。
+
+        Returns:
+            情绪词；落在中性区（|v|<0.15 且 |a|<0.40）时返回 ``""``，
+            表示「不值得动」——调用方应据此跳过，不要默认成 neutral
+            去占一次决策（那会把「平静」组预设刷上去）。
+        """
+        try:
+            v = float(valence)
+            a = float(arousal)
+        except (TypeError, ValueError):
+            return ""
+        for v_lo, v_hi, a_lo, a_hi, emo in cls._VA_EMOTION_RULES:
+            if v_lo <= v < v_hi and a_lo <= a < a_hi:
+                return emo
+        return ""
+
+    def _direct_expression_from_va(self, valence: float, arousal: float,
+                                   reason: str = "对话回复") -> None:
+        """从 VA 坐标驱动表达决策（主链路的正确入口）。
+
+        与 ``_direct_expression(emotion)`` 的区别：那个收情绪词，这个收坐标。
+        主链路给的是坐标（``[feel:]``），所以应该走这个。
+        """
+        emo = self._va_to_emotion(valence, arousal)
+        if not emo:
+            logger.debug("表达决策跳过：VA(%s,%s) 落在中性区", valence, arousal)
+            return
+        self._direct_expression(emo, reason)
+
     def _direct_expression(self, emotion: str, reason: str = "") -> None:
         """用本地决策器把「情绪」翻译成「具体表情预设」并播放。
 
@@ -88,17 +145,36 @@ class PerceptionMixin:
         zh = self._EMOTION_ZH.get((emotion or "").lower())
         if not zh:
             return
+        # ⚠ 2026-09-20 实测：本方法跑在**主线程**（engine_reply_signal → Qt 队列），
+        # 而 d.decide() 是**同步阻塞**的网络调用。实测引擎 /api/run-rlcd 端点
+        # 卡死时（60s+ 超时），客户端 timeout=8s 会把**主线程卡满 8 秒**
+        # ——表现为每次对话回复都卡顿。
+        # 所以加一道硬闸：引擎不可用/上次失败则直接跳过，不再尝试。
+        if not self._expression_engine_usable(d):
+            return
         try:
             result = d.decide(zh, "中", reason)
         except Exception:
             logger.debug("perception_mixin: 表达决策异常（忽略）", exc_info=True)
+            self._note_expression_engine_result(False)
             return
+        # 熔断记录：source="engine" 才算真通；fallback/none 说明引擎没起作用
+        self._note_expression_engine_result(
+            getattr(result, "source", "") == "engine")
         if not result.accepted or not result.gesture:
             logger.debug("表达决策未采纳: %s", result.reason)
             return
         renderer = getattr(self, "_renderer", None)
         if renderer is None:
             return
+        self._play_expression_preset(result, renderer)
+
+    def _play_expression_preset(self, result, renderer) -> None:
+        """把决策结果播出去（从 _direct_expression 拆出的后半段）。
+
+        拆分原因：插入熔断逻辑时发现原方法太长，拆成「决策」与「播放」
+        两段更好读，也避免以后在中间插代码时再搞错缩进层级。
+        """
         # 冷却：与 [action:] 共用同一张表，避免两路同时刷动作
         now = time.time()
         cooldowns = getattr(self, "_action_cooldowns", None)
@@ -107,16 +183,11 @@ class PerceptionMixin:
             logger.debug("表达决策冷却中: %s", result.gesture)
             return
         try:
-            # 预设走公开接口 play_emote_sequence（base.py 已定义，
-            # Live2DRenderer / SpriteRenderer 各自重写）。
-            # 不用 _trigger_gesture：那是私有的，且它会先过别名表——
-            # 而决策器返回的已经是**预设名本身**，再过别名表是多余的一跳。
             played = False
             player = getattr(renderer, "play_emote_sequence", None)
             if callable(player):
                 played = bool(player(result.gesture))
             if not played:
-                # 回退：预设播不了（如 sprite 无对应帧）→ 走动作意图路径
                 played = bool(renderer.apply_action_intent(
                     {"gesture": result.gesture, "intensity": result.scale}))
             if played:
@@ -127,6 +198,36 @@ class PerceptionMixin:
                 logger.debug("表达决策动作未匹配: %s", result.gesture)
         except Exception:
             logger.debug("perception_mixin: 表达决策播放失败（忽略）", exc_info=True)
+
+    def _expression_engine_usable(self, director) -> bool:
+        """引擎可用性闸门（带失败熔断）。
+
+        为什么需要：``is_available()`` 探的是 ``/api/presets``（秒回），
+        而真正决策走 ``/api/run-rlcd``（实测卡死）——**健康检查探错了端点**，
+        于是「在线」是假象，每次决策都要撞 8 秒超时。
+
+        熔断策略：连续失败 N 次后停用 M 秒，期间不再尝试（避免每次回复
+        都卡 8 秒）。成功后立即复位。
+        """
+        now = time.time()
+        # 熔断中
+        if now < getattr(self, "_expr_engine_cool_until", 0.0):
+            return False
+        return True
+
+    def _note_expression_engine_result(self, ok: bool) -> None:
+        """记录一次决策结果，供熔断判断（由 _direct_expression 调用方使用）。"""
+        if ok:
+            self._expr_engine_fail_streak = 0
+            self._expr_engine_cool_until = 0.0
+            return
+        streak = int(getattr(self, "_expr_engine_fail_streak", 0)) + 1
+        self._expr_engine_fail_streak = streak
+        if streak >= 2:
+            # 两次失败就停用 5 分钟——引擎卡死时不应持续拖慢对话
+            self._expr_engine_cool_until = time.time() + 300.0
+            logger.warning(
+                "表达决策引擎连续失败 %d 次，停用 300s（避免主线程阻塞）", streak)
 
     # ── 调度器与感知控制器 ──────────────────────────────────
 

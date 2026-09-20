@@ -456,7 +456,74 @@ class ConversationEngine:
     @property
     def tts_ready(self) -> bool:
         return self._tts_ready
-    
+
+    # ── 2026-09-19：对外语义接口（替掉 4 处 self._engine._* 私有访问）──
+    #
+    # 动机：PetSystem/PetShell 拆分的前置。mixin 直接读写引擎私有属性
+    # （_lock / _tts / _tts_ready / _adapter / _thread）会让「引擎内部实现」
+    # 泄漏到调用方，拆分时无法把引擎搬到 PetSystem 而不动 UI 侧。
+    #
+    # 设计原则：这里**不做成 getter**（那只是把私有属性换个名字暴露），
+    # 而是提供有名字的**操作**：
+    #   · set_tts_provider()   —— 原子替换（持引擎锁）
+    #   · transport_mode()     —— 语义查询「当前是不是 Hanako 模式」
+    #   · reply_timeout_sec()  —— 语义查询「该等多久」
+    #   · join_thread()        —— 语义操作「关闭时等它收尾」
+
+    def set_tts_provider(self, provider) -> bool:
+        """原子替换 TTS provider（供热切换用）。
+
+        必须持引擎锁：worker 线程正在读 ``_tts`` / ``_tts_ready``，
+        分开赋值会让它在中间态上合成（拿到新 provider 但 ready 还是旧值）。
+
+        Returns:
+            替换后的 ready 状态。
+        """
+        with self._lock:
+            self._tts = provider
+            self._tts_ready = bool(
+                provider is not None and getattr(provider, "is_ready", False)
+            )
+            return self._tts_ready
+
+    def transport_mode(self) -> str:
+        """当前传输模式：``"hanako"`` / ``"direct"`` 等。
+
+        拿不到 adapter 时按 ``direct`` 处理（与调用方原有兜底一致）。
+        """
+        adapter = getattr(self, "_adapter", None)
+        if adapter is None:
+            return "direct"
+        return str(getattr(adapter, "transport_mode", "direct") or "direct")
+
+    def reply_timeout_sec(self) -> float:
+        """Hanako 模式下的回复超时（秒）；拿不到时回退 180。
+
+        只有 Hanako 模式才需要长超时（长任务支持）；直连模式用调用方
+        自己的默认（30s），所以这里只负责报出 Hanako 侧的值。
+        """
+        adapter = getattr(self, "_adapter", None)
+        if adapter is None:
+            return 180.0
+        try:
+            return float(getattr(adapter, "_reply_timeout", 180) or 180)
+        except (TypeError, ValueError):
+            return 180.0
+
+    def join_thread(self, timeout: float = 3.0) -> bool:
+        """关闭时等待引擎后台线程收尾。
+
+        Returns:
+            True = 线程已结束；False = 超时仍在跑（或线程不存在）。
+        """
+        th = getattr(self, "_thread", None)
+        if th is None:
+            return True
+        if not th.is_alive():
+            return True
+        th.join(timeout=timeout)
+        return not th.is_alive()
+
     # P0-1: 真实回调方法（在主线程执行）
     def _real_on_reply(self, reply: str, emotion: str, anim: str, audio_path: str, action_intent=None):
         """真实 on_reply 回调（主线程）"""

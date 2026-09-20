@@ -247,8 +247,9 @@ class BubbleMixin:
         if hasattr(self, '_new_session_action'):
             hanako_mode = False
             try:
-                if self._engine and self._engine._adapter:
-                    hanako_mode = getattr(self._engine._adapter, 'transport_mode', 'direct') != 'direct'
+                # 2026-09-19：走引擎语义接口，不再碰 _adapter
+                if self._engine:
+                    hanako_mode = self._engine.transport_mode() != "direct"
             except Exception:
                 hanako_mode = False
             self._new_session_action.setVisible(hanako_mode)
@@ -271,15 +272,12 @@ class BubbleMixin:
         # G：celebrating 分支（在 safe_anims 收窄之前 return；开关关闭则降级旧 happy）。
         # 关键约束：只走 AvatarRenderer 统一接口（_status_mapper.render_for），
         # 绝不 import/触碰渲染器内部实现，不新增渲染线程。
-        # P2 节流：避免短时间内多次 tool_end 并发触发 celebrating
+        # G：celebrating 分支。
+        # 2026-09-19：节流**不再在这里做**。原先此处与 _do_celebrating 各做一遍
+        # 5s 时间节流（同一份逻辑两处），且本处是唯一调用者，第二处形同虚设。
+        # 现在统一收敛到 _do_celebrating::_celebration_should_proceed()，
+        # 那里同时管「时间节流」与「并发锁」两件事，语义完整。
         if state == "celebrating":
-            now = time.time()
-            last_celeb = getattr(self, "_last_celebrating_at", 0.0)
-            if now - last_celeb < 5.0:  # 5s 内只触发一次 celebrating
-                logger.debug("celebrating 节流：距离上次 %.1fs < 5s，跳过", now - last_celeb)
-                return
-            self._last_celebrating_at = now
-            
             celeb_cfg = self.config.get("celebrating", {}) or {}
             if celeb_cfg.get("enabled", True):
                 try:
@@ -413,6 +411,49 @@ class BubbleMixin:
 
     # ── G：celebrating（庆祝态）主线程实现 ──
 
+    #: celebrating 时间节流窗口（秒）：同一批 tool_end 只庆祝一次。
+    _CELEBRATION_THROTTLE_SEC = 5.0
+    #: 庆祝动作时长（秒），与下面 3s revert / 表情时长一致。
+    _CELEBRATION_IN_PROGRESS_SEC = 3.0
+
+    def _celebration_should_proceed(self) -> bool:
+        """celebrating 的唯一入口判定：通过则**负责置位**，返回 True。
+
+        2026-09-19 收敛。原先两道判定散在 ``_do_hanako_state`` 与
+        ``_do_celebrating`` 两处：前者的 5s 时间节流与后者的兜底完全重复，
+        而后者还额外有一道并发锁。三处叠一起既难读，也让「到底被谁拦了」
+        说不清楚（两条日志文案几乎一样）。
+
+        两道判定**不等价**，都保留：
+
+        1. **并发锁** ``_celebration_in_progress`` —— 上一次庆祝**尚未演完**
+           （3s revert 计时器未到 / 合成线程未收尾）。挡的是「同一批 tool_end
+           产生多条庆祝序列和多个合成线程」。
+        2. **时间节流** ``_last_celebrating_at`` —— 距上次庆祝不足 5s。
+           挡的是「演完了但马上又来一次」造成的视觉抖动。
+
+        合并成一道会漏：只留时间节流 → 3s 内的密集并发仍会叠加；
+        只留并发锁 → 演完立刻再来，用户看到连播两次撒花。
+        """
+        # ⚠ 常量也用 getattr 取：既有测试用 SimpleNamespace 打桩，
+        # 不保证带类属性。取不到就用模块级默认值。
+        throttle = float(getattr(self, "_CELEBRATION_THROTTLE_SEC", 5.0) or 5.0)
+        # 1. 并发锁：上一次还没演完
+        if getattr(self, "_celebration_in_progress", False):
+            logger.debug("celebrating 跳过：上一次尚未演完（并发锁）")
+            return False
+        # 2. 时间节流：演完了但太近
+        now = time.time()
+        last = float(getattr(self, "_last_celebrating_at", 0.0) or 0.0)
+        if now - last < throttle:
+            logger.debug("celebrating 跳过：距上次 %.1fs < %.1fs（时间节流）",
+                         now - last, throttle)
+            return False
+        # 通过：置位（调用方负责安排复位）
+        self._last_celebrating_at = now
+        self._celebration_in_progress = True
+        return True
+
     def _do_celebrating(self, summary: str = ""):
         """G celebrating：撒花动作 + 3s 情绪表情 + 气泡 + 完工音 + 3s 后回 idle。
 
@@ -423,18 +464,16 @@ class BubbleMixin:
         不 import/触碰渲染器内部实现（Live2D C 层/渲染线程），不新增渲染线程。
         TTS 合成在后台线程，播放经 tts_celebration_signal 回主线程（绝不直接碰 Qt）。
         """
-        # 并发防护：上一次庆祝未结束（3s revert 计时器未到/合成线程未收尾）时
-        # 跳过重复触发，避免同一批 tool_end 产生多条庆祝序列和多个合成线程。
-        if getattr(self, "_celebration_in_progress", False):
-            logger.debug("celebrating 进行中，跳过重复触发")
+        # 2026-09-19：入口判定统一到这里（原先散在本函数与 _do_hanako_state 两处）。
+        # 用 type(self) 解析而非 self.xxx 直取：既有测试以
+        # ``BubbleMixin._do_celebrating(SimpleNamespace(...))`` 形式直调
+        # （绕过 MRO），那样 self 上没有从类继承来的方法。
+        # 取不到时退化为内联判定，保证行为一致且不重复维护两套逻辑。
+        judge = getattr(type(self), "_celebration_should_proceed", None)
+        if judge is None:
+            judge = BubbleMixin._celebration_should_proceed
+        if not judge(self):
             return
-        # 时间节流兜底（_do_hanako_state 已节流，这里防御其他入口直调）
-        _now = time.time()
-        if _now - getattr(self, "_last_celebrating_at", 0.0) < 5.0:
-            logger.debug("celebrating 节流：5s 内已触发，跳过")
-            return
-        self._last_celebrating_at = _now
-        self._celebration_in_progress = True
         from PySide6.QtCore import QTimer
         QTimer.singleShot(3000, lambda: setattr(self, "_celebration_in_progress", False))
         # 1. 双形态撒花动作（统一接口）
@@ -520,3 +559,92 @@ class BubbleMixin:
             self._tts_player.play(audio_path)
         except Exception as e:
             logger.debug("完工音播放失败（忽略）: %s", e)
+
+    # ── 2026-09-19 从 pet.py 迁入（pet.py 有行数护栏，且这两段属气泡职责）──
+
+    def _clear_hanako_bubble_impl(self):
+        """清除气泡（超时回调）；如有排队的低优先级通知，依次弹出。
+
+        BugFix 2026-09-19：旧实现在 while 循环体内 ``return``，每次超时
+        只弹出**一条**排队通知。而 ``_pending_bubbles`` 全仓只有这一个
+        消费者，于是同时排入 3 条时只有第 1 条会显示，另外两条要等下一次
+        hide_bubble 才轮到 —— 表现为「通知丢失」与「顺序错乱」。
+
+        修法不是简单删掉 ``return``：那样会死循环。
+        ``_show_bubble_impl`` 在气泡可见时会把 ``_bubble_priority`` 抬到当前条的
+        优先级，剩余的低优先级条目随即被**重新入队**，while 永不结束。
+
+        所以先把队列**整体取出**（优先级降序、同级保序），清空原队列，
+        再逐条尝试显示；只要有一条真正上屏就停（其余留到下次超时）。
+        这样既不会死循环，也不会出现「一次只弹一条、其余饿死」。
+        """
+        if not hasattr(self, 'bubble'):
+            return
+        try:
+            self.bubble.hide_bubble()
+        except Exception:
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
+        self._bubble_message = ""
+        self._bubble_priority = 0
+        # 整体取出：优先级降序（同级保持入队顺序，sort 稳定）
+        pending = list(self._pending_bubbles)
+        self._pending_bubbles.clear()
+        pending.sort(key=lambda item: -int(item[2] if len(item) > 2 else 0))
+        for item in pending:
+            text = item[0]
+            emotion = item[1] if len(item) > 1 else "neutral"
+            priority = item[2] if len(item) > 2 else 0
+            if not text:
+                continue
+            try:
+                self._show_bubble(text, emotion=emotion, priority=priority)
+            except Exception:
+                logger.debug("pet: 排队气泡弹出失败", exc_info=True)
+                continue
+            # 真正上屏了（未被去重吃掉）→ 本轮结束，其余留到下次
+            if self.bubble.isVisible() and self._bubble_message == text:
+                break
+            # 未上屏：_show_bubble_impl 已自行重入队（优先级仲裁），此处不重复入队
+
+    def _deliver_reply(self, display_text: str, emotion: str, audio_path: str):
+        """一条回复的交付契约：决定文字何时上屏、音频何时起播。
+
+        2026-09-19 从 ``pet.py::_do_engine_reply_inner`` 抽出。此前这段与
+        「清洗文本」「动画派发」混在同一段，散落着 ``_pending_bubble_text``
+        / ``_pending_bubble_emotion`` 两个暂存变量和三条分支。
+
+        契约（不变，仅收敛位置）：
+          1. 有即将播放的音频 → 文字**暂存**，等 ``on_tts_start`` 真正开口时显示。
+             （旧行为会显示两次：流式气泡结束一次 + TTS 合成完又一次，用户反馈「重复」）
+          2. 无音频（或 TTS 关闭）→ 立即显示。不能把气泡吞了，否则用户什么都看不到。
+          3. 无文本 → 清掉「思考中」气泡。
+          4. 音频起播始终晚于上面三步，且与文字共用同一次交付。
+        """
+        will_play = bool(
+            audio_path and os.path.exists(audio_path)
+            and (self.config.get("tts", {}) or {}).get("enabled", True)
+        )
+        if will_play and display_text:
+            # 暂存：等 TTS 真正开始播放时再显示（避免两次气泡）
+            self._pending_bubble_text = display_text
+            self._pending_bubble_emotion = emotion
+            logger.debug("气泡延后到 TTS 开播时显示: %r", display_text[:30])
+        elif display_text:
+            # 无音频：直接显示（否则用户什么都看不到）
+            self._pending_bubble_text = ""
+            self._show_bubble(display_text, emotion=emotion, priority=1)
+        else:
+            # 空回复也要清除“思考中”气泡
+            self._pending_bubble_text = ""
+            try:
+                self.bubble.hide_bubble()
+            except Exception:
+                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
+
+        # 播放音频（和文字一起）
+        if audio_path and os.path.exists(audio_path):
+            tts_cfg = self.config.get("tts", {})
+            if tts_cfg.get("enabled", True):
+                logger.info("Playing TTS: %s", audio_path)
+                self._last_tts_emotion = emotion or "neutral"
+                self._tts_player.play(audio_path)

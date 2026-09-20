@@ -90,6 +90,18 @@ class LlmGate:
         self._cooldown_until = 0.0
         self._cooldown_len = 0.0          # 当前这一轮冷却时长（指数增长的结果）
         self._hits_429 = 0
+        # ── 2026-09-19：按来源归因 ──
+        # 动机：桌宠有三条**互不共享配额**的 LLM 流 ——
+        #   · vision     屏幕视觉（screen.py 独立 HTTP 直连，走 vision_model）
+        #   · utility    后台任务（screen_enrich / proactive / idle /
+        #                memory_extract / memory_reflect，走 Hana utility_model）
+        #   · chat       用户对话（走 models.chat）
+        # 但 429 此前只有一个全局 int，撞墙时无法回答「到底是哪条流在撞」。
+        # 于是只能笼统归因为「共用 provider」，进而调错杠杆。
+        # 这里补上按 source 的计数（只加统计，不改任何放行/冷却语义）。
+        self._hits_429_by_source: dict[str, int] = {}
+        self._ok_by_source: dict[str, int] = {}
+        self._rejects_by_source: dict[str, int] = {}
 
     # ── 状态 ──────────────────────────────────────────────
 
@@ -116,7 +128,85 @@ class LlmGate:
                 "hits_429": self._hits_429,
                 "budgets": dict(self._budgets),
                 "used_last_hour": usage,
+                # ── 归因（2026-09-19 新增，累计不复位）──
+                "hits_429_by_source": dict(self._hits_429_by_source),
+                "rejects_by_source": dict(self._rejects_by_source),
+                "by_stream": self._stream_breakdown_locked(usage),
             }
+
+    def _stream_breakdown_locked(self, usage: dict[str, int]) -> dict[str, dict]:
+        """把 used / 429 / 拒绝 三类计数按 vision / utility / chat / other 汇总。
+
+        调用者必须已持有 ``self._lock``。
+        """
+        out: dict[str, dict] = {}
+        streams = ("vision", "utility", "chat", "other")
+        for s in streams:
+            out[s] = {"used_last_hour": 0, "hits_429": 0, "rejects": 0,
+                      "budget": None, "sources": []}
+        for src, n in usage.items():
+            st = self.stream_of(src)
+            out[st]["used_last_hour"] += n
+            out[st]["sources"].append(src)
+        for src, n in self._hits_429_by_source.items():
+            out[self.stream_of(src)]["hits_429"] += n
+        for src, n in self._rejects_by_source.items():
+            out[self.stream_of(src)]["rejects"] += n
+        # 预算：取该流下各 source 预算之和（None 表示不限量）
+        for src, b in self._budgets.items():
+            st = self.stream_of(src)
+            cur = out[st]["budget"]
+            out[st]["budget"] = b if cur is None else cur + b
+        return out
+
+    def attribution_report(self) -> str:
+        """一行人可读的归因摘要（供日志 / 状态口展示）。
+
+        回答「到底是哪条流在撞 429」——这是 2026-09-19 之前无法回答的问题。
+        """
+        st = self.stats()
+        bs = st.get("by_stream", {})
+        parts = []
+        for name in ("vision", "utility", "chat", "other"):
+            d = bs.get(name, {})
+            used, hits, rej = (d.get("used_last_hour", 0),
+                               d.get("hits_429", 0), d.get("rejects", 0))
+            if not (used or hits or rej):
+                continue
+            b = d.get("budget")
+            btxt = "∞" if b is None else str(b)
+            parts.append(f"{name}: 用{used}/{btxt} 429={hits} 拒={rej}")
+        if not parts:
+            return "LLM 闸门：本小时无后台调用"
+        return "LLM 归因 | " + " | ".join(parts)
+
+    # ── 来源归因（2026-09-19）────────────────────────────
+
+    #: 具体来源 → 三条流之一。未列出的来源归到 ``other``。
+    #: 这三条流的**配额是分开的**，撞 429 时的应对也完全不同：
+    #:   vision  → 调 phash_threshold / 拉长截屏间隔 / 换 vision_model
+    #:   utility → 换 utility_model / 收紧 per-source 预算
+    #:   chat    → 用户对话，优先级最高，应尽量少被前两条挤占
+    _STREAM_OF_SOURCE: dict[str, str] = {
+        "vision": "vision",
+        "enrich": "vision",          # screen_enrich：屏幕语义增强，同属屏幕流
+        "proactive": "utility",
+        "idle": "utility",
+        "memory_extract": "utility",
+        "memory_reflect": "utility",
+        "user": "chat",
+        "direct": "chat",
+    }
+
+    @classmethod
+    def stream_of(cls, source: str) -> str:
+        """把具体来源归入 vision / utility / chat / other 四条流之一。"""
+        key = str(source or "").strip().lower()
+        return cls._STREAM_OF_SOURCE.get(key, "other")
+
+    def _norm_source(self, source: str) -> str:
+        """归因用的 key：直接用传入的 source，空则 unknown。"""
+        return str(source or "unknown").strip()
 
     # ── 放行判定 ──────────────────────────────────────────
 
@@ -125,17 +215,21 @@ class LlmGate:
         if not self._enabled:
             return True, ""
         now = self._now()
+        key = self._norm_source(source)
         with self._lock:
             if now < self._cooldown_until:
+                self._rejects_by_source[key] = self._rejects_by_source.get(key, 0) + 1
                 return False, "cooldown"
-            budget = self._budgets.get(str(source))
+            budget = self._budgets.get(key)
             if budget is not None:
                 if budget <= 0:
+                    self._rejects_by_source[key] = self._rejects_by_source.get(key, 0) + 1
                     return False, "budget=0"
-                ts = [t for t in self._usage.get(str(source), [])
+                ts = [t for t in self._usage.get(key, [])
                       if now - t <= BUDGET_WINDOW_SECONDS]
-                self._usage[str(source)] = ts
+                self._usage[key] = ts
                 if len(ts) >= budget:
+                    self._rejects_by_source[key] = self._rejects_by_source.get(key, 0) + 1
                     return False, "budget"
         return True, ""
 
@@ -213,8 +307,11 @@ class LlmGate:
         """
         if not self._enabled:
             return 0.0
+        key = self._norm_source(source)
         with self._lock:
             self._hits_429 += 1
+            self._hits_429_by_source[key] = self._hits_429_by_source.get(key, 0) + 1
+            per_source = self._hits_429_by_source[key]
             if self._cooldown_until > self._now():
                 # 冷却期内又撞 → 翻倍（上限封顶）
                 self._cooldown_len = min(
@@ -224,9 +321,11 @@ class LlmGate:
                 self._cooldown_len = self._cooldown_base
             self._cooldown_until = self._now() + self._cooldown_len
             length = self._cooldown_len
+            breakdown = dict(self._hits_429_by_source)
         logger.warning(
-            "LLM 全局闸门：%s 撞到 429，后台调用全体静默 %.0fs（第 %d 次）",
-            source or "未知来源", length, self._hits_429,
+            "LLM 全局闸门：%s 撞到 429，后台调用全体静默 %.0fs"
+            "（全局第 %d 次 / 该来源第 %d 次；归因 %s）",
+            source or "未知来源", length, self._hits_429, per_source, breakdown,
         )
         return length
 
@@ -239,10 +338,13 @@ class LlmGate:
             return
         with self._lock:
             if self._hits_429 or self._cooldown_len:
-                logger.info("LLM 全局闸门：调用恢复正常，429 计数复位（此前 %d 次）",
-                            self._hits_429)
+                logger.info("LLM 全局闸门：调用恢复正常，429 计数复位（此前 %d 次；归因 %s）",
+                            self._hits_429, dict(self._hits_429_by_source))
             self._hits_429 = 0
             self._cooldown_len = 0.0
+            # 注意：按 source 的计数**不复位** —— 它是累计归因证据，
+            # 复位会让「哪条流在撞墙」这个答案随一次成功而消失。
+            # 只有全局计数（驱动冷却翻倍）才复位。
 
 
 # ── 进程级单例 ────────────────────────────────────────────

@@ -5,7 +5,8 @@ self._perception / self.bubble / self.input_widget / self.input_field / self._sh
 self._set_anim_seq / self._mark_user_interaction 等，均由 PetWindow 提供（鸭子类型）。
 
 亮点：发送消息时触发 P1 全链路打断（new_message 推进代际，作废旧回复）；
-      语音开始录音时触发打断（voice_start，barge-in）。
+      语音开始录音时触发打断（voice_start，barge-in）；
+      持续监听模式由 `_maybe_bargein()` 在音频回调帧级判断打断（2026-09-19）。
 
 拆分自 pet.py 的对话入口区块（原 1294-1353 / 1704-1970 行），降低 PetWindow 体积。
 """
@@ -18,6 +19,90 @@ import numpy as np
 from config import get_transition_style
 
 logger = logging.getLogger(__name__)
+
+
+# ── barge-in（持续监听：用户开口即停嘴）──────────────────────────
+#
+# 背景（2026-09-19）：持续监听模式此前**完全不会打断 TTS**——
+# 按住说话有 barge-in（`_toggle_voice` 里的 interrupt + stop），
+# 持续监听整条路径上零次 TTS 停止。用户插话只能等桌宠说完，
+# 或手动点停止。
+#
+# 判据（全部满足才打断）：
+#   ① 连续语音 ≥ _BARGEIN_FRAMES 帧
+#   ② 距上次打断 ≥ _BARGEIN_COOLDOWN_S 秒
+#   ③ 当前确实在说话（`self._renderer._speaking`）
+#
+# 为什么 15 帧：Silero 固定窗口 512 样本 @16kHz = 32ms（见
+# core/audio_input/vad.py:56），15 × 32ms ≈ 480ms，与 livekit
+# 的 `min_interruption.duration = 0.5s` 同量级。
+#
+# ⚠️ 为什么不用 `is_playing()`：本回调跑在**音频回调线程**，而两个
+# 播放器的 is_playing() 都会调 Qt（sink.state()/playbackState()）——
+# 那是 Qt 内部锁，跨线程调用会与音频线程形成锁序反转（
+# ui/streaming_pcm_player.py:358 的 docstring 有完整事故记录）。
+# 改用 `renderer._speaking`：纯 Python 布尔赋值，不碰 Qt。
+_BARGEIN_FRAMES = 15
+_BARGEIN_COOLDOWN_S = 1.0
+
+# 配置缓存：`load_config()` 每次都读盘，而 `_maybe_bargein()` 跑在
+# **音频回调线程、每帧（约 32ms）调用一次**——绝不能每帧读文件。
+# barge-in 参数不需要热重载（改完重启即可），故进程内只读一次。
+_bargein_cfg_cache: tuple[bool, int, float] | None = None
+
+
+def _strip_comments(src: str) -> str:
+    """剔掉 Python 源码里的注释与 docstring，只留可执行部分。
+
+    用于“代码里不得出现 X”这类断言——否则注释里提到 X 会误报。
+    实现用 tokenize（不是正则），能正确处理字符串内的 # 与引号。
+
+    注意：输出是**去空白拼接**的 token 序列（如 `self.tts_stop_signal.emit()`
+    会变成 `self . tts_stop_signal . emit ( )`）。调用方比对时需先去空白。
+    """
+    import io
+    import tokenize
+
+    out: list[str] = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            # 丢掉注释与字符串字面量（docstring 也是 STRING）
+            if tok.type in (tokenize.COMMENT, tokenize.STRING):
+                continue
+            out.append(tok.string)
+    except Exception:
+        # tokenize 失败（极罕见）→ 退回原文，宁可误报也不静默放过
+        return src
+    return " ".join(out)
+
+
+def _bargein_config() -> tuple[bool, int, float]:
+    """读 barge-in 配置（asr.bargein.*），缺省用保守默认值。
+
+    **带进程级缓存**：本函数在音频回调线程每帧调用，不能每次读盘。
+    配置改动需重启生效。
+
+    Returns:
+        (enabled, frames, cooldown_s)。配置缺失/异常时回退默认（开启）。
+    """
+    global _bargein_cfg_cache
+    if _bargein_cfg_cache is not None:
+        return _bargein_cfg_cache
+    try:
+        from config import load_config
+        cfg = ((load_config().get("asr", {}) or {}).get("bargein", {}) or {})
+        enabled = bool(cfg.get("enabled", True))
+        frames = int(cfg.get("frames", _BARGEIN_FRAMES) or _BARGEIN_FRAMES)
+        cooldown = float(cfg.get("cooldown_seconds", _BARGEIN_COOLDOWN_S) or _BARGEIN_COOLDOWN_S)
+        # 下限保护：帧数太少会误打断（视频人声），冷却为负会连发
+        if frames < 3:
+            frames = 3
+        if cooldown < 0.0:
+            cooldown = 0.0
+        _bargein_cfg_cache = (enabled, frames, cooldown)
+    except Exception:
+        _bargein_cfg_cache = (True, _BARGEIN_FRAMES, _BARGEIN_COOLDOWN_S)
+    return _bargein_cfg_cache
 
 
 class ChatMixin:
@@ -100,6 +185,9 @@ class ChatMixin:
                 self._voice_continuous_buffer = []
                 self._voice_continuous_silence = 0
                 self._voice_continuous_started = False
+                # barge-in 状态：帧计数 + 上次打断时刻（monotonic）
+                self._bargein_frames = 0
+                self._bargein_last_emit = 0.0
                 # ASR-1：懒建 VAD 并重置（首次开启时会加载 Silero ONNX）
                 v = self._get_vad()
                 if v is not None and hasattr(v, "reset"):
@@ -119,6 +207,7 @@ class ChatMixin:
                 self._voice_continuous_buffer = []
             self._voice_continuous_silence = 0
             self._voice_continuous_started = False
+            self._bargein_frames = 0
             self._voice_input.cancel()
             self._voice_continuous_action.setChecked(False)
             self._voice_continuous_action.setText("🎤 持续监听")
@@ -198,7 +287,17 @@ class ChatMixin:
             self._voice_continuous_silence = 0
             if not self._voice_continuous_started:
                 self._voice_continuous_started = True
+
+            # ── barge-in：用户开口到一定时长就停掉 TTS ──
+            self._maybe_bargein()
         else:
+            # ── 静音：任何静音帧都重置 barge-in 计数 ──
+            # 必须放在这个 else 的**开头**：判据要求“连续”语音，
+            # 用户中途换气（短于 SILENCE_FRAMES_LIMIT 的停顿）也算断。
+            # 若只在“无语音段”分支重置，短停顿会保留计数，
+            # 两次断续的语音会被当成一次连续语音。
+            self._bargein_frames = 0
+
             if self._voice_continuous_started:
                 # 静音中，但之前有语音
                 self._voice_continuous_silence += 1
@@ -242,6 +341,17 @@ class ChatMixin:
                                     return
                                 self._continuous_last_sent_t = _now
                                 self._continuous_last_sent_text = text
+                                # 与按住说话模式对齐（_do_asr 里的对称位置）：
+                                # 文本即将发送，先停掉正在播的 TTS。
+                                # 即使 barge-in 未触发（用户说得短、没到 15 帧），
+                                # 这里也必须停——否则指令已发出、桌宠还在说上一段，
+                                # 两个声音叠着播（与 chat_mixin 里 new_message 路径
+                                # 警告的情形同源）。
+                                # QMediaPlayer 是 COM 组件，后台线程只能经信号停。
+                                try:
+                                    self.tts_stop_signal.emit()
+                                except Exception as e:
+                                    logger.debug("持续监听 ASR 后停 TTS 失败: %s", e)
                                 eng.send(text, character=self._current_char)
                                 logger.info("Continuous voice sent: %s", text[:30])
                         finally:
@@ -252,6 +362,60 @@ class ChatMixin:
                 # 静音且无语音段：清空 buffer 防累积
                 with self._voice_buffer_lock:
                     self._voice_continuous_buffer = []
+
+    def _maybe_bargein(self) -> None:
+        """barge-in 判据：连续语音够长 + 冷却已过 + 确实在说话 → 停 TTS。
+
+        在**音频回调线程**调用，所以：
+        - 不能直接碰 `_tts_player` / `_stream_player`（Qt/COM，见
+          pet.py 的 tts_stop_signal 注释：跨线程调 stop 会触发 0x8001010D）
+        - 只能 emit 信号绕回主线程
+        - 判定“是否在说话”也不得调 `is_playing()`（同样碰 Qt），
+          改用 `renderer._speaking`（纯 Python 赋值）
+
+        失败闭合：任何异常只记 debug，绝不影响语音识别主流程。
+        """
+        try:
+            enabled, frames_need, cooldown = _bargein_config()
+            if not enabled:
+                return
+
+            # 只在“桌宠正在说话”时计数与打断：
+            # - 没说话就不必停
+            # - 计数也归零，避免“用户早在桌宠开口前就在说”被算成连续语音
+            r = getattr(self, "_renderer", None)
+            if r is None or not getattr(r, "_speaking", False):
+                self._bargein_frames = 0
+                return
+
+            self._bargein_frames = getattr(self, "_bargein_frames", 0) + 1
+            if self._bargein_frames < frames_need:
+                return
+
+            now = time.monotonic()
+            if now - getattr(self, "_bargein_last_emit", 0.0) < cooldown:
+                return
+
+            self._bargein_last_emit = now
+            self._bargein_frames = 0
+
+            # 停 TTS：必须经信号回主线程（QMediaPlayer 是 COM 组件）
+            try:
+                self.tts_stop_signal.emit()
+            except Exception as e:
+                logger.debug("barge-in: tts_stop_signal 发送失败: %s", e)
+
+            # 作废旧回复（推进代际 + 中断 LLM 层）
+            eng = getattr(self, "_engine", None)
+            if eng is not None:
+                try:
+                    eng.interrupt(reason="voice_bargein")
+                except Exception as e:
+                    logger.debug("barge-in: 引擎打断失败: %s", e)
+
+            logger.info("barge-in: 用户插话，已停 TTS（连续 %d 帧）", frames_need)
+        except Exception as e:
+            logger.debug("barge-in 判据异常（已忽略）: %s", e)
 
     def _do_voice_status(self, msg: str):
         """在主线程处理语音状态"""
@@ -366,11 +530,9 @@ class ChatMixin:
         # M4: Hanako 模式下默认 180 秒（长任务支持）；直连模式保持 30 秒
         think_timeout_ms = 30000
         try:
-            if hasattr(self._engine, '_adapter') and self._engine._adapter:
-                if getattr(self._engine._adapter, 'transport_mode', 'direct') != 'direct':
-                    think_timeout_ms = int(
-                        getattr(self._engine._adapter, '_reply_timeout', 180) * 1000
-                    )
+            # 2026-09-19：走引擎语义接口，不再碰 _adapter / _reply_timeout
+            if self._engine is not None and self._engine.transport_mode() != "direct":
+                think_timeout_ms = int(self._engine.reply_timeout_sec() * 1000)
         except Exception:
             logger.debug("chat_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         self._think_timeout.start(think_timeout_ms)

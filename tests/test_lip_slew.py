@@ -170,12 +170,23 @@ def test_speaking_stop_resets_slew():
 
 
 def test_pet_configures_mouth_peak():
+    """口型上限必须被装配，且走**统一热生效入口**。
+
+    2026-09-20：断言改为**行为/接线**，不断言实现所在文件。
+    实现已从 pet.py 迁到 ``core/hot_config_appliers.py``（见
+    tests/test_hot_config_appliers.py），pet.py 只留薄转发。
+    在 pet.py 里找 ``set_mouth_peak(`` 会把「搬家」误判成「功能丢了」。
+    """
     s = _src("pet.py")
-    assert "set_mouth_peak(" in s
-    # 2026-09-19：启动改为走**统一热生效入口**（不再各自单点调用），
-    # 手改 config.json 也能生效
+    # 1) 启动走统一热生效入口（不再各自单点调用），手改 config.json 也能生效
     assert "self._apply_runtime_config()" in s
     assert '"lip_sync"' in s
+    # 2) pet.py 的 _init_lip_sync 仍是可被调度的 applier（薄转发即可）
+    assert "def _init_lip_sync" in s
+    # 3) 真正装口型的实现在新模块里，且被 pet.py 引用
+    assert "hot_config_appliers" in s
+    impl = _src("core/hot_config_appliers.py")
+    assert "set_mouth_peak(" in impl
 
 
 def test_config_templates_carry_lip_sync():

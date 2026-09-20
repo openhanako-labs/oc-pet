@@ -1186,8 +1186,11 @@ class HanakoPetAdapter:
             renderer = getattr(self, '_renderer', None) or getattr(self, '_pet_renderer', None)
             if not renderer:
                 return ""
-            options = getattr(type(renderer), "_AI_DO_PROMPT", "") or \
-                getattr(renderer, "_AI_DO_PROMPT", "")
+            options = self._action_options_from_snapshot(renderer)
+            if not options:
+                # 回退：手写常量（renderer 的 _AI_DO_PROMPT）
+                options = getattr(type(renderer), "_AI_DO_PROMPT", "") or \
+                    getattr(renderer, "_AI_DO_PROMPT", "")
             if not options:
                 return ""
             return (
@@ -1202,6 +1205,70 @@ class HanakoPetAdapter:
             )
         except Exception:
             return ""
+
+    def _action_options_from_snapshot(self, renderer) -> str:
+        """从**实测能力快照**生成候选清单（B 方案，2026-09-20）。
+
+        与手写常量 ``_AI_DO_PROMPT`` 的区别：那份是 36 个中文标签写死的，
+        加一个新预设得手补一行；这份从模型文件实测生成（53 预设 / 7 motion /
+        7 表情），**模型换了一行代码不用改**。
+
+        两个开关（都要满足）：
+          - ``config.dialog.action_options_from_snapshot``（默认 True）
+          - 快照构建成功
+
+        任一步失败都返回空串，调用方回退手写常量——**绝不能因为快照坏了
+        就让 prompt 里没有候选**（那等于放任模型自己编动作名）。
+        """
+        try:
+            cfg = getattr(self, "_config", None)
+            if isinstance(cfg, dict):
+                dlg = cfg.get("dialog") or {}
+                if isinstance(dlg, dict) and dlg.get("action_options_from_snapshot") is False:
+                    return ""
+        except Exception:
+            pass
+
+        try:
+            from core.capability_snapshot import build_snapshot
+
+            cid = self._current_character_id()
+            if not cid:
+                return ""
+            snap = build_snapshot(cid)
+            return snap.grouped_labels_line()
+        except Exception as e:
+            logger.debug("harness_adapter: 快照生成候选失败（回退手写常量）: %s", e)
+            return ""
+
+    def _current_character_id(self) -> str:
+        """当前角色 id（快照要按模型生成，不能写死）。
+
+        ⚠ 2026-09-20 实测踩坑：**agent_id 不是 character_id**。
+
+        adapter 的 ``self.agent_id`` 是 Hana 的 agent 名（如 ``"ophelia"``），
+        而快照要的是 ``characters/`` 下的**模型目录名**（如 ``"miku"`` /
+        ``"shizuku"``）。两者不同——第一版拿 ``_character_id`` / ``_current_char``
+        / ``_agent_id`` 去猜，全取不到，快照路径**静默退化成空串**，
+        prompt 一直用手写常量（单元测试全绿，功能是死的）。
+
+        正确来源与 ``perception_mixin`` 初始化表达决策器时一致：
+        ``config.character``，缺省回退 ``"miku"``。
+        """
+        try:
+            cfg = getattr(self, "_config", None)
+            if isinstance(cfg, dict):
+                v = cfg.get("character")
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+        except Exception:
+            pass
+        # 兜底：有些路径会把角色挂在 adapter 上
+        for attr in ("_character_id", "_current_char"):
+            v = getattr(self, attr, None)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return "miku"
 
     def get_action_documentation(self, action_name: str) -> str:
         """P1: 获取单个动作的完整文档（按需注入）。

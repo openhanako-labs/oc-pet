@@ -212,7 +212,12 @@
     "language": "zh",
     "device": "",
     "sensevoice_model": "iic/SenseVoiceSmall",
-    "vad_backend": "auto"
+    "vad_backend": "auto",
+    "bargein": {
+      "enabled": true,
+      "frames": 15,
+      "cooldown_seconds": 1.0
+    }
   },
   "voiceprint": {
     "enabled": false,
@@ -274,6 +279,7 @@
     "max_concurrent": 1,
     "cooldown_seconds": 60,
     "max_cooldown_seconds": 900,
+    "attribution_log_minutes": 10,
     "budgets": {
       "vision": 120,
       "enrich": 40,

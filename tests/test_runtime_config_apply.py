@@ -203,9 +203,33 @@ def test_startup_no_longer_calls_inits_separately():
 
 
 def test_inits_report_success_for_the_ledger():
-    """四个装卸方法必须回报 True/False——否则记账逻辑无从判断。"""
+    """装卸方法必须回报真值/假值——否则记账逻辑无从判断。
+
+    2026-09-20：断言从「字面量 return True/return False」改为
+    **行为验证**。原断言把「返回语句长什么样」当成契约，
+    导致把实现搬到 ``core/hot_config_appliers.py``（并改成 ``return ok``）
+    时误报。真正的契约是「调用方能据此判断装没装上」。
+    """
+    import importlib
+    import sys
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+    mod = importlib.import_module("core.hot_config_appliers")
+
+    # lip_sync：返回 bool
+    assert isinstance(mod.apply_lip_sync({}), bool)
+
+    # game_watch：返回 (bool, watcher|None)
+    ok, watcher = mod.apply_game_watch({})
+    assert isinstance(ok, bool)
+    assert watcher is None or hasattr(watcher, "on_foreground")
+
+    # pet.py 侧仍需保留这三个可被 _apply_runtime_config 调度的 applier
     src = _pet_src()
     for name in ("def _init_game_watch", "def _init_llm_gate", "def _init_lip_sync"):
-        body = src[src.index(name):]
-        body = body[:body.index("\n    def ", 10)]
-        assert "return True" in body and "return False" in body, name
+        assert name in src, name
+    # 且它们确实被登记进调度表
+    assert "\"lip_sync\": self._init_lip_sync" in src

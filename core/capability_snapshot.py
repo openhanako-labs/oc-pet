@@ -138,19 +138,24 @@ LABEL_TO_PRESET: dict[str, str] = {v: k for k, v in PRESET_LABELS.items()}
 # “开心强”被判成“快速眨眼”（因为通用项数量多、语义平淡，把专属项稀释了）。
 # 通用眨眼/坐卧类只留在「平静」组。
 PRESET_EMOTIONS: dict[str, tuple[str, ...]] = {
-    # ── 开心 ──（表现力排序：笑 > 眼部 > 头部/身体）
+    # ── 开心 ──（表现力排序：笑 > 完整动作 > 眼部 > 头部/身体）
+    #
+    # 2026-09-20 排序修正：`arm_wave`（挥手）与 `dance`（摇摆起舞）从原位提到
+    # 前面。理由：分组清单有长度预算（每组只列前 N 个），而**完整动作比微表情
+    # 表现力更强、也更适合桌宠**。实测踩坑：原排序下 arm_wave 排第 12 位，
+    # 在预算内**被截掉**——它是可播的，却从未进过 prompt。
     "smile_bright": ("开心",),
     "grin": ("开心",),
     "giggle": ("开心",),
     "excited": ("开心",),
+    "arm_wave": ("开心",),          # ← 提权：完整动作
+    "dance": ("开心",),             # ← 提权：完整动作
     "eye_twinkle": ("开心",),
     "mouth_smile": ("开心",),
-    "dance": ("开心",),
     "proud": ("开心",),
     "wink": ("开心", "害羞"),
     "brow_raise": ("开心", "惊讶"),
     "tongue_out": ("开心", "害羞"),
-    "arm_wave": ("开心",),
     "head_bob": ("开心",),
     # ── 害羞 ──
     "blush_shy": ("害羞",),
@@ -369,6 +374,87 @@ class CapabilitySnapshot:
     def labels_line(self) -> str:
         """候选标签一览（给决策 schema 用，单行）。"""
         return "/".join(self.preset_labels)
+
+    def grouped_labels_line(self, limit_per_emotion: int = 12,
+                            max_chars: int = 420) -> str:
+        """按情绪分组的候选标签（给主 LLM 的 prompt 用）。
+
+        与 ``labels_line()`` 的区别：那是**平铺 53 个**，给本地引擎的结构化
+        schema 用（它能处理长列表）；这个是**分组且带情绪前缀**，给主 LLM 看。
+
+        为何要分组（实测，见 docs/表达决策层-2026-09-20.md §3.2）：
+
+        - 53 个平铺 → 6-8/9，且**不稳定**（换措辞就变）
+        - 按情绪分组（每组 ≤ 12）→ **10/10**，prob 明显拉开
+
+        另外通用项（连续眨眼/坐下/躺下）**只留在「平静」组**——
+        把它们撒进其他组会把专属项稀释掉（实测：「开心强」会被判成「快速眨眼」）。
+
+        本方法的数据源是 ``PRESET_EMOTIONS``（手写但经过实测校验的分组表），
+        **只输出模型真实拥有的预设**——模型没有的不列。
+
+        Args:
+            limit_per_emotion: 每组最多列几个。默认 **12**，与实测结论一致
+                （``MAX_CHOICES_PER_EMOTION = 12``，见 docs/表达决策层-2026-09-20.md
+                §3.2：每组 ≤12 时 10/10，再大就开始稀释）。
+                实测踩坑：第一版默认写 8，把开心组的 13 个砍到 8 个——
+                **「挥手」直接被截掉了**，而它是可播的。
+            max_chars: 本片段的长度预算（默认 420，含调用方的模板文字）。
+                超出时**自动收窄每组数量**，而不是把 prompt 护栏撞红。
+                实测结论是「决定性因素不是长度，是分组」，所以宁可每组
+                少列几个，也要保住分组结构。
+
+        Returns:
+            形如 ``"开心:灿烂笑容/咧嘴大笑 害羞:害羞脸红/羞怯 ..."`` 的单行。
+            模型没有任何预设时返回空串。
+        """
+        if not self.presets:
+            return ""
+        # 情绪 → 该情绪下**实际存在**的标签（保持 PRESET_EMOTIONS 的定义顺序）
+        by_emotion: dict[str, list[str]] = {}
+        label_of = {p.name: p.label for p in self.presets}
+        for name, emotions in PRESET_EMOTIONS.items():
+            label = label_of.get(name)
+            if label is None:          # 模型没有这个预设 → 不列
+                continue
+            for emo in emotions:
+                by_emotion.setdefault(emo, []).append(label)
+        if not by_emotion:
+            # 分组表一个都对不上（新模型/预设全改名）→ 回退平铺
+            return "/".join(self.preset_labels)
+        def _render(lim: int) -> str:
+            parts = []
+            for emo, labels in by_emotion.items():
+                # 去重（一个预设可能同时属于多个情绪，同组内不会重复，但保险）
+                seen = []
+                for lb in labels:
+                    if lb not in seen:
+                        seen.append(lb)
+                if not seen:
+                    continue
+                parts.append(f"{emo}:" + "/".join(seen[:lim]))
+            return " ".join(parts)
+
+        # ── 预算内取最大覆盖（2026-09-20）──
+        # 目标不是「尽量短」，而是「在护栏内尽量多列」——
+        # tests/test_do_aliases.py 的护栏注释自己写了：
+        #   「限制选项数本身不是目的，可读性与覆盖度的平衡才是」
+        # 所以从上限**逐级往上试**，取能装下的最大一组，
+        # 而不是从大往下砍（那会把高价值动作提前砍掉）。
+        budget = max(40, int(max_chars) - 206)   # 206 ≈ 调用方模板文字
+        best = _render(2)
+        for lim in range(3, int(limit_per_emotion) + 1):
+            cand = _render(lim)
+            if len(cand) <= budget:
+                best = cand
+            else:
+                break
+        return best
+
+    def ungrouped_presets(self) -> list[str]:
+        """有预设但未进任何情绪分组的标签（诊断用：提示该补 PRESET_EMOTIONS）。"""
+        grouped = set(PRESET_EMOTIONS)
+        return [p.label for p in self.presets if p.name not in grouped]
 
 
 # ── 曲线值解析 ────────────────────────────────────────────

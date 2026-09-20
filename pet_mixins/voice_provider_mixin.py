@@ -236,13 +236,13 @@ class VoiceProviderMixin:
                 if gen != self._tts_reload_gen:
                     _discard(provider)
                     return
-                # 加锁保护赋值原子性（引擎 worker 线程同时读 _tts/_tts_ready）
-                with self._engine._lock:
-                    self._engine._tts = provider
-                    self._engine._tts_ready = bool(provider is not None and provider.is_ready)
+                # 2026-09-19：改走引擎公开接口，不再直接读写 _lock/_tts/_tts_ready。
+                # 原子性由引擎保证（worker 线程同时读这两个字段，分开赋值会让它
+                # 在中间态上合成）。
+                new_ready = self._engine.set_tts_provider(provider)
                 logger.info(
                     "TTS provider 已切换: %s (ready=%s)",
-                    getattr(provider, "name", None), self._engine._tts_ready,
+                    getattr(provider, "name", None), new_ready,
                 )
             except Exception as e:
                 logger.warning("TTS provider 重建失败: %s", e)
