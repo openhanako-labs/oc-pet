@@ -96,6 +96,25 @@ linjian-peek → MCP Plugin → Hanako tool calling ─────────�
 - 🔍 **Agent Discovery** -- Automatically scans `~/.hanako/agents/`
 - 🎨 **Character Package Management** -- Custom sprites + built-in fallback
 
+### MCP Tools (the pet can be driven *by* AI)
+
+The pet ships a built-in MCP server (default `http://127.0.0.1:8979/mcp`)
+exposing its expression / motion / perception abilities to MCP clients such as
+Hanako — **the pet is not just a shell being driven; AI can operate it too**.
+**21 tools** total:
+
+| Group | Tools | Purpose |
+|---|---|---|
+| State | `pet_state` / `pet_capabilities` | Read current emotion / motion / capability snapshot |
+| Expression | `pet_set_emotion` / `pet_play_anim` / `pet_expression` / `pet_say` / `pet_celebrate` / `pet_reset_idle` | Set emotion, play motion, set expression, speak, celebrate, reset idle |
+| Computer | `pet_computer_*` (8) | Enumerate windows / element tree / launch / click / type / key (read-only unless actions are explicitly enabled) |
+| Hanako | `pet_hana_*` (5) | Read Hanako status / sessions / agents / apps |
+
+> **Toggle**: `config.json` → `mcp_server.enabled`. Default port 8979,
+> bound to `127.0.0.1` only (never exposed externally).
+> **Computer actions are off by default**: with `computer_use.allow_actions=false`
+> the pet only reads window info and will not click or type.
+
 ### Notifications
 - 📱 **ntfy Notification** -- Push notifications to phone (requires the ntfy app installed)
 

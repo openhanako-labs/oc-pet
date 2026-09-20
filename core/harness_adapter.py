@@ -143,6 +143,155 @@ class HanakoPetAdapter:
         # 切换 agent 时各自记住自己的 session，切回可续聊。
         self._agent_sessions: dict[str, object] = {}  # agent_id -> SessionRef
         self._agent_pinned: dict[str, str] = {}  # agent_id -> session_id
+        # 2026-09-20 事故后：记录「哪些 pin 是桌宠自己建的会话」。
+        # 只有 create_session 拿到的才写。用来在恢复时区分
+        # 「桌宠专属会话」与「ensure_session 兜底漂移来的助手主对话」。
+        self._owned_sessions: dict[str, str] = {}  # agent_id -> session_id
+        # 2026-09-20（用户要求 A）：**从磁盘恢复 pin**。
+        # 原实现 `_agent_pinned` 是纯内存 dict，重启即丢——于是每次重启
+        # 桌宠都新建一个 session（实测日志里 5 个不同 sess_xxx）。
+        # 后果：上下文不连贯（每轮从零开始）+ Hana 会话列表被碎片灌满。
+        self._load_pinned_sessions()
+
+    # ── 会话 pin 持久化（2026-09-20，用户要求 A）──────────────
+    #
+    # 目标：桌宠无论是否重启，都在**同一个固定会话**里回复。
+    # 存储位置沿用桌宠已有的 `~/.hanako/pets/`（greet_*.json 同目录）。
+
+    def _pinned_path(self):
+        """pin 落盘路径：~/.hanako/pets/session_<agent>.json"""
+        try:
+            from hanako_home import hanako_home
+            d = hanako_home() / "pets"
+        except Exception:
+            import os as _os
+            d = __import__("pathlib").Path(_os.path.expanduser("~")) / ".hanako" / "pets"
+        return d / f"session_{self.agent_id}.json"
+
+    def _load_pinned_sessions(self) -> None:
+        """启动时从磁盘恢复 pin（失败静默——不阻断启动）。
+
+        ⚠️ 2026-09-20 事故后的**归属校验**：
+
+        仅凭磁盘上的 session_id 不足以信任——那条 pin 可能是
+        `ensure_session` 兜底漂移的残留（指向助手主对话）。
+
+        本方法只做**静态**校验（不联网）：确认 pin 的形状合法。
+        真正是否仍存在/是否被换成主对话，由 `_validate_pin_async()`
+        在后台向 Hana 核对（不阻塞启动）。
+        """
+        try:
+            import json
+            p = self._pinned_path()
+            if not p.exists():
+                return
+            data = json.loads(p.read_text(encoding="utf-8"))
+            pinned = data.get("pinned") or {}
+            if isinstance(pinned, dict):
+                # 只收非空字符串，防脏数据
+                self._agent_pinned.update(
+                    {k: v for k, v in pinned.items() if isinstance(v, str) and v})
+            owned = data.get("owned") or {}
+            if not hasattr(self, "_owned_sessions"):
+                self._owned_sessions = {}
+            if isinstance(owned, dict):
+                self._owned_sessions.update(
+                    {k: v for k, v in owned.items() if isinstance(v, str) and v})
+            sid = self._agent_pinned.get(self.agent_id)
+            if sid:
+                self._pinned_session_id = sid
+                logger.info("[session] 已从磁盘恢复 pin: agent=%s session=%s",
+                            self.agent_id, sid)
+                # 归属校验（丢弃无标记的 pin = 漂移残留）
+                self._validate_pin_async()
+        except Exception:
+            logger.debug("harness_adapter: 恢复会话 pin 失败", exc_info=True)
+
+    def _validate_pin_async(self) -> None:
+        """核对 pin：它必须是**桌宠自己建的**那个会话。
+
+        ## 为什么不用「消息数/标题」当判据
+
+        最初我想用「title 非空 或 messageCount>0 → 脏」来识别漂移。
+        **那是错的**：桌宠自己的会话在它聊过之后 messageCount 也会 >0。
+        这会误杀合法 pin。（同一个坑：用表象当判据。）
+
+        ## 正确判据：归属标记
+
+        pin 文件里记 `owned` —— 只在**桌宠自己调 create_session / set_session**
+        拿到会话时写入。恢复时：
+
+          - 有 `owned` 标记且指向同一会话 → 信任
+          - 无标记（遗留/来路不明）→ 丢弃，下次新建
+          - 指向的会话已不存在 → 丢弃
+
+        精确，无启发式。旧代码写的 pin 没有标记，会被当作不可信
+        —— 正好清掉那次漂移的残留。
+
+        ## 时序
+
+        归属检查是**纯本地数据**（只读 `_owned_sessions`），所以
+        **同步**做——否则 `chat_via_hanako` 可能抢在校验前用上脏 pin。
+        “会话是否仍存在”才需要联网，放后台。
+        """
+        sid = self._agent_pinned.get(self.agent_id)
+        if not sid:
+            return
+
+        # ── 同步：归属标记（不联网）──
+        if self._owned_sessions.get(self.agent_id) != sid:
+            logger.warning(
+                "[session] ★ 丢弃无归属标记的 pin: %s（agent=%s）"
+                "——它可能是漂移残留。下次对话新建专属会话。",
+                sid, self.agent_id)
+            self._agent_pinned.pop(self.agent_id, None)
+            self._owned_sessions.pop(self.agent_id, None)
+            self._pinned_session_id = None
+            self._current_session = None
+            self._save_pinned_sessions()
+            return
+
+        # ── 异步：会话是否仍存在（需联网）──
+        def _check():
+            try:
+                from core.hana_client import HanaClient
+                rows = HanaClient.from_env().list_sessions(
+                    agent_id=self.agent_id) or []
+            except Exception as e:  # noqa: BLE001
+                logger.debug("pin 存在性校验跳过: %s", e)
+                return
+            for s in rows:
+                get = (s.get if isinstance(s, dict)
+                       else (lambda k, d=None: getattr(s, k, d)))
+                if get("sessionId") == sid:
+                    logger.info("[session] pin 校验通过: %s（桌宠专属）", sid)
+                    return
+            logger.warning("[session] ★ pin 指向的会话已不存在: %s——丢弃", sid)
+            self._agent_pinned.pop(self.agent_id, None)
+            self._owned_sessions.pop(self.agent_id, None)
+            self._pinned_session_id = None
+            self._current_session = None
+            self._save_pinned_sessions()
+
+        import threading
+        threading.Thread(target=_check, daemon=True,
+                         name="pin-validate").start()
+
+    def _save_pinned_sessions(self) -> None:
+        """把 pin 写回磁盘（失败静默——不因写盘失败影响对话）。"""
+        try:
+            import json
+            p = self._pinned_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(
+                json.dumps({"pinned": self._agent_pinned,
+                            "owned": getattr(self, "_owned_sessions", {}),
+                            "updated_at": __import__("time").time()},
+                           ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            logger.debug("harness_adapter: 保存会话 pin 失败", exc_info=True)
 
     def _load_default_from_catalog(self):
         """builtin 角色没有 Hanako agent，从 provider catalog 读默认模型"""
@@ -196,6 +345,29 @@ class HanakoPetAdapter:
     #   [feel:v,a]  — 连续 VA 坐标，直驱渲染器已有的逐帧插值层（_va_target→_va_cur）
     #   [do:名称]   — 可选，明确要一个动作时
     # 旧标签仍被解析（向后兼容与兜底路径），但不再要求模型输出。
+    #
+    # 2026-09-20 重新引入 [emotion:] —— **这次是必填，且只加这一个**。
+    #
+    # 背景：VA 二维坐标承载不了中文情绪细粒度（正价区全塌成 happy，
+    # 「记得让眼睛歇一歇」被判开心，实际是关心）。此前的补救是**在桌宠本地
+    # 再加一层 embedding 分类器读回复文本反推情绪**——但那是让本地小模型
+    # 重做一遍主 LLM 已经做过的事，且它更弱（桌宠视角实测仅 67%）。
+    #
+    # 正确分工：**读懂对话是主 LLM 的活**（它本来就在读，且比本地小模型强得多），
+    # 本地小模型只做「已知情绪 → 从候选里挑具体表情」的窄判断（实测 10/10）。
+    # 所以让主 LLM 直接多吐一个情绪词，分类器降级为兜底。
+    #
+    # 为什么这次敢加（历史上「加可选标签」被数据否决过两次）：
+    #   - 2026-09-10 的失败是**四个标签全必填**（职责重叠，模型全不写）
+    #   - 本次是**两个必填**（feel + emotion），职责不重叠：
+    #       一个给连续坐标，一个给离散类别
+    #   - 实测对照（tools/verify_emotion_contract.py，本地 Qwen2.5-1.5B，6 语境）：
+    #       契约          写 feel   写 emotion
+    #       A 只 feel      2/6        0/6      ← 现状
+    #       B 双必填       4/6        4/6      ← 选它
+    #       C 可选追加     3/6        0/6      ← 证明「可选」确实没人写
+    #   - **向后兼容**：主 LLM 若不写，emotion 退回 neutral → 分类器兜底
+    #     → 行为与改动前完全一致。零风险。
     _OUTPUT_RULES = (
         "1. 回复简短自然，不超过 2 句话。"
         "2. 必须给出情绪坐标，格式 [feel:valence,arousal]。"
@@ -203,6 +375,12 @@ class HanakoPetAdapter:
         "arousal ∈[-1,1]：-1 很平静（放松/低落），0 一般，+1 很兴奋（激动/紧张）。"
         "两者独立判断。例：[feel:0.8,0.7] 开心兴奋；[feel:-0.5,-0.4] 低落安静；"
         "[feel:-0.6,0.8] 生气激动；[feel:0.2,0.1] 平静。拿不准就写 [feel:0,0]。"
+        "3. 必须给出情绪词，格式 [emotion:情绪词]。"
+        "从这些里选一个：happy（开心）/ sad（难过）/ angry（生气）/ "
+        "surprised（惊讶）/ thinking（思考）/ confused（疑惑）/ shy（害羞）/ "
+        "cute（撒娇）/ sleepy（困）/ neutral（平静）。"
+        "情绪词描述**角色自己的感受**（不是用户的）。"
+        "例：[emotion:happy] [emotion:sleepy]。拿不准就写 [emotion:neutral]。"
     )
 
     # 输出交给机器读的来源：不得注入标签规则（否则污染其结构化输出）
@@ -237,13 +415,41 @@ class HanakoPetAdapter:
 
         回退开关：config 里 ``dialog.inject_output_rules_in_text = true``
         可恢复旧行为（给未配置 AGENTS.md 的 agent 兜底）。
+
+        ## 2026-09-20 修复：这个开关以前是**死的**
+
+        原实现只读 `getattr(self, "_config", None)`，而 `_config`
+        **在本类里从来没有被赋值过**（全仓搜 `_config =` 无赋值点，
+        只有三处 `getattr(self, "_config", None)` 读）。
+        所以无论 config.json 写什么，它永远拿到 None → 永远返回 False。
+
+        实证：2026-09-20 日志里 ``标签检测: feel=False emotion=False``
+        贯穿全程——契约从未送达 Hana，而注释声称“由 AGENTS.md 承担”，
+        实际 AGENTS.md 里一条规则都没有。两头落空。
+
+        现在三级回退：显式注入的 `_config` → `load_config()` 读盘。
+        仍然默认 False（不改变 09-16 的默认行为），只是让开关真的能开。
         """
         try:
             cfg = getattr(self, "_config", None)
+            if not isinstance(cfg, dict):
+                # `_config` 从未被赋值（见 docstring）——回退到读盘。
+                # 只在这里读：本方法每次发消息才调一次，开销可忽略。
+                try:
+                    from config import load_config
+                    cfg = load_config()
+                except Exception:
+                    cfg = None
             if isinstance(cfg, dict):
                 dlg = cfg.get("dialog") or {}
                 if isinstance(dlg, dict) and dlg.get("inject_output_rules_in_text"):
                     return True
+                # agent 级覆盖（PetWindow 传入的 agent_config）优先于全局
+                acfg = getattr(self, "_agent_config", None)
+                if isinstance(acfg, dict):
+                    adlg = acfg.get("dialog") or {}
+                    if isinstance(adlg, dict) and adlg.get("inject_output_rules_in_text"):
+                        return True
         except Exception:
             logger.debug("harness_adapter: 读取 inject_output_rules_in_text 失败", exc_info=True)
         return False
@@ -809,10 +1015,15 @@ class HanakoPetAdapter:
                 else:
                     # 首次：为每个桌宠/agent 创建专属 session
                     self._current_session = sm.create_session(agent_id=aid)
+                    # 标记归属：这个会话是桌宠自己建的（不是兜底漂移来的）
+                    self._owned_sessions[aid] = getattr(
+                        self._current_session, "session_id", None)
                 self._agent_sessions[aid] = self._current_session
                 new_sid = getattr(self._current_session, "session_id", None)
                 self._agent_pinned[aid] = new_sid
                 self._pinned_session_id = new_sid
+                # 2026-09-20（A）：落盘，让重启后还能回到同一个会话
+                self._save_pinned_sessions()
                 # 2026-09-11：把会话 id 记进日志。
                 # 排查「桌宠到底在哪个会话里说话」时这是唯一的直接凭据——
                 # 我刚为此查了一整轮（文件取证、API 取证、被我自己的输出
@@ -1028,6 +1239,15 @@ class HanakoPetAdapter:
         if sid and self.agent_id:
             self._agent_sessions[self.agent_id] = session_ref
             self._agent_pinned[self.agent_id] = sid
+            # 标记归属：调用方（菜单「新建对话」）显式注入的是**桌宠自己的**会话。
+            # 没这一步，重启后归属校验会把合法 pin 当作漂移残留丢掉。
+            # getattr 兜底：测试/旧路径可能用 __new__ 绕过 __init__，
+            # 不能让一个标记属性把 set_session 搞崩。
+            if not hasattr(self, "_owned_sessions"):
+                self._owned_sessions = {}
+            self._owned_sessions[self.agent_id] = sid
+            # 2026-09-20（A）：落盘，让重启后还能回到同一个会话
+            self._save_pinned_sessions()
 
     def switch_agent(self, agent_id: str) -> bool:
         """切换对话后端 agent（F2/F4）。

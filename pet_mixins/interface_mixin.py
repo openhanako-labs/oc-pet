@@ -163,10 +163,20 @@ class InterfaceMixin:
                 if hasattr(self, "_set_anim_seq"):
                     self._set_anim_seq(anim)
             elif action == "expression":
+                # 2026-09-20 修：这里收的是**表情名**（比心/唱歌/葱），
+                # 而 `_apply_expression` 收的是**情绪名**（happy/sad）。
+                # 原实现直接调 `_apply_expression(name)` → 内部按情绪关键词
+                # 匹配 → 永远 no-match，而工具还回“已派发”（静默失效）。
+                # 实测：真机 7 个表情全部 no-match。
                 name = str(params.get("name") or "")
                 r = getattr(self, "_renderer", None)
-                if name and r is not None and hasattr(r, "_apply_expression"):
-                    r._apply_expression(name)
+                if name and r is not None:
+                    setter = getattr(r, "set_named_expression", None)
+                    if callable(setter):
+                        setter(name)
+                    elif hasattr(r, "_apply_expression"):
+                        # 回退：旧渲染器（无命名入口）
+                        r._apply_expression(name)
             elif action == "say":
                 text = str(params.get("text") or "")
                 if text:

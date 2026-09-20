@@ -1163,8 +1163,12 @@ class ScreenPerception:
             return
 
         # 注入 agent 身份（如果有）
+        # 2026-09-20：不再 `[:150]` 截断——会把身份文本切在半句，
+        # 模型看到残缺句子。身份注入是**低频**（屏幕主动评论有 5-15 分钟
+        # 冷却），多几百字 token 可接受。且 150 字对助手的 identity.md
+        # （实测 329 字）根本不够。
         agent_brief = getattr(self, '_agent_identity', '')
-        identity_line = f"你的身份：{agent_brief[:150]}\n" if agent_brief else ""
+        identity_line = f"你的身份：{agent_brief}\n" if agent_brief else ""
 
         # 随机选模板
         template = random.choice(self._PROACTIVE_TEMPLATES)

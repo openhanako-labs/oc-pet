@@ -524,6 +524,66 @@ class PerceptionMixin:
             logger.warning("P1 ReflectionEngine 初始化失败（非致命）: %s", e)
             self._reflection_engine = None
 
+    # ── 人格来源与身份注入（2026-09-20 从 pet.py 搬入）────────
+    #
+    # 搬移理由：pet.py 有 3550 行软上限护栏（`test_perch_wiring` /
+    # `test_signal_contract` 两条）。新增接线应进 mixin，不是继续堆 pet.py。
+
+    def _persona_agent_id(self) -> str:
+        """人格来源 agent id：dialog.agent_id 优先，回退模型包名。
+
+        桌宠是壳、人格从助手来（用户 2026-09-20 指正）。
+
+        概念区分：
+
+        | | 含义 | 来源 |
+        |---|---|---|
+        | `_current_char` | 画的是谁（Live2D 模型包） | `config.character` |
+        | 人格来源 | 说话的是谁（助手） | `config.dialog.agent_id` |
+        """
+        try:
+            dlg = (self.config.get("dialog") or {}) if hasattr(self, "config") else {}
+            aid = (dlg.get("agent_id") or "").strip()
+            if aid:
+                return aid
+        except Exception:
+            logger.debug("pet: 读 dialog.agent_id 失败", exc_info=True)
+        return self._current_char
+
+    def _substitute_card_vars(self, text: str) -> str:
+        """替换角色卡模板变量（{{userName}} 等）。
+
+        背景：`{{userName}}` 是 Hana 角色卡的模板语法，Hana 渲染时会替换。
+        而桌宠读 `identity.md` 原文不做替换——实测 miku 的 identity.md 里
+        就写着 `你是{{userName}}的桌宠`，模型看到的是字面量。
+
+        用户名来源：`/api/health` 的 `user` 字段（实测为“月曦夜”）。
+        取不到时回退中性称呼“你”，**绝不留下字面占位符**。
+        """
+        if not text or "{{" not in text:
+            return text
+        name = self._user_display_name() or "你"
+        try:
+            return (text.replace("{{userName}}", name)
+                        .replace("{{user_name}}", name)
+                        .replace("{{user}}", name))
+        except Exception:
+            logger.debug("pet: 替换模板变量失败", exc_info=True)
+            return text
+
+    def _user_display_name(self) -> str:
+        """取用户显示名（失败返回空串）。
+
+        来源：Hana `/api/health` 的 `user` 字段。
+        """
+        try:
+            from core.hana_client import HanaClient
+            st = HanaClient.from_env().status() or {}
+            return str(st.get("user") or "").strip()
+        except Exception:
+            logger.debug("pet: 取用户名失败", exc_info=True)
+            return ""
+
     # ── A 线：向量召回确认 ─────────────────────────────────
 
     def _init_p1_embedding_check(self):

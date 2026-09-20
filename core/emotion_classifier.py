@@ -404,8 +404,24 @@ class EmotionClassifier:
 
 
 # ── 单例 ────────────────────────────────────────────────────
-_INSTANCES: dict[str, EmotionClassifier] = {}
+# 键是 (name, extra_corpus 指纹)。
+#
+# 2026-09-20 修复：原来只按 name 缓存（`_INSTANCES.get(name)`），
+# 于是**同一视角的两种变体互相踩**：
+#   `get_classifier('pet')`            ← 无桌宠语料（1400 条）
+#   `get_classifier('pet', extra=...)` ← 有桌宠语料（1474 条）
+# 谁先调谁定义内存实例，且两者写**同一个缓存文件**——后调的发现
+# labels 不匹配 → 重建 → 实测 154 秒（卡在 embedding API 超时重试）。
+# 正确性没错（labels 校验会触发重建，不会用错结果），但性能被反复打穿。
+_INSTANCES: dict[tuple, EmotionClassifier] = {}
 _INST_LOCK = threading.Lock()
+
+
+def _extra_fingerprint(extra: Optional[dict[str, list[str]]]) -> tuple:
+    """extra_corpus 的轻量指纹（只取结构，不哈希全量文本）。"""
+    if not extra:
+        return ()
+    return tuple(sorted((k, len(v or [])) for k, v in extra.items()))
 
 
 def get_classifier(
@@ -419,9 +435,12 @@ def get_classifier(
             仅用于缓存键与缓存文件命名；两者共用语料，
             差异由 ``extra_corpus`` 与阈值体现。
         extra_corpus: 额外语料（如桌宠视角补充语料）。
+            **参与缓存键**：同一 name 传不同 extra 得到不同实例，
+            不再互相覆盖（2026-09-20 修复）。
     """
+    key = (name, _extra_fingerprint(extra_corpus))
     with _INST_LOCK:
-        inst = _INSTANCES.get(name)
+        inst = _INSTANCES.get(key)
         if inst is not None:
             return inst
         provider = None
@@ -436,5 +455,5 @@ def get_classifier(
             extra_corpus=extra_corpus,
             cache_path=cache,
         )
-        _INSTANCES[name] = inst
+        _INSTANCES[key] = inst
         return inst

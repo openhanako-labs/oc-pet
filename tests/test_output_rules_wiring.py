@@ -47,6 +47,11 @@ def _adapter(reply="好的~[emotion:happy]"):
     a._pinned_session_id = None
     a._renderer = None
     a._pet_renderer = None
+    # 2026-09-20：**必须显式设 _config**，否则 `_inject_rules_in_text`
+    # 会回退去读真实 config.json —— 测试结果就随用户配置飘了
+    # （用户开了 inject 开关，这里就红；关了，这里就绿。那不是测试）。
+    # 默认给空 dict = 不注入，保持 09-16 的默认语义。
+    a._config = {}
     return a
 
 
@@ -59,11 +64,59 @@ def test_output_rules_contain_primary_tag():
 
     2026-09-10 收敛：原四个标签（emotion/action/expression/duration）职责重叠且
     要求「必须同时出现，缺一不可」，实测命中率 0/14。改为一个必给 + 一个可选。
+
+    2026-09-20：在 [feel:] 之外**重新加回一个必填的 [emotion:词]**。
+    与 09-10 的失败不矛盾——那次是四个标签全必填；这次是两个且职责不重叠。
+    实测对照（tools/verify_emotion_contract.py）：双必填 4/6 写全，
+    只 feel 2/6，可选追加 0/6。
     """
     rules = _adapter()._output_rules()
     assert "[feel:" in rules, "必须给出情绪坐标"
     assert "valence" in rules and "arousal" in rules, "两个维度都要解释"
     assert "必须" in rules
+
+
+def test_output_rules_demand_emotion_word():
+    """★ 2026-09-20 新契约：必须给出 [emotion:词]。
+
+    为什么加回来：VA 二维承载不了中文情绪细粒度（正价区全塌成 happy，
+    「记得让眼睛歇一歇」被判开心，实际是关心）。让主 LLM 直接给情绪词，
+    比在本地再加一层分类器读文本反推更准（主 LLM 更强，且它本来就在读）。
+    """
+    rules = _adapter()._output_rules()
+    assert "[emotion:" in rules, "必须给出情绪词"
+    assert "情绪词" in rules
+
+
+def test_emotion_rules_cover_all_zh_keys():
+    """契约里列的情绪词，必须都能被 `_EMOTION_ZH` 翻译——否则静默落空。
+
+    这是防「单测全绿功能是死的」的老坑：`_direct_expression` 拿到英文词后
+    查 `_EMOTION_ZH`，查不到就静默 return。
+    """
+    from pet_mixins.perception_mixin import PerceptionMixin
+
+    rules = _adapter()._output_rules()
+    zh = PerceptionMixin._EMOTION_ZH
+    # 契约里承诺的 10 个词
+    for w in ("happy", "sad", "angry", "surprised", "thinking",
+              "confused", "shy", "cute", "sleepy", "neutral"):
+        assert w in rules, f"契约未列出 {w}"
+        assert w in zh, f"{w} 在 _EMOTION_ZH 里没有中文归宿"
+
+
+def test_emotion_word_is_required_not_optional():
+    """情绪词必须是「必须」级别，不能写成「可选」。
+
+    实测（tools/verify_emotion_contract.py）：把标签写成「（可选）」时，
+    模型 0/6 写——可选 = 不写。这是 2026-09-10 [do:] 标签全历史 0 次使用的
+    同一规律。
+    """
+    rules = _adapter()._output_rules()
+    i = rules.index("[emotion:")
+    # [emotion:] 所在那条规则里必须有「必须」
+    seg = rules[max(0, i - 40):i]
+    assert "必须" in seg, "情绪词必须是必填，不能写成可选"
 
 
 def test_output_rules_mention_optional_do_tag():
@@ -77,10 +130,17 @@ def test_legacy_tags_no_longer_demanded():
     """旧标签不再作为「必须」要求（仍能被解析，但不让模型写）。
 
     这是本次收敛的核心：模型面对「四个标签该写哪个」选择了全不写。
+
+    2026-09-20 边界：[emotion:] 已**重新变为必填**（见
+    test_emotion_word_is_required_not_optional），所以不再断言它「不被要求」。
+    仍然不被要求的是 action / expression / duration 三个。
     """
     rules = _adapter()._output_rules()
     assert "四个标签必须同时" not in rules
     assert "缺一不可" not in rules
+    # 这三个仍不该出现在规则里
+    for tag in ("[action:", "[expression:", "[duration:"):
+        assert tag not in rules, f"{tag} 不该再要求模型输出"
 
 
 def test_rules_are_single_source_of_truth():
@@ -141,10 +201,44 @@ def test_inject_rules_fallback_switch_restores_old_behavior():
     assert sent.rstrip().endswith("举个手?")
 
 
-def test_inject_rules_defaults_off_without_config():
-    """未配 _config 时默认不注入（新行为）。"""
+def test_inject_rules_defaults_off_without_switch():
+    """没写开关时默认不注入（不改变 09-16 的默认行为）。
+
+    2026-09-20 修复：原实现在 `_config` 为 None 时回退去读真实 config.json，
+    于是“默认”二字失效——用户开开关，测试就红。
+    现在替身显式给 `_config={}`，本测试才真的在测“默认”。
+    """
     a = _adapter()
     assert a._inject_rules_in_text() is False
+
+
+def test_inject_rules_falls_back_to_disk_config(monkeypatch):
+    """★ 2026-09-20 修复：`_config` 未注入时必须能读到磁盘 config。
+
+    原实现只读 `getattr(self, "_config", None)`，而 `_config` 在本类里
+    **从来没有被赋值过** —— 开关是死的，无论 config.json 写什么都返回 False。
+    实证：日志里 `标签检测: feel=False emotion=False` 贯穿全程。
+    """
+    import config as config_mod
+
+    monkeypatch.setattr(
+        config_mod, "load_config",
+        lambda: {"dialog": {"inject_output_rules_in_text": True}},
+        raising=False,
+    )
+    a = _adapter()
+    a._config = None                       # 模拟真实情形：从未被赋值
+    assert a._inject_rules_in_text() is True, (
+        "`_config` 未注入时应回退读盘，否则开关是死的"
+    )
+
+
+def test_agent_level_config_overrides_global():
+    """agent 级配置（per-pet）应优先于全局。"""
+    a = _adapter()
+    a._config = {"dialog": {}}
+    a._agent_config = {"dialog": {"inject_output_rules_in_text": True}}
+    assert a._inject_rules_in_text() is True
 
 
 def test_hanako_path_keeps_pet_context():

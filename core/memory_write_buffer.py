@@ -6,7 +6,27 @@
 功能：
 - 批量 flush：累积 N 次写入或 M 秒后统一落盘
 - 异步落盘：写入在后台线程执行，不阻塞主线程
-- 线程安全：使用锁保护共享状态
+- 线程安全：使用**可重入锁**保护共享状态
+
+## 为什么必须是 RLock（2026-09-20 真实死锁修复）
+
+原实现用 `threading.Lock`（不可重入），但存在**同线程重入**路径：
+
+    mark_dirty()            ← 持有 _lock
+      └─ _schedule_flush()  ← 再次获取同一把 _lock → 永久阻塞
+
+    _periodic_flush()       ← 持有 _lock
+      └─ _flush()           ← 再次获取同一把 _lock → 永久阻塞
+
+后果：**攒够 max_batch_size 次记忆写入后，整个进程卡死**。
+实测复现：`mark_dirty()` 第 3 次（batch=3）即挂住；
+真机表现是窗口关闭时卡在 `closeEvent → companion_memory.close()
+→ mark_dirty`（faulthandler 栈可证）。
+
+改 RLock 而不是拆锁：这些重入是**有意的**——
+`_schedule_flush` 必须与调用方的状态检查原子；
+拆开会让「检查 dirty → 安排 flush」出现竞态窗口。
+RLock 保持原语义，只消除自锁。
 """
 from __future__ import annotations
 
@@ -34,7 +54,9 @@ class MemoryWriteBuffer:
         self._dirty = False               # 是否有未保存的修改
         self._dirty_count = 0             # 未保存的修改次数
         self._last_flush_time = time.time()
-        self._lock = threading.Lock()
+        # RLock（可重入）：mark_dirty→_schedule_flush、_periodic_flush→_flush
+        # 都是同线程重入路径，普通 Lock 会自死锁。详见模块 docstring。
+        self._lock = threading.RLock()
         
         # 异步线程
         self._timer: threading.Timer | None = None

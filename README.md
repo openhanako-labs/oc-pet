@@ -122,6 +122,24 @@ linjian-peek → MCP Plugin → Hanako tool calling ─────────�
 - 💾 **备份恢复** -- 完整备份 + SHA-256 校验 + 一键恢复
 - 🎮 **插件 KV 存储** -- 插件自带配置页 + 持久存储
 
+### MCP 工具（桌宠反过来被 AI 调用）
+
+桌宠内置一个 MCP server（默认 `http://127.0.0.1:8979/mcp`），把自身的
+表情/动作/感知能力暴露给 Hanako 等 MCP 客户端 —— **桌宠不只是被驱动的
+壳，也可以被 AI 主动操作**。共 **21 个工具**：
+
+| 分组 | 工具 | 说明 |
+|---|---|---|
+| 状态 | `pet_state` / `pet_capabilities` | 读当前情绪/动作/可用能力快照 |
+| 表达 | `pet_set_emotion` / `pet_play_anim` / `pet_expression` / `pet_say` / `pet_celebrate` / `pet_reset_idle` | 设情绪、播动作、设表情、说话、庆祝、重置待机 |
+| 电脑操作 | `pet_computer_*`（8 个） | 窗口枚举/元素树/启动/点击/输入/按键（默认只读，需显式开启动作） |
+| Hanako | `pet_hana_*`（5 个） | 读 Hanako 状态/会话/agent/app 列表 |
+
+> **开关**：`config.json` → `mcp_server.enabled`。默认端口 8979，
+> 仅监听 `127.0.0.1`（不对外网暴露）。
+> **电脑操作默认关闭动作**：`computer_use.allow_actions=false` 时只读窗口信息，
+> 不执行点击/输入——避免桌宠被误用来操作你的桌面。
+
 ### 通知
 - 📱 **ntfy 通知** -- 推送通知到手机（需安装 ntfy app）
 
@@ -199,6 +217,99 @@ python main.py
 
 首次启动由引导流程选择角色包（默认无内置模型，需自行提供）。以 **miku** 占位角色为例：
 把官方/有许可的 Live2D 模型放入 `characters/miku/live2d/`，再把 config.json 的 `character` 改为 `miku` 即切换为 Live2D 桌宠；其他角色同理。
+
+---
+
+## 引导教程：从零到能聊天
+
+下面是一条**最短可用路径**。每步都有「做对了会看到什么」，卡住时按这个对。
+
+### 第 0 步：先确认 Hanako 活着
+
+桌宠是**壳**，灵魂在 Hanako。先跑：
+
+```bash
+# 看 Hanako 服务在不在（默认端口 20099）
+curl http://127.0.0.1:20099/api/health
+```
+
+- ✅ 返回 JSON（含 `user` 字段，就是你的名字）→ 继续
+- ❌ 连接被拒 → 先启动 Hanako，否则桌宠只能用降级对话
+
+### 第 1 步：确认桌宠读到了身份
+
+启动桌宠后看日志，应该出现：
+
+```
+[session] 已从磁盘恢复 pin: agent=ophelia session=sess_xxx   # 重启后
+Agent identity injected (329 chars, agent=ophelia)           # 人格来源
+```
+
+**这两个字段是排查的两根支柱**：
+- `agent=xxx` —— 人格从哪个助手来（由 `config.json` 的 `dialog.agent_id` 决定）
+- `session=sess_xxx` —— 桌宠在哪个会话里说话
+
+> ⚠️ **人格 vs 模型包是两个概念**：
+> `character`（如 `miku`）决定**画的是什么**；`dialog.agent_id`（如 `ophelia`）
+> 决定**说话的是谁**。桌宠本身没有人设，用的是助手的人设。
+
+### 第 2 步：确认对话链路通
+
+左键点桌宠 → 弹出聊天框 → 发一句「你好」。
+
+- ✅ 气泡出字 + （若开了 TTS）有声音
+- ❌ 一直「思考中」→ 看日志有没有 `LLM 401`（凭证失效）或
+  `连不上`（网络）；改 `.env` 或重登 Hanako
+
+### 第 3 步：确认表情/动作真的生效
+
+这是**最容易「看着像对但其实是死的」**的一环。发一句带情绪的话，
+然后看日志：
+
+```
+[DECISION] emotion: happy (src=...)
+[DECISION] expression: 脸红 (src=exact:happy)
+Live2DRenderer: 播放动作 idx=2（motions/waving.motion3.json）
+```
+
+- ✅ 三行都在 → 情绪→表情→动作链路通
+- ❌ 只有 `emotion` 没有 `expression` → 模型的表情名不匹配，
+  查 `characters/<角色>/live2d/profile.json` 的映射
+- ❌ `no-match` → 表情名/情绪名搞混了（工具收表情名，
+  内部映射收情绪名）
+
+### 第 4 步：接 MCP（可选，但推荐）
+
+想让 Hanako 反过来驱动桌宠（比如让 AI 主动让桌宠比个心）：
+
+1. 确认桌宠的 MCP server 起来了：
+   ```bash
+   curl http://127.0.0.1:8979/mcp
+   ```
+2. 在 Hanako 的 MCP 连接器配置里加 `oc-pet`，指向上面这个地址
+3. 重启 Hanako
+
+- ✅ Hanako 能看到 21 个 `pet_*` 工具
+- ❌ 连不上 → **顺序问题**：Hanako 比桌宠先起，且不会自动重试。
+  先开桌宠，再开 Hanako。
+
+### 第 5 步（可选）：语音
+
+| 想要 | 做什么 | 代价 |
+|---|---|---|
+| 免费、秒级、免注册 | 设置 → TTS → **Edge TTS** | 需联网 |
+| 本地克隆音色 | 见上方「本地 CosyVoice TTS 部署」 | 需 NVIDIA 显卡，8–10 秒/句 |
+| 语音输入 | 设置 → ASR → **Whisper 本地** | 首次下载模型 |
+
+### 卡住了看哪里
+
+| 症状 | 先看 |
+|---|---|
+| 桌宠不说话 | `.env` 的 `LLM_*`；Hanako 是否在跑 |
+| 人格不对 | 日志 `Agent identity injected (…, agent=?)` |
+| 桌宠记忆串了 | 日志 `[session] … session=?`，是否与预期一致 |
+| 表情/动作不动 | `[DECISION] expression:` 那行有没有 |
+| MCP 连不上 | 启动顺序（桌宠 → Hanako） |
 
 ## 本地 CosyVoice TTS 部署（从零）
 
@@ -387,7 +498,13 @@ oc-pet/
 ├── env_config.py           # .env 配置
 ├── core/                   # 核心模块
 │   ├── conversation_engine.py  # 对话引擎
-│   ├── harness_adapter.py      # LLM 适配器
+│   ├── harness_adapter.py      # LLM 适配器（Hanako / 直连双通道）
+│   ├── hana_client.py          # Hanako HTTP 客户端（读状态/会话/agent/app）
+│   ├── mcp_server.py           # 内置 MCP server（21 个 pet_* 工具）
+│   ├── computer_use_bridge.py  # 电脑操作桥（窗口枚举/点击/输入）
+│   ├── hanako_session_manager.py # Hanako 会话管理（流式聚合）
+│   ├── emotion_classifier.py   # 情绪分类器（embedding 近邻 + VAD）
+│   ├── capability_snapshot.py  # 能力快照（模型/动作/预设扫描）
 │   ├── perception.py           # 感知系统（时间/情绪/屏幕/手机/主动对话）
 │   ├── phone_activity.py       # 手机活动数据管理 + 感知层
 │   ├── phone_receiver.py       # MacroDroid HTTP 接收器
@@ -418,6 +535,75 @@ oc-pet/
 │   └── sample_live2d/        # 免费示例模型（Haru 等）
 └── requirements.txt        # 依赖列表
 ```
+
+> **Live2D 模型不进仓库**：`characters/*/live2d/*` 已在 `.gitignore` 中排除
+> （版权原因）。克隆后只有 `profile.json`（参数映射配置），
+> 模型需自己放或跑 `tools/fetch_free_live2d_sample.py`。
+> 这也是 CI 上部分资产测试会 `skip` 而不是失败的原因。
+
+## 打包发布（PyInstaller）
+
+把桌宠打成**免 Python 环境**的独立目录，发给别人直接跑。
+
+### 一键构建
+
+```bash
+# 1) 装构建依赖（**不是** requirements.txt）
+pip install -r requirements-build.txt
+pip install pyinstaller
+
+# 2) 构建
+pyinstaller oc_pet.spec
+
+# 3) 产物
+#    dist/oc_pet/oc_pet.exe   ← 双击运行
+#    整个 dist/oc_pet/ 目录要一起发，不能只发 exe
+```
+
+### 为什么要单独一份 `requirements-build.txt`
+
+| | 内容 | 产物体积 |
+|---|---|---|
+| `requirements.txt` | 完整（含 torch 4.2GB / onnxruntime 748MB） | **650MB+** |
+| `requirements-build.txt` | 精简（核心功能 + 有降级路径的可选件） | 显著更小 |
+
+被砍掉的每一项都有**代码级降级路径**（`import` 在 `try/except` 内）：
+
+| 砍掉 | 后果 |
+|---|---|
+| `openai-whisper` → torch | 本地 ASR 降级 `faster-whisper`（CPU） |
+| `onnxruntime` | 记忆召回降级纯 BM25 |
+| `cosyvoice` / `funasr` | TTS 降级 Edge（默认引擎，不受影响） |
+
+用户想补回时，把包装到产物的 `_internal/` 下，或直接源码运行。
+
+### Qt 模块裁剪
+
+`oc_pet.spec` 里显式排除了 **628MB** 的无关 Qt DLL（QtWebEngineCore 单个就 195MB）。
+原则：只排**代码里零 import 且不被已用模块间接依赖**的。已用模块的依赖链不能碰：
+
+```
+QtWidgets → QtGui → QtCore
+QtMultimedia → QtNetwork / ffmpeg(avcodec 等)
+QtOpenGLWidgets → QtOpenGL / QtGui
+```
+
+### CI 自动构建
+
+`.github/workflows/build.yml`：**打 `v*` tag** 时自动构建并创建 GitHub Release。
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0     # 触发构建 + 发布
+```
+
+> 注意：普通 `push` 到 master **不会**触发打包，只跑测试（`test.yml`）。
+
+### 打包前检查
+
+- ✅ 全量测试绿：`python -m pytest tests/ -q`
+- ✅ 在干净环境验证过：依赖 `config.json` / Live2D 模型的测试会 `skip`，不应报错
+- ✅ Live2D 模型**不会**进产物（除非你自己放 `characters/<角色>/live2d/`）
 
 ## 常见问题
 

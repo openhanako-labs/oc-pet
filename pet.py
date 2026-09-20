@@ -1364,23 +1364,57 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
 
     def _inject_agent_identity(self):
-        """异步读取 agent 身份，注入给 idle_chatter 和 screen perception"""
+        """异步读取**助手**身份，注入给 idle_chatter 和 screen perception。
+
+        ## 2026-09-20 修正（用户指正）
+
+        用户原话：
+
+        > 谁的人设：助手的啊，桌宠本身就不应该有人设，理解吗
+
+        原实现用 `HanakoContext(self._current_char)`，而 `_current_char` 是
+        **模型包名**（如 "miku"）——于是桌宠读的是
+        `agents/miku/identity.md`（“你是{{userName}}的桌宠，初音未来……”）。
+
+        这是**两个概念被混用**：
+
+        | | 含义 | 来源 |
+        |---|---|---|
+        | `_current_char` | **画的是谁**（Live2D 模型包） | `config.character` |
+        | 人格来源 | **说话的是谁**（助手） | `config.dialog.agent_id` |
+
+        桌宠是**壳**，人格从助手来。所以身份要读 dialog agent 的
+        `identity.md`，而不是模型包的。
+
+        ## 变量替换
+
+        助手身份文本里可能有角色卡模板变量 `{{userName}}`（实测 miku 的
+        identity.md 里就有）。桌宠读原文不做替换 → 模型看到字面量
+        “你是{{userName}}的桌宠”。这里做替换。
+        """
         def _load():
             try:
                 from core.hanako_context import HanakoContext
-                ctx = HanakoContext(self._current_char)
+                # 人格来源：优先 dialog.agent_id（助手），回退模型包名
+                aid = self._persona_agent_id()
+                ctx = HanakoContext(aid)
                 identity = ctx.read_identity() or ctx.read_description() or ""
                 if identity:
+                    identity = self._substitute_card_vars(identity)
                     if hasattr(self, '_idle_chatter') and self._idle_chatter:
                         self._idle_chatter.set_agent_identity(identity)
                     if hasattr(self, '_perception') and self._perception:
                         screen = getattr(self._perception, '_screen', None)
                         if screen and hasattr(screen, 'set_agent_identity'):
                             screen.set_agent_identity(identity)
-                    logger.info("Agent identity injected (%d chars)", len(identity))
+                    logger.info("Agent identity injected (%d chars, agent=%s)",
+                                len(identity), aid)
             except Exception as e:
                 logger.debug("Agent identity injection skipped: %s", e)
         threading.Thread(target=_load, daemon=True).start()
+
+    # `_persona_agent_id` / `_substitute_card_vars` / `_user_display_name`
+    # 2026-09-20 已搬入 `pet_mixins/perception_mixin.py`（pet.py 有 3550 行护栏）。
 
     def _ensure_dialog_agent(self):
         """F5: 确保对话后端 agent 已绑定（首次启动引导）。
@@ -2816,17 +2850,23 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
     def _on_engine_reply(self, reply: str, emotion: str, anim: str, audio_path: str, action_intent=None):
         """对话引擎回复回调 - 从后台线程调用，通过信号转到主线程"""
-        # 2026-09-20：**在后台线程就提交情绪分类**。
+        # 2026-09-20 晚改版：主 LLM 已直出情绪词 → **不再无条件提交分类**。
         #
-        # 为什么在这里：本方法已经跑在后台线程，而分类要走网络（实测 100-300ms）。
-        # 提前提交，等 engine_reply_signal 排到主线程时结果大概率已就位。
-        # 未就位就静默跳过（_resolved_reply_emotion 返回空）——不阻塞、不等。
+        # 旧行为：无论 emotion 是什么都提交分类任务，让分类结果覆盖。
+        # 新契约下 `emotion` 由主 LLM 直接给出（且它比本地分类器强得多），
+        # 所以只在**主 LLM 没给**时才提交——省一次网络往返（实测 0.8–1.2s）。
         #
-        # 为什么不用 [feel:] 的 VA：实测 VA 二维承载不了情绪细粒度
-        # （正价区全塌成 happy，「记得让眼睛歇一歇」被判开心，实际是关心）。
+        # 为什么还在后台线程提交：本方法已跑在后台线程，而分类要走网络。
+        # 若主 LLM 未给情绪，这里提前提交，等 engine_reply_signal 排到主线程时
+        # 结果大概率已就位；未就位就静默跳过——不阻塞、不等。
         try:
-            if reply and self._classify_enabled:
+            _need_classify = (not emotion or emotion == "neutral")
+            logger.info("[diag] _on_engine_reply 到达 | reply=%r emotion=%s enabled=%s 需分类=%s",
+                        (reply or "")[:30], emotion,
+                        getattr(self, "_classify_enabled", "MISSING"), _need_classify)
+            if reply and self._classify_enabled and _need_classify:
                 self._classify_reply_async(reply)
+                logger.info("[diag] 已提交分类任务（主 LLM 未给情绪，兜底）")
         except Exception:
             logger.debug("pet: 提交情绪分类失败", exc_info=True)
 
@@ -3015,18 +3055,21 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         # 交付：文字与音频的时序契约（见 _deliver_reply）
         self._deliver_reply(display_text, emotion, audio_path)
 
-        # 2026-09-20：情绪分类器接线（决策 C）
+        # 2026-09-20：情绪来源优先级（新契约：主 LLM 直出情绪词）
         #
-        # 主链路上 `emotion` 变量**恒为 "neutral"**（实测：[emotion:] 标签
-        # 只有兜底才补，补的就是 neutral）。而它有多个消费者：
-        # set_emotion_expression_only / _set_anim_seq(emotion=) / _current_emotion。
+        # 2026-09-20 晚改版：契约里重新加了**必填的** [emotion:词]。
+        # 所以 `emotion` 变量现在**不再恒为 neutral**——主 LLM 会直接给。
         #
-        # 快路径：若分类结果**已就绪**（上一轮缓存 / 分类很快），立即替换。
-        # 未就绪则不动 —— 慢路径（emotion_classified_signal →
-        # _apply_classified_emotion）会在结果到达时补一次。
-        _classified = self._resolved_reply_emotion()
-        if _classified:
-            emotion = _classified
+        # 分工：
+        #   主 LLM（读懂对话，最强）→ 直接给情绪词
+        #   本地分类器（更弱，桌宠视角 67%）→ **仅当主 LLM 没给时兜底**
+        #
+        # 所以这里反过来：**已有非 neutral 情绪就不动**，
+        # 只有空/neutral 时才用分类结果填。
+        if not emotion or emotion == "neutral":
+            _classified = self._resolved_reply_emotion()
+            if _classified:
+                emotion = _classified
         self._consume_reply_emotion()
 
         # 动画（收窄：surprised/angry 不切瞪眼帧，避免对话时高频瞪眼）

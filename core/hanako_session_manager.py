@@ -433,11 +433,46 @@ class HanakoSessionManager:
         preferred_session_id: str | None = None,
         create_if_missing: bool = True,
     ) -> SessionRef:
+        """取回一个可用会话。
+
+        ⚠️ 2026-09-20 修复「pin 漂移」（真机事故）：
+
+        原实现在 `preferred_session_id` **找不到**时，会回退到
+        「该 agent 最近修改的会话」：
+
+            if sessions:
+                sessions.sort(key=modified, reverse=True)
+                return sessions[0].ref      # ← 漂移源头
+
+        对 `agent_id="ophelia"` 而言，「最近修改的」就是**助手的主对话**。
+        于是桌宠 pin 失效（会话被删/换机）后会**静默接管用户与助手的
+        对话历史**——待机自言自语、输出规则、身份文本全写进主对话。
+
+        真机证据（三重独立判据，非字符串推断）：
+          - `~/.hanako/pets/session_ophelia.json` pin = sess_0mu9hqd0r
+          - `/api/sessions` 里该 id 的 path == 助手主对话的 jsonl
+          - `ensure_session(preferred=<不存在>)` 返回该主对话（非新建）
+
+        正确语义：调用方**点名要某个会话**，那个会话不存在时，
+        要么新建、要么报错——**绝不能换成另一个会话**。
+        """
         sessions = self.list_sessions(agent_id=agent_id)
         if preferred_session_id:
             for summary in sessions:
                 if summary.session_id == preferred_session_id:
                     return summary.ref
+            # 点名要的会话不存在：**不兜底到「最近修改的」**（那会接管主对话）。
+            logger.warning(
+                "[SM] preferred session %s 不存在（agent=%s）——新建而非接管已有会话",
+                preferred_session_id, agent_id,
+            )
+            if not create_if_missing:
+                raise HanakoSessionError(
+                    f"Preferred session {preferred_session_id} not found "
+                    f"for agent {agent_id}"
+                )
+            return self.create_session(agent_id=agent_id)
+        # 未点名：允许复用该 agent 最近的会话（显式调用方的意图）
         if sessions:
             sessions.sort(key=lambda item: item.modified or "", reverse=True)
             return sessions[0].ref

@@ -527,9 +527,13 @@ class ConversationEngine:
     # P0-1: 真实回调方法（在主线程执行）
     def _real_on_reply(self, reply: str, emotion: str, anim: str, audio_path: str, action_intent=None):
         """真实 on_reply 回调（主线程）"""
+        logger.info("[diag] _real_on_reply 到达 | reply=%r emo=%s audio=%s",
+                    (reply or "")[:30], emotion, bool(audio_path))
         try:
             if hasattr(self, '_original_on_reply') and callable(self._original_on_reply):
                 _call_reply_cb(self._original_on_reply, reply, emotion, anim, audio_path, action_intent)
+            else:
+                logger.warning("[diag] _original_on_reply 不可调用: %r", self._original_on_reply)
         except Exception as e:
             logger.error("on_reply callback error: %s", e)
     

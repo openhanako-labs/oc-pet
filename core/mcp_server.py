@@ -156,6 +156,7 @@ class PetMCPServer:
         capabilities_provider: Optional[Callable[[], list]] = None,
         action_sink: Optional[Callable[[str, dict], Any]] = None,
         catalog_provider: Optional[Callable[[str], dict]] = None,
+        computer_provider: Optional[Callable[[str, dict], dict]] = None,
         port: int = DEFAULT_PORT,
         allow_actions: bool = True,
         transport_security: Optional[dict] = None,
@@ -164,6 +165,7 @@ class PetMCPServer:
         self._capabilities_provider = capabilities_provider
         self._action_sink = action_sink
         self._catalog_provider = catalog_provider
+        self._computer_provider = computer_provider
         self._port = int(port or DEFAULT_PORT)
         self._allow_actions = bool(allow_actions)
         self._transport_security_cfg: dict = dict(transport_security or {})
@@ -209,6 +211,17 @@ class PetMCPServer:
         except Exception as e:
             logger.warning("MCP: 读能力清单失败: %s", e)
             return []
+
+    def _safe_computer(self, op: str, params: dict) -> dict:
+        """代理一次 computer-use 调用。失败一律降级为 error dict，绝不抛出。"""
+        if self._computer_provider is None:
+            return {"error": "桌宠未接入 computer-use（config computer_use.enabled=false 或未安装 cua-driver）"}
+        try:
+            r = self._computer_provider(str(op), dict(params or {}))
+            return r if isinstance(r, dict) else {"result": r}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("MCP: computer-use 调用失败 (%s): %s", op, e)
+            return {"error": str(e)[:300]}
 
     def _safe_catalog(self, system: str) -> dict:
         """读 Hana 全体系目录（DISC-2）。失败降级为 error dict。"""
@@ -343,6 +356,185 @@ class PetMCPServer:
             """让桌宠回到待机状态（清表情/动作，回到 idle）。"""
             return self._dispatch_action("idle", {})
 
+        # ── computer-use（桌宠的「手」，接本机 cua-driver）──
+        # 仅在 config computer_use.enabled=true 时注册；否则这几个工具根本不出现。
+        if self._computer_provider is not None:
+
+            @app.tool()
+            def pet_computer_status() -> dict:
+                """查询桌宠的 computer-use 能力状态（驱动版本 / daemon / 是否允许写）。只读。"""
+                return self._safe_computer("status", {})
+
+            @app.tool()
+            def pet_computer_apps() -> dict:
+                """列出本机已安装/在运行的应用（供 launch 取 aumid/name）。只读，可能较大。"""
+                return self._safe_computer("apps", {})
+
+            @app.tool()
+            def pet_computer_windows(pid: int = 0) -> dict:
+                """列出顶层窗口；给 pid 时只列该进程的窗口。只读。
+
+                Args:
+                    pid: 进程 ID；0 或省略 = 列全部。
+                """
+                return self._safe_computer("windows", {"pid": int(pid)} if pid else {})
+
+            @app.tool()
+            def pet_computer_window_state(pid: int, window_id: int) -> dict:
+                """读取某窗口的 UIA 元素树（点/输入前先取它拿 element_token）。只读。
+
+                Args:
+                    pid: 目标进程 ID。
+                    window_id: 目标窗口 ID（见 pet_computer_windows）。
+                """
+                return self._safe_computer("window_state", {"pid": int(pid), "window_id": int(window_id)})
+
+            @app.tool()
+            def pet_computer_launch(aumid: str = "", name: str = "", path: str = "") -> dict:
+                """启动一个本机应用（后台启动，不抢焦点）。写操作，需 allow_actions。
+
+                Args:
+                    aumid: 打包应用 AUMID（如 Microsoft.WindowsCalculator_8wekyb3d8bbwe!App）。
+                    name: 应用显示名（aumid 缺失时的回退）。
+                    path: 可执行文件完整路径（优先级最高）。
+                """
+                return self._safe_computer("launch", {"aumid": aumid, "name": name, "path": path})
+
+            @app.tool()
+            def pet_computer_click(pid: int, window_id: int = 0, element_token: str = "",
+                                   x: int = -1, y: int = -1) -> dict:
+                """点击一个元素或坐标（默认后台 UIA Invoke，不抢焦点）。写操作，需 allow_actions。
+
+                Args:
+                    pid: 目标进程 ID。
+                    window_id: 目标窗口 ID（用 element_token 时必填）。
+                    element_token: 来自 pet_computer_window_state 的元素句柄（优先）。
+                    x / y: 窗口内像素坐标（element_token 缺失时的回退，-1 表示不传）。
+                """
+                params: dict = {"pid": int(pid)}
+                if window_id:
+                    params["window_id"] = int(window_id)
+                if element_token:
+                    params["element_token"] = element_token
+                elif x >= 0 and y >= 0:
+                    params["x"] = int(x)
+                    params["y"] = int(y)
+                return self._safe_computer("click", params)
+
+            @app.tool()
+            def pet_computer_type(text: str, pid: int = 0) -> dict:
+                """向目标窗口输入文字。写操作，需 allow_actions。
+
+                Args:
+                    text: 要输入的内容。
+                    pid: 目标进程 ID（0 = 当前焦点窗口）。
+                """
+                return self._safe_computer("type", {"text": text, "pid": int(pid)} if pid else {"text": text})
+
+            @app.tool()
+            def pet_computer_key(key: str, pid: int = 0) -> dict:
+                """向目标窗口发送一次按键（如 Return / Escape / Tab）。写操作，需 allow_actions。
+
+                Args:
+                    key: 键名。
+                    pid: 目标进程 ID（0 = 当前焦点窗口）。
+                """
+                return self._safe_computer("key", {"key": key, "pid": int(pid)} if pid else {"key": key})
+
+        # ── B 项：通用 Hana 操作（2026-09-20，用户要求）──────────
+        #
+        # 用户原话：“需要 CLI 作为通用”。
+        # 实现走 HTTP API，**不 spawn `hana.cmd`**：
+        #   - CLI 每次启一个 node 进程（status/sessions 实测 1-2s 起步）
+        #   - HTTP 约 10ms，且复用已有的 base_url/token 解析
+        #   - 不依赖 hana.cmd 的安装路径（用户升级/换版本也不影响）
+        # 详见 core/hana_client.py 的模块 docstring。
+        #
+        # 定位：这几个工具是**只读操作**（查会话/agent/app），
+        # “对话”仍走桌宠自己的 WebSocket 链路——不要在这里发消息。
+
+        @app.tool()
+        def pet_hana_status() -> dict:
+            """查询 Hana 服务器状态（版本/agent/模型/会话数）。只读。
+
+            等价于 `hana status`，但走 HTTP 不启进程。
+            """
+            try:
+                from core.hana_client import HanaClient
+                c = HanaClient.from_env()
+                st = c.status()
+                return {
+                    "ok": True,
+                    "version": st.get("version"),
+                    "agent": st.get("agent"),
+                    "agent_id": st.get("agentId"),
+                    "model": st.get("model"),
+                    "session_count": len(c.list_sessions()),
+                    "summary": c.summary(),
+                }
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "error": str(e)[:200]}
+
+        @app.tool()
+        def pet_hana_sessions(agent_id: str = "", limit: int = 10) -> dict:
+            """列出 Hana 会话（可按 agent 过滤）。只读。
+
+            Args:
+                agent_id: 只列该 agent 的会话；空=全部（**跨 agent**）。
+                limit: 最多返回几个（按最近修改排序），默认 10。
+
+            等价于 `hana sessions`。用于“管理统筹所有已开启的会话”。
+            """
+            try:
+                from core.hana_client import HanaClient
+                c = HanaClient.from_env()
+                rows = c.recent_sessions(agent_id=agent_id, limit=max(1, int(limit)))
+                return {
+                    "ok": True,
+                    "count": len(rows),
+                    "sessions": [
+                        {"session_id": r.get("sessionId"),
+                         "agent_id": r.get("agentId"),
+                         "title": r.get("title"),
+                         "modified": r.get("modified")}
+                        for r in rows
+                    ],
+                }
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "error": str(e)[:200]}
+
+        @app.tool()
+        def pet_hana_agents() -> dict:
+            """列出 Hana 的全部 agent（含其他助手）。只读。"""
+            try:
+                from core.hana_client import HanaClient
+                rows = HanaClient.from_env().list_agents()
+                return {
+                    "ok": True,
+                    "count": len(rows),
+                    "agents": [{"id": a.get("id"), "name": a.get("name"),
+                                "identity": (a.get("identity") or "")[:80]}
+                               for a in rows],
+                }
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "error": str(e)[:200]}
+
+        @app.tool()
+        def pet_hana_apps() -> dict:
+            """列出 Hana 的应用/插件目录。只读。"""
+            try:
+                from core.hana_client import HanaClient
+                rows = HanaClient.from_env().list_apps()
+                return {
+                    "ok": True,
+                    "count": len(rows),
+                    "apps": [{"id": a.get("id"), "name": a.get("name"),
+                              "version": a.get("version"), "state": a.get("state")}
+                             for a in rows],
+                }
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "error": str(e)[:200]}
+
         return app
 
     # ── 生命周期 ──
@@ -426,12 +618,42 @@ class PetMCPServer:
         logger.info("PetMCPServer stopped")
 
 
+def _make_computer_provider(bridge) -> Callable[[str, dict], dict]:
+    """把 ComputerUseBridge 包成 (op, params) -> dict 的 provider。"""
+
+    def _provider(op: str, params: dict) -> dict:
+        p = params or {}
+        if op == "status":
+            return bridge.status()
+        if op == "apps":
+            return bridge.list_apps()
+        if op == "windows":
+            return bridge.list_windows(p.get("pid"))
+        if op == "window_state":
+            return bridge.window_state(int(p["pid"]), int(p["window_id"]))
+        if op == "launch":
+            return bridge.launch(aumid=p.get("aumid", ""), name=p.get("name", ""), path=p.get("path", ""))
+        if op == "click":
+            return bridge.click(
+                pid=int(p["pid"]), window_id=p.get("window_id"),
+                element_token=p.get("element_token", ""), x=p.get("x"), y=p.get("y"),
+            )
+        if op == "type":
+            return bridge.type_text(text=str(p.get("text", "")), pid=p.get("pid"))
+        if op == "key":
+            return bridge.press_key(key=str(p.get("key", "")), pid=p.get("pid"))
+        return {"error": f"未知 computer op: {op}"}
+
+    return _provider
+
+
 def build_from_config(
     config: dict,
     state_provider: Callable[[], dict],
     capabilities_provider: Optional[Callable[[], list]] = None,
     action_sink: Optional[Callable[[str, dict], Any]] = None,
     catalog_provider: Optional[Callable[[str], dict]] = None,
+    computer_provider: Optional[Callable[[str, dict], dict]] = None,
 ) -> Optional[PetMCPServer]:
     """按 config 的 `mcp_server` 块构建 server；未启用时返回 None。
 
@@ -441,6 +663,9 @@ def build_from_config(
         allow_actions (bool)  默认 True
         dns_rebinding_protection (bool)  默认 True（保持 SDK 默认，不放松）
         allowed_hosts / allowed_origins  留空 = 内置本机白名单
+
+    另：config `computer_use.enabled=true` 时会自动构建 computer-use provider
+    （见 core/computer_use_bridge.py），把桌宠的「手」一并暴露。
 
     注：不含鉴权（无 token 校验），见模块顶部说明。
     “Origin 校验”不缺——SDK 默认就开，这里只是把它显式钉住。
@@ -453,11 +678,23 @@ def build_from_config(
         port = int(cfg.get("port", DEFAULT_PORT) or DEFAULT_PORT)
     except (TypeError, ValueError):
         port = DEFAULT_PORT
+    # computer-use 未显式传入时，尝试按 config 构建（未启用则 None，工具不注册）
+    if computer_provider is None:
+        try:
+            from core.computer_use_bridge import build_bridge
+            bridge = build_bridge(config)
+            if bridge is not None:
+                computer_provider = _make_computer_provider(bridge)
+                logger.info("computer-use 已接入：驱动=%s allow_actions=%s",
+                            bridge.driver_path, bridge.allow_actions)
+        except Exception as e:  # noqa: BLE001 — 可选能力，绝不影响 MCP 主功能
+            logger.warning("computer-use bridge 构建失败（非致命）: %s", e)
     return PetMCPServer(
         state_provider=state_provider,
         capabilities_provider=capabilities_provider,
         action_sink=action_sink,
         catalog_provider=catalog_provider,
+        computer_provider=computer_provider,
         port=port,
         allow_actions=bool(cfg.get("allow_actions", True)),
         transport_security={

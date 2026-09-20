@@ -230,9 +230,14 @@ def test_config_defaults_to_disabled():
     """默认关闭——引擎 /api/run-rlcd 实测卡死，开启会让主线程卡 8 秒。
 
     等该端点可用后再开。这条防止「误开一个已知不可用的组件」。
+
+    2026-09-20 修：原来读**本机** `config.json`——它在 .gitignore 里，
+    CI 的 checkout 没有这个文件（本地绿、CI 红）。改为读随仓库分发的
+    `config.template.json`，锁的是「分发默认值」。
     """
     import json
-    cfg = json.load(open(os.path.join(ROOT, "config.json"), encoding="utf-8"))
+    cfg = json.load(open(os.path.join(ROOT, "config.template.json"),
+                         encoding="utf-8"))
     ed = cfg.get("expression_director", {}) or {}
     assert ed.get("enabled") is False, (
         "expression_director 应默认关闭：引擎决策端点实测卡死，"

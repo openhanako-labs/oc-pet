@@ -454,8 +454,15 @@ def test_facial_targets_have_consistent_keys():
 
 
 def test_config_has_emotion_classifier():
+    """分发出去的配置模板必须含 emotion_classifier 段，且默认开启。
+
+    2026-09-20 修：原来读**本机** `config.json`——但它在 .gitignore 里，
+    CI 的 checkout 根本没有这个文件，于是本地绿、CI 红。
+    真正要锁的是「随仓库分发的默认值」，所以读 `config.template.json`。
+    """
     import json
-    cfg = json.load(open(os.path.join(ROOT, "config.json"), encoding="utf-8"))
+    cfg = json.load(open(os.path.join(ROOT, "config.template.json"),
+                         encoding="utf-8"))
     ec = cfg.get("emotion_classifier")
-    assert ec is not None, "config.json 缺 emotion_classifier 段"
+    assert ec is not None, "config.template.json 缺 emotion_classifier 段"
     assert ec.get("enabled") is True

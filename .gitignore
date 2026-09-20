@@ -106,3 +106,24 @@ docs/review-*/
 # 提交信息临时文件
 _commit_msg.txt
 _tmp*
+
+# 一次性排查脚本（不提交）
+#
+# 这些是排查具体问题时现场写的验证/取证脚本：依赖本机 Hana 实例、
+# 真实 Live2D 模型、或某个特定会话，在别的机器上跑不了，也不构成
+# 可维护的接口。结论已落进 tests/ 与 docs/，脚本本身不入库。
+#
+# 保留例外：
+#   tools/diag_ensure_session_drift.py —— 会话 pin 漂移事故的关键证据，
+#   tests/test_session_pin_drift.py 的 docstring 直接引用它。
+tools/diag_*.py
+!tools/diag_ensure_session_drift.py
+tools/verify_assets_live.py
+tools/verify_assets_via_mcp.py
+tools/verify_idle_source.py
+tools/verify_persona_fix.py
+tools/verify_rules_delivery.py
+tools/verify_session_pin.py
+tools/verify_session_pin_e2e.py
+tools/e2e_computer_use.py
+tools/e2e_mcp_probe.py

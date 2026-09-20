@@ -259,6 +259,13 @@
     "allowed_hosts": [],
     "allowed_origins": []
   },
+  "computer_use": {
+    "enabled": false,
+    "driver_path": "",
+    "allow_actions": false,
+    "auto_start_daemon": false,
+    "timeout_s": 30
+  },
   "game": {
     "enabled": true,
     "disabled": [],
@@ -290,6 +297,13 @@
     "_comment": "表达决策层：主 LLM 定情绪，本地引擎在同情绪的候选组里挑具体表情预设。引擎离线/低置信时自动走兜底，不阻断对话。详见 docs/表达决策层-2026-09-20.md",
     "enabled": false,
     "_note": "启用前需先启动本地引擎 projects/local-rlcd/start_server.ps1（127.0.0.1:8077，约 3GB 显存）"
+  },
+  "emotion_classifier": {
+    "_comment": "情绪分类器：把文本分类成 14 类情绪 + 连续 VAD。移植自 Soullink Emotion SDK（MIT）的 classifier-embedding，用 embedding 近邻。",
+    "_why": "VA 坐标映射承载不了情绪细粒度（正价区全塌成 happy）；改 LLM 契约又测不出主 LLM。这条路不碰契约、不问模型。",
+    "enabled": true,
+    "min_confidence": 0.45,
+    "_note": "两个视角共用一套算法：user（用户消息）与 pet（桌宠回复）。语料向量首次会建缓存（core/data/emotion_corpus_vecs_*.json），之后秒起。分类走后台线程，不打主线程。"
   },
   "plugin_tools": {
     "enabled": true

@@ -35,18 +35,57 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ── 一、工具注册表读得到 V2 ─────────────────────────────────────────────────
 
 
-def test_registry_discovers_v2_apps():
-    """tool_registry.discover() 必须能读到 V2 apps 的工具。
+def _has_real_hanako_apps() -> bool:
+    """本机是否有**真实的** Hanako app 可发现。
 
-    用真实环境（本机有 V2 app 才有意义）；无 app 则跳过。
+    ⚠️ 为什么不能只判目录存在：
+
+    CI（windows-latest）上 `~/.hanako/apps` **存在**（平台/其它工具建的），
+    但里面没有可被 `ToolRegistry` 识别的 app。早期版本只判
+    `apps_dir.is_dir()`，于是 skip 判断失效 → 进到断言 → 假红。
+
+    正确判据：目录下有带 manifest 的子目录。
     """
     from pathlib import Path
 
     apps_dir = Path.home() / ".hanako" / "apps"
     if not apps_dir.is_dir():
-        import pytest
+        return False
+    for child in apps_dir.iterdir():
+        if not child.is_dir():
+            continue
+        # V2 app 目录会有 manifest（app.json / manifest.json / package.json）
+        for name in ("app.json", "manifest.json", "package.json", "plugin.json"):
+            if (child / name).is_file():
+                return True
+    return False
 
-        pytest.skip("本机无 V2 apps 目录")
+
+def test_registry_discovers_v2_apps(monkeypatch):
+    """tool_registry.discover() 必须能读到 V2 apps 的工具。
+
+    用真实环境（本机有 V2 app 才有意义）；无 app 则跳过。
+
+    ⚠️ 2026-09-20 第二处修正：`discover()` 开头会读
+    `config.load_config()["plugin_tools"]["enabled"]`，默认值是 **False**。
+    本机 `config.json` 里开了所以能过，但 CI 没有 config.json → 用默认
+    False → `discover()` 直接 return → `plugins=[]` → 假红。
+
+    所以这里**显式注入配置**，不依赖本机 config.json。
+    """
+    import pytest
+
+    if not _has_real_hanako_apps():
+        pytest.skip("本机无真实 Hanako app（CI 上正常）")
+
+    # 不依赖本机 config.json：显式把 plugin_tools 打开
+    import config as _cfg_mod
+    _real = _cfg_mod.load_config
+    monkeypatch.setattr(
+        _cfg_mod, "load_config",
+        lambda: {**_real(), "plugin_tools": {"enabled": True}},
+        raising=False,
+    )
 
     from core.tool_registry import ToolRegistry
 

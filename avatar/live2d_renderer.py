@@ -2836,6 +2836,61 @@ class Live2DRenderer(AvatarRenderer):
             return
         self._apply_expression(emotion)
 
+    def set_named_expression(self, name: str) -> bool:
+        """**按表情名**直接设置（如「比心」/「唱歌」/「脸红」）。
+
+        ## 为什么需要单独的入口（2026-09-20 真实 bug）
+
+        `_apply_expression(emotion)` 收的是**情绪名**（happy/sad），
+        内部走 `_match_expression(emotion)` —— 用**情绪关键词**去匹配表情。
+
+        而 MCP 的 `pet_expression` 工具收的是**表情名**（比心/唱歌/葱）。
+        它之前直接调 `_apply_expression(name)`，于是：
+
+            传「比心」→ _match_expression("比心") → 找不到情绪关键词 → no-match
+
+        实测（tools/verify_assets_via_mcp.py，真机 7 个表情）：
+        **全部 no-match**，而工具还回「已派发」——静默失效。
+
+        两个概念不同：情绪是「角色什么心情」，表情是「脸上贴哪个图」。
+        这个入口直接按名字找 `_expression_names` 里的项。
+
+        Returns:
+            True 表示找到并设置；False 表示模型没有这个表情。
+        """
+        if not self._model or not name:
+            return False
+        # 精确匹配优先，其次大小写不敏感包含
+        target = None
+        for n in getattr(self, "_expression_names", []) or []:
+            if str(n) == name:
+                target = n
+                break
+        if target is None:
+            low = name.lower()
+            for n in getattr(self, "_expression_names", []) or []:
+                if low in str(n).lower():
+                    target = n
+                    break
+        if target is None:
+            logger.warning(
+                "Live2DRenderer.set_named_expression: 模型无此表情 %r，可用: %s",
+                name, ", ".join(str(x) for x in (self._expression_names or [])) or "(无)",
+            )
+            return False
+        try:
+            # 与 _apply_expression 同样的防叠加：Set 前先 Reset
+            self._model.ResetExpressions()
+            self._model.SetExpression(target)
+            self._expression_active = True
+            self._expression_set_at = time.monotonic()
+            self._last_expression = target
+            logger.info("Live2DRenderer: 设置命名表情 %r", target)
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Live2DRenderer: 设置命名表情失败 %r: %s", target, e)
+            return False
+
     def _apply_expression(self, emotion: str) -> None:
         """应用情绪对应的表情（不碰 motion）。
 

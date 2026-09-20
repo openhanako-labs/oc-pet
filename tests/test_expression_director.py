@@ -2,6 +2,11 @@
 
 设计原则：**不依赖本地引擎在线**。引擎不可用时全部走兜底路径，
 所以 CI / 无 GPU 环境下这套测试必须全绿。
+
+⚠️ 2026-09-20 补：快照测试还隐含依赖 **Live2D 模型文件**
+（`characters/*/live2d/*.model3.json`）。该文件因版权不随仓库分发
+（见 .gitignore），CI 的 checkout 没有它 —— 不加保护就会本地绿、CI 红。
+故加 `_require_model()` 前置：缺模型则 skip。
 """
 from __future__ import annotations
 
@@ -25,6 +30,28 @@ from core.expression_director import (  # noqa: E402
     ExpressionDirector,
     INTENSITY_CHOICES,
 )
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _require_model(character_id: str) -> None:
+    """确保该角色有真实 Live2D 模型文件，否则 skip。
+
+    模型文件在 .gitignore 里（版权原因），CI 上没有。
+    本地开发机有模型时会真跑。
+    """
+    char_dir = os.path.join(_ROOT, "characters", character_id)
+    if not os.path.isdir(char_dir):
+        pytest.skip(f"角色目录不存在（CI 上正常）: characters/{character_id}")
+    for pattern in ("live2d/*.model3.json", "*.model3.json",
+                    "live2d/*.model.json", "*.model.json"):
+        import glob
+        if glob.glob(os.path.join(char_dir, pattern)):
+            return
+    pytest.skip(
+        f"characters/{character_id} 缺 Live2D 模型文件（.gitignore 排除，"
+        f"CI 上正常）——本测试需要真模型"
+    )
 
 
 # ── 测试替身 ──────────────────────────────────────────────
@@ -50,7 +77,19 @@ class FakeClient:
 
 
 class TestSnapshot:
+    """快照测试。
+
+    ⚠️ 2026-09-20：以下三个测试需要**真实的 Live2D 模型文件**
+    （`characters/*/live2d/*.model3.json`），而它在 `.gitignore` 里
+    （版权原因不随仓库分发）。CI 的 checkout 没有它 —— 所以统一加
+    `_require_miku_model()` / `_require_model()` 前置：缺模型就 skip，
+    不假红。
+
+    本地有模型的开发机仍会真跑这三条。
+    """
+
     def test_miku_has_motions_and_expressions(self):
+        _require_model("miku")
         s = build_snapshot("miku")
         assert len(s.motions) >= 7
         assert "waving" in s.motion_names
@@ -58,6 +97,7 @@ class TestSnapshot:
 
     def test_model_without_motions_degrades_gracefully(self):
         """Rory 模型没有 Motions/Expressions 字段——不能崩，要出 warning。"""
+        _require_model("Rory")
         s = build_snapshot("Rory")
         assert s.motions == []
         assert s.expressions == []
@@ -84,6 +124,7 @@ class TestSnapshot:
 
     def test_param_ranges_measured_from_model(self):
         """参数范围必须来自模型自己的曲线（cdi3 没有 min/max）。"""
+        _require_model("miku")
         s = build_snapshot("miku")
         assert s.param_ranges, "应从 motion/expression 曲线量出参数范围"
         lo, hi = s.param_range("ParamMouthForm")

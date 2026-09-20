@@ -240,11 +240,16 @@ class EmotionClassifyMixin:
         """同步分类（**不要在 Qt 主线程直接调**）。失败返回 None。"""
         clf = self._ensure_classifier(view)
         if clf is None:
+            logger.warning("[diag] _ensure_classifier 返回 None（view=%s）", view)
             return None
         try:
-            return clf.classify(text)
+            r = clf.classify(text)
+            logger.info("[diag] classify 完成 | ready=%s -> %s",
+                        getattr(clf, "_ready", "?"),
+                        r.as_line() if r else None)
+            return r
         except Exception as exc:  # noqa: BLE001
-            logger.debug("情绪分类异常：%s", exc)
+            logger.warning("[diag] 情绪分类异常: %s", exc, exc_info=True)
             return None
 
     # ── 桌宠回复：分类 → 情绪词 ─────────────────────────────
@@ -337,7 +342,13 @@ class EmotionClassifyMixin:
 
         class _Task(QRunnable):
             def run(self_inner):
-                r = owner._classify_sync(reply_text, "pet")
+                try:
+                    logger.info("[diag] 分类任务开始 | text=%r", reply_text[:24])
+                    r = owner._classify_sync(reply_text, "pet")
+                    logger.info("[diag] 分类任务返回 | %r", r)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[diag] 分类任务异常: %s", exc)
+                    return
                 if r is None or not r.emotion:
                     return
                 vad = tuple(r.vad) if r.vad else None
@@ -346,11 +357,13 @@ class EmotionClassifyMixin:
                 # 慢路径：就绪时回主线程驱动（信号 emit 是线程安全的）
                 try:
                     sig = getattr(owner, "emotion_classified_signal", None)
+                    logger.info("[diag] 信号对象: %r", sig)
                     if sig is not None:
                         sig.emit(r.emotion, float(r.confidence), vad,
                                  float(getattr(r, "intensity", 0.5)))
-                except Exception:  # noqa: BLE001
-                    pass
+                        logger.info("[diag] 信号已 emit | %s %.2f", r.emotion, r.confidence)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[diag] emit 失败: %s", exc)
 
         try:
             QThreadPool.globalInstance().start(_Task())

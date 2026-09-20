@@ -15,23 +15,33 @@ logger = logging.getLogger(__name__)
 
 # ── 自言自语模板池（随机选一个） ──
 # 每个模板对应一种"语气风格"，LLM 会根据风格生成不同内容
+#
+# 2026-09-20 修正：**去掉末尾的「加 [emotion:xxx]」**。
+#
+# 原因（用户指出）：它和 `[pet-output-rules]` 块**重复且冲突**。
+#
+#   规则块说：情绪词从 10 个里选一个，如 [emotion:happy]
+#   模板说：加 [emotion:xxx]          ← “xxx” 是字面占位符
+#
+# 模型很可能真照抄一个 `[emotion:xxx]` 出来——而解析器期望具体词。
+# 情绪标签的**唯一来源**是输出规则（`_OUTPUT_RULES`），模板不重复教。
 _CHATTER_TEMPLATES = [
     # 吐槽型
-    "你在桌面待机，用户好久没理你了。用吐槽的语气说一句（10-30字），可以抱怨被冷落了。可以问问题。加 [emotion:xxx]。",
+    "你在桌面待机，用户好久没理你了。用吐槽的语气说一句（10-30字），可以抱怨被冷落了。可以问问题。",
     # 关心型
-    "你在桌面待机，用户暂时不在。说一句关心的话（10-30字），比如提醒休息、喝水、或者担心用户。可以问问题。加 [emotion:xxx]。",
+    "你在桌面待机，用户暂时不在。说一句关心的话（10-30字），比如提醒休息、喝水、或者担心用户。可以问问题。",
     # 观察型
-    "你在桌面待机，你观察着周围环境。说一句你看到/想到的东西（10-30字），可以是桌面的东西、时间、天气。可以问问题。加 [emotion:xxx]。",
+    "你在桌面待机，你观察着周围环境。说一句你看到/想到的东西（10-30字），可以是桌面的东西、时间、天气。可以问问题。",
     # 自娱型
-    "你在桌面待机，没人陪你。你自己找乐子（10-30字），比如数像素、玩鼠标指针的影子、跟自己下棋。加 [emotion:xxx]。",
+    "你在桌面待机，没人陪你。你自己找乐子（10-30字），比如数像素、玩鼠标指针的影子、跟自己下棋。",
     # 好奇型
-    "你在桌面待机，你很好奇用户在干嘛。说一句好奇的话（10-30字），可以猜测用户在做什么。可以问问题。加 [emotion:xxx]。",
+    "你在桌面待机，你很好奇用户在干嘛。说一句好奇的话（10-30字），可以猜测用户在做什么。可以问问题。",
     # 卖萌型
-    "你在桌面待机，你想引起用户注意。用可爱的语气说一句（10-30字），撒娇或者装可怜。可以问问题。加 [emotion:xxx]。",
+    "你在桌面待机，你想引起用户注意。用可爱的语气说一句（10-30字），撒娇或者装可怜。可以问问题。",
     # 哲学型
-    "你在桌面待机，突然想到一些有的没的。说一句奇怪的感悟（10-30字），可以是关于存在、时间、或者桌面图标的。加 [emotion:xxx]。",
+    "你在桌面待机，突然想到一些有的没的。说一句奇怪的感悟（10-30字），可以是关于存在、时间、或者桌面图标的。",
     # 等待型
-    "你在桌面待机，你一直在等用户回来。说一句等待中的话（10-30字），可以表达期待或者无聊。可以问问题。加 [emotion:xxx]。",
+    "你在桌面待机，你一直在等用户回来。说一句等待中的话（10-30字），可以表达期待或者无聊。可以问问题。",
 ]
 
 # ── 情绪积累权重（长时间没交互时情绪偏移） ──
@@ -54,10 +64,10 @@ def _build_prompt(agent_identity: str = "", idle_minutes: float = 0) -> str:
     parts = []
 
     # agent 身份注入（如果有）
+    # 2026-09-20：不再 `[:200]` 截断——助手 identity.md 实测 329 字，
+    # 200 字会把身份切在半句。自言自语是低频（120-600s），token 可接受。
     if agent_identity:
-        # 截取前 200 字避免 token 浪费
-        identity_brief = agent_identity[:200].strip()
-        parts.append(f"你的身份：{identity_brief}")
+        parts.append(f"你的身份：{agent_identity.strip()}")
 
     parts.append(template)
 
@@ -208,7 +218,20 @@ class IdleChatter:
                     agent_identity=self._agent_identity,
                     idle_minutes=self.idle_minutes,
                 )
-                result = self._adapter.chat(prompt, inject_memory=True)
+                # 2026-09-20 修：**必须传 source="idle"**。
+                #
+                # 原实现不传 → 默认 source="user" → `chat()` 路由到
+                # `chat_via_hanako` → **待机自言自语被当成用户消息写进
+                # Hanako 会话历史**。
+                #
+                # 真机证据：会话 jsonl 里出现 role=user 的消息，内容是
+                # “[pet-output-rules]…你的身份：# 奥菲莉娅…你在桌面待机…”
+                # —— Hana 眼里是“用户”在说这些话。
+                #
+                # `chat()` 的 docstring 明写 idle 应走 `chat_direct`
+                # （不占 session、不写 _history），只是调用方漏传了 source。
+                result = self._adapter.chat(
+                    prompt, inject_memory=True, source="idle")
                 text, emotion = self._normalize_result(result)
         except Exception as exc:
             logger.warning("Idle chatter generation failed: %s", exc)
