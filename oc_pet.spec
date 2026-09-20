@@ -133,6 +133,17 @@ excludes = [
     'jupyter',
     'pandas',
     'pytest',
+    # ── 本机环境残留（2026-09-20）──
+    # 这几个在开发机上装了、但**代码零 import**、也不在任何 requirements
+    # 清单里。PyInstaller 的传递依赖分析会把它们拉进产物：
+    #   cv2 (98MB, rapidocr 的依赖) / pyarrow (39MB, 孤儿包)
+    # 实测不加排除时产物 1.03GB，加后显著缩小。
+    'cv2',
+    'rapidocr',
+    'pyarrow',
+    'torchvision',
+    'sympy',
+    'networkx',
 ]
 
 a = Analysis(
@@ -150,12 +161,21 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# ⚠️ 2026-09-20 修复：onedir 模式的 EXE **只拿 pyz + scripts**。
+#
+# 原写法把 `a.binaries` / `a.datas` 也传给了 EXE（那是 **onefile** 模式的写法），
+# 后果：同一批文件被装两遍——
+#   exe 内部一份（实测 262MB）
+#   COLLECT 又复制一份到 _internal/（实测 566MB）
+# 产物 828MB，其中约 260MB 是纯重复。
+#
+# onedir 的正确分工：EXE 只含 bootloader + PYZ；
+# 所有 DLL/数据交给 COLLECT 落进 _internal/。
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
-    [],
+    [],              # binaries：交给 COLLECT（onedir）
+    exclude_binaries=True,
     name='oc_pet',
     debug=False,
     bootloader_ignore_signals=False,
