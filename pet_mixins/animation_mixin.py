@@ -5,6 +5,10 @@ self._bob_frame / self._bob_offset / self._is_dragging / self._emotion_bob_facto
 self.char_label 等，均由 PetWindow 提供（鸭子类型，无需 import pet）。
 
 拆分自 pet.py 的动画区块（原 838-970 行），降低 PetWindow 体积。
+
+2026-09-20：PhysicsCallbacks 的四个动画相关回调（on_walk_finished /
+on_bounce_finished / on_facing_change / set_anim）也从 pet.py 搬入这里——
+它们的职责全是「把物理层的意图落到动画上」，本就属于动画域。
 """
 import logging
 import math
@@ -112,3 +116,92 @@ class AnimationMixin:
     def _get_char_top_y(self):
         """获取角色头顶 Y 坐标 - 委托给 SpriteRenderer"""
         return self._renderer.get_char_top_y()
+
+    # ── PhysicsCallbacks：物理层意图 → 动画（2026-09-20 自 pet.py 搬入）──
+
+    def on_walk_finished(self):
+        """散步到达终点：回 idle、存位置、进休息状态。"""
+        from config import async_config_saver
+
+        self._is_walking = False
+        self._set_anim_seq('idle')
+        self._store_label_pos()
+        pos = self.pos()
+        self.config.setdefault("window", {})["x"] = pos.x()
+        self.config.setdefault("window", {})["y"] = pos.y()
+        # 异步防抖保存：散步每次到达都写盘会周期性卡顿，改走后台
+        async_config_saver.schedule(self.config)
+        if self._on_position_change:
+            self._on_position_change(pos.x(), pos.y())
+        params = self._get_behavior_params()
+        self._motion._start_rest(params)
+        # 散步到达后张望一下，更有生气（追逐中不抢戏）
+        if not (getattr(self, '_chasing', False) or getattr(self, '_is_dragging', False)
+                or self._is_thinking):
+            self._do_look_around()
+
+    def on_bounce_finished(self, x: int, y: int):
+        """弹跳结束：复位运动状态并保存落点。"""
+        from config import async_config_saver
+
+        self._motion_state = "idle"
+        self._bounce_active = False
+        self.config.setdefault("window", {})["x"] = x
+        self.config.setdefault("window", {})["y"] = y
+        async_config_saver.schedule(self.config)
+
+    def on_facing_change(self, facing_right: bool):
+        """朝向变化：同步给渲染器（atlas 方向动画靠它决定左右）。"""
+        self._facing_right = facing_right
+        self._renderer.set_facing(facing_right)
+
+    def set_anim(self, anim: str):
+        """物理/行为层的动作请求入口（MotionStateMachine 的 set_anim 回调）。
+
+        ## 2026-09-20 修正：atlas 判断依据错了对象
+
+        原实现（在 pet.py）：
+
+            if anim == 'walk':
+                if 'running-right' in self._renderer._frames:
+                    anim = 'running-right' if self._facing_right else 'running-left'
+            self._set_anim_seq(anim)
+
+        `_frames` 是 **sprite/atlas 渲染器**的帧表（`{序列名: [QPixmap]}`）。
+        Live2D 渲染器也有 `_frames`，但它是**空 dict**（`live2d_renderer.py:578`）
+        ——于是判断恒为 False，`'walk'` 原样传给 `_set_anim_seq`。
+
+        而 miku 的 motion 只有 idle/happy/waving/angry/sad/thinking/touch，
+        **没有 walk** → `play_anim('walk')` 报「未知动作」→ 每 12-17 秒一条警告。
+
+        实测证据（`logs/oc_pet.log`）：
+
+            walk  194 次（23:01-23:56，中位间隔 12s）
+            extra  63 次
+            紧邻后一行 100% 是「_set_anim_seq: 'walk' 不是可用动作」
+
+        触发链：`MotionStateMachine.tick`（500ms）→ `walk_chance` 命中
+        → `_start_walk` → `physics.start_walk` → `cb.set_anim('walk')` → 这里。
+
+        ## 修法
+
+        按**渲染器能力**判断，而不是猜它有没有某个帧名：
+        - sprite/atlas：有 `running-right` 帧 → 按朝向换名（原行为不变）
+        - Live2D：没有 walking 类 motion → 降级到 `idle`
+          （走路的**位移**仍由 physics 驱动，只是没有走路动画可播；
+            这比每 12 秒报一次“未知动作”干净得多）
+
+        降级而非报错，是因为「模型没有走路动画」是**正常情况**，不是错误。
+        """
+        if anim == 'walk':
+            frames = getattr(self._renderer, '_frames', None) or {}
+            if 'running-right' in frames:
+                # atlas/sprite：按朝向选左右帧（原行为）
+                anim = 'running-right' if self._facing_right else 'running-left'
+            elif hasattr(self._renderer, '_motion_files'):
+                # Live2D：没有 walking 类 motion 就降级 idle，不报“未知动作”。
+                # 有对应 motion 的模型（如 lafei 的 main_2）仍走原路径。
+                motion_files = self._renderer._motion_files or []
+                if not any('walk' in str(f).lower() for f in motion_files):
+                    anim = 'idle'
+        self._set_anim_seq(anim)

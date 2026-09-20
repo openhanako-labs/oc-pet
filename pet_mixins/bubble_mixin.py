@@ -25,6 +25,47 @@ logger = logging.getLogger(__name__)
 class BubbleMixin:
     """气泡显示与 Hanako 状态呈现。"""
 
+    # 最小安全集：拿不到渲染器能力时，只允许回 idle。
+    _FALLBACK_SAFE_ANIMS = frozenset({"idle"})
+
+    def _safe_anim_names(self) -> frozenset:
+        """向渲染器要「当前模型实际可播的动画名」。
+
+        为什么要动态取：2026-09-20 之前这里是硬编码的
+        ``['idle', 'walk', 'extra']``——两个名字（walk / extra）
+        在 miku 上根本不存在，导致 257 条「未知动作」警告。
+        白名单的目的是“防越界”，写死与模型无关的名字反而成了噪音源。
+
+        取法（按可靠性递降）：
+        1. sprite/atlas：`_frames` 的键就是帧序列名
+        2. Live2D：`_motion_files` 的 basename 去扩展名
+        3. 都拿不到：只认 idle
+
+        Returns:
+            可播动画名的 frozenset（**永远非空**，至少含 'idle'）。
+        """
+        r = getattr(self, "_renderer", None)
+        if r is None:
+            return self._FALLBACK_SAFE_ANIMS
+        try:
+            frames = getattr(r, "_frames", None)
+            if frames:
+                return frozenset(frames) | {"idle"}
+            files = getattr(r, "_motion_files", None)
+            if files:
+                import os as _os
+
+                names = {
+                    _os.path.splitext(_os.path.basename(str(f)))[0].replace(".motion3", "")
+                    for f in files
+                }
+                names.discard("")
+                if names:
+                    return frozenset(names) | {"idle"}
+        except Exception:
+            logger.debug("bubble_mixin: 取可播动画名失败（回退最小集）", exc_info=True)
+        return self._FALLBACK_SAFE_ANIMS
+
     def _show_bubble(self, text: str, emotion: str = "neutral", priority: int = 0, duration_ms: int = 0, source: str = ""):
         """显示消息气泡 —— 线程安全入口。
 
@@ -305,7 +346,14 @@ class BubbleMixin:
                     if renderer is not None and hasattr(renderer, "set_emotion_expression_only"):
                         renderer.set_emotion_expression_only("neutral")
                 elif anim_name != self._current_anim:
-                    safe_anims = ['idle', 'walk', 'extra']
+                    # 2026-09-20：原来这里硬编码 `['idle', 'walk', 'extra']`，
+                    # 三个名字里两个在当前模型上不存在：
+                    #   'walk'  → miku 无此 motion（且 pet.py:set_anim 已降级处理）
+                    #   'extra' → 63 次「未知动作 'extra'」警告的来源
+                    # 白名单本来是为了“防越界”，却因为写死了与模型无关的名字，
+                    # 自己成了噪音源。改为**向渲染器要实际可播的动画名**，
+                    # 拿不到时退回只认 'idle'（最小安全集）。
+                    safe_anims = self._safe_anim_names()
                     if anim_name not in safe_anims:
                         anim_name = 'idle'
                     if emotion in ('surprised', 'angry'):

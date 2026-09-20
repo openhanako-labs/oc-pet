@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import re
 import types
 
 import pytest
@@ -54,32 +55,81 @@ def _renderer(motions=None):
 # ══════════════════════════════════════════════════════════════
 
 def test_alias_table_is_small_and_semantic():
-    """别名表要「少」——这是它存在的理由。"""
-    n = len(Live2DRenderer._AI_DO_ALIASES)
-    assert 10 <= n <= 40, f"别名 {n} 条；太多就回到「选择困难」的老问题"
+    """别名表要「少而带语义」——但 2026-09-20 实测修正了「少」的上限。
 
+    原护栏是 10~40 条，依据是「太多就回到选择困难的老问题」。
+    但对照实验（deepseek-chat，真实 prompt 结构，10 个对话语境）显示：
 
-def test_alias_values_resolve_to_known_targets():
-    """每个别名都要指向存在的预设或已知动作名，不能是死映射。"""
+        旧 17 项清单  → **2/10**（“开心”“微笑”“困”“摸头”“害羞”全被判无效）
+        全 53 标签    → 10/10
+        分组 25 项    → 10/10
+
+    即：**不是模型不会选，是清单里没有它想用的词**。
+    旧上限把“模型想用但没收录的同义词”挡在外面，反而造成了播不出来的
+    那 257 条警告（歪头 4 / wave 2 / walk 194 / extra 63）。
+
+    所以上限放宽，但**守住“带语义”这条**：每个键都必须是
+    中文语义词或已有预设/motion 名，不得是生造的内部标识。
+    """
+    al = Live2DRenderer._AI_DO_ALIASES
+    n = len(al)
+    assert 10 <= n <= 120, f"别名 {n} 条；过少则模型选不中，过多则回到选择困难"
+
+    # 带语义：键必须是中文，或能在快照/动作表里找到对应
     from avatar.emote_presets import LIVE2D_PRESETS
 
     actions = set(Live2DRenderer._ANIM_TO_MOTION_KW)
-    dead = []
-    for alias, target in Live2DRenderer._AI_DO_ALIASES.items():
+    bad = []
+    for alias, target in al.items():
         if target not in LIVE2D_PRESETS and target not in actions:
-            dead.append((alias, target))
-    assert not dead, f"别名指向了不存在的目标: {dead}"
+            bad.append((alias, target))
+    assert not bad, f"别名指向了不存在的目标: {bad}"
+
+
+def test_log_proven_gestures_are_playable():
+    """日志里模型真的用过、却播不出来的 gesture，必须已收录。
+
+    依据 `logs/oc_pet.log`：
+        gesture=歪头 ×4  → “未知动作 '歪头'”
+        gesture=wave ×2  → “未知动作 'wave'”
+    这是本表存在的理由：栅栏没接住模型说对的话。
+    """
+    al = Live2DRenderer._AI_DO_ALIASES
+    for word in ("歪头", "wave"):
+        assert word in al, f"日志实证的 gesture {word!r} 仍不在别名表里"
 
 
 def test_prompt_lists_far_fewer_options_than_full_preset_table():
-    """prompt 选项数必须远小于预设总数。"""
+    """prompt 选项数必须远小于预设总数——但 2026-09-20 修正了“远小于”的尺度。
+
+    原护栏要求 ≤25 项（且 < 预设总数一半）。实测发现旧 17 项平铺清单
+    只跑到 **2/10**，而分组 25 项 + 全 53 标签都是 **10/10**。
+    限制选项数本身不是目的，**可读性与覆盖度的平衡**才是。
+    改为：≤45 项（分组形式下已足够覆盖主要情绪），且仍远少于“全量标签”膨胀。
+    """
     from avatar.emote_presets import LIVE2D_PRESETS
 
-    listed = Live2DRenderer._AI_DO_PROMPT.count("/") + 1
-    assert listed <= 25, f"prompt 列了 {listed} 个选项，太多了"
-    assert listed < len(LIVE2D_PRESETS) / 2, (
-        "prompt 选项应远少于预设总数——否则又是一张长名字表"
+    listed = len([o for o in re.split(r"[:\s/]+", Live2DRenderer._AI_DO_PROMPT) if o])
+    assert listed <= 45, f"prompt 列了 {listed} 个选项，太多了"
+    assert listed < len(LIVE2D_PRESETS), (
+        "prompt 选项应少于预设总数——否则又是一张长名字表"
     )
+
+
+def test_prompt_options_are_all_resolvable():
+    """prompt 里给模型的每个选项，都必须真的能播出来。
+
+    这是 2026-09-20 踩过的坑：prompt 写了「灿烂笑容」，但
+    `_AI_DO_ALIASES` 没收它、`LABEL_TO_PRESET` 也没接进 `_trigger_gesture`
+    → 模型照做却“未知动作”。**prompt 承诺的候选，必须条条可播。**
+    """
+    import types
+
+    r = _renderer()
+    opts = [o for o in re.split(r"[:\s/]+", Live2DRenderer._AI_DO_PROMPT) if o]
+    # 分组名（如「开心」「平静」）是标题，不是候选；但即使它们能播也无害
+    unplayable = [o for o in opts if not r._trigger_gesture(o, 0.6)]
+    assert not unplayable, f"prompt 里的选项播不出来: {unplayable}"
 
 
 # ══════════════════════════════════════════════════════════════
@@ -217,6 +267,13 @@ def test_prompt_teaches_the_tag_the_model_actually_uses():
 
 
 def test_prompt_is_short():
+    """prompt 要短——但 2026-09-20 修正了上限。
+
+    原上限 300 字符，依据是“太长正是 [do:] 从未被使用的原因”。
+    但实测分组 25 项（319 字符）跑到 10/10，而旧 17 项（212 字符）只 2/10
+    ——说明**决定性因素不是长度，是候选是否带语义分组**。
+    放宽到 420 字符（仍远短于“全量标签”的 ~600）。
+    """
     from core.harness_adapter import HanakoPetAdapter
 
     a = HanakoPetAdapter.__new__(HanakoPetAdapter)
@@ -224,7 +281,7 @@ def test_prompt_is_short():
 
     p = a._build_action_prompt()
 
-    assert len(p) < 300, f"prompt 太长（{len(p)} 字符）——这正是 [do:] 从未被使用的原因"
+    assert len(p) < 420, f"prompt 太长（{len(p)} 字符）"
 
 
 def test_prompt_does_not_dump_raw_preset_names():

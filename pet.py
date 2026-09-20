@@ -2712,6 +2712,21 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             # E4: 复位 _last_body_emotion，避免下一轮 set_emotion 判断错误
             self._last_body_emotion = "neutral"
 
+    # 对话情绪词（英文）→ 决策器情绪词（中文）。
+    # 为什么需要这层：主 LLM 输出的是 happy/sad/angry/…（_EMOTION_FACIAL_TARGETS
+    # 的词表），而决策器（core/expression_director.py）的候选分组按中文情绪建。
+    # 注：决策逻辑本体在 pet_mixins/perception_mixin.py（pet.py 有行数上限）。
+    _EMOTION_ZH = {
+        "happy": "开心",
+        "sad": "失落",
+        "angry": "生气",
+        "surprised": "惊讶",
+        "thinking": "思考",
+        "cute": "害羞",
+        "shy": "害羞",
+        "neutral": "平静",
+    }
+
     def _sync_renderer_master_emotion(self, emotion: str) -> None:
         """P2-6：把当前主导情绪（master emotion）同步到渲染器的程序化表情层。
 
@@ -3040,6 +3055,9 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
                 if emotion in ('surprised', 'angry'):
                     body_anim = 'idle'
                 self._set_anim_seq(body_anim, emotion=emotion, style=get_transition_style(emotion))
+                # 表达决策器：LLM 没点动作时，由本地引擎把情绪翻译成具体预设。
+                # 只在这条分支调（LLM 已给 [action:] 时尊重它的选择，不抢）。
+                self._direct_expression(emotion, "对话回复")
             # 面部表情独立于身体动作：始终同步对话情绪（P2-10 修复，不依赖
             # play_anim 的 if emotion 守卫，强制清渲染器表情）
             if r is not None and hasattr(r, "set_emotion_expression_only"):
@@ -3321,6 +3339,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
     # ── 右键菜单 ──
 
     # ── PhysicsCallbacks 接口 ──
+    # 注：on_walk_finished / on_bounce_finished / on_facing_change / set_anim
+    # 已于 2026-09-20 搬入 pet_mixins/animation_mixin.py（pet.py 有行数上限）。
 
     def get_screen_geometry(self):
         return self._current_screen_geometry()
@@ -3333,43 +3353,6 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
 
     def move_to(self, x: int, y: int):
         self.move(x, y)
-
-    def on_walk_finished(self):
-        self._is_walking = False
-        self._set_anim_seq('idle')
-        self._store_label_pos()
-        pos = self.pos()
-        self.config.setdefault("window", {})["x"] = pos.x()
-        self.config.setdefault("window", {})["y"] = pos.y()
-        # 异步防抖保存：散步每次到达都写盘会周期性卡顿，改走后台
-        async_config_saver.schedule(self.config)
-        if self._on_position_change:
-            self._on_position_change(pos.x(), pos.y())
-        params = self._get_behavior_params()
-        self._motion._start_rest(params)
-        # 散步到达后张望一下，更有生气（追逐中不抢戏）
-        if not (getattr(self, '_chasing', False) or getattr(self, '_is_dragging', False) or self._is_thinking):
-            self._do_look_around()
-
-    def on_bounce_finished(self, x: int, y: int):
-        self._motion_state = "idle"
-        self._bounce_active = False
-        self.config.setdefault("window", {})["x"] = x
-        self.config.setdefault("window", {})["y"] = y
-        # 异步防抖保存
-        async_config_saver.schedule(self.config)
-
-    def on_facing_change(self, facing_right: bool):
-        self._facing_right = facing_right
-        # 同步渲染器朝向，确保 atlas 方向动画不被反向翻转
-        self._renderer.set_facing(facing_right)
-
-    def set_anim(self, anim: str):
-        # atlas 格式：walk → running-right/left（根据朝向）
-        if anim == 'walk':
-            if 'running-right' in self._renderer._frames:
-                anim = 'running-right' if self._facing_right else 'running-left'
-        self._set_anim_seq(anim)
 
     # ── Hanako 状态回调 ──
 

@@ -55,6 +55,79 @@ logger = logging.getLogger(__name__)
 class PerceptionMixin:
     """调度器与感知：动作联动 / 前景检测 / 主动对话 / 存在感 / 感知中枢 + P1 集成。"""
 
+    # ── 表达决策（本地引擎）───────────────────────────────
+
+    # 对话情绪词（英文）→ 决策器情绪词（中文）。
+    # 为什么需要这层：主 LLM 输出的是 happy/sad/angry/…（_EMOTION_FACIAL_TARGETS
+    # 的词表），而决策器（core/expression_director.py）的候选分组按中文情绪建。
+    _EMOTION_ZH = {
+        "happy": "开心",
+        "sad": "失落",
+        "angry": "生气",
+        "surprised": "惊讶",
+        "thinking": "思考",
+        "cute": "害羞",
+        "shy": "害羞",
+        "neutral": "平静",
+    }
+
+    def _direct_expression(self, emotion: str, reason: str = "") -> None:
+        """用本地决策器把「情绪」翻译成「具体表情预设」并播放。
+
+        何时调：LLM 没给出 [action:{...}] 时（即它只表达了情绪，没点动作）。
+        决策器离线 / 低置信 / 未启用时**静默返回**——表情仍由既有的
+        master emotion 参数层驱动，不会因为这里没做事而“没反应”。
+
+        Args:
+            emotion: 英文情绪词（happy/sad/…）。
+            reason: 触发原因（进决策日志，如“对话回复”）。
+        """
+        d = getattr(self, "_expression_director", None)
+        if d is None:
+            return
+        zh = self._EMOTION_ZH.get((emotion or "").lower())
+        if not zh:
+            return
+        try:
+            result = d.decide(zh, "中", reason)
+        except Exception:
+            logger.debug("perception_mixin: 表达决策异常（忽略）", exc_info=True)
+            return
+        if not result.accepted or not result.gesture:
+            logger.debug("表达决策未采纳: %s", result.reason)
+            return
+        renderer = getattr(self, "_renderer", None)
+        if renderer is None:
+            return
+        # 冷却：与 [action:] 共用同一张表，避免两路同时刷动作
+        now = time.time()
+        cooldowns = getattr(self, "_action_cooldowns", None)
+        cooldown_sec = getattr(self, "_action_cooldown_sec", 2.0)
+        if cooldowns is not None and now - cooldowns.get(result.gesture, 0) < cooldown_sec:
+            logger.debug("表达决策冷却中: %s", result.gesture)
+            return
+        try:
+            # 预设走公开接口 play_emote_sequence（base.py 已定义，
+            # Live2DRenderer / SpriteRenderer 各自重写）。
+            # 不用 _trigger_gesture：那是私有的，且它会先过别名表——
+            # 而决策器返回的已经是**预设名本身**，再过别名表是多余的一跳。
+            played = False
+            player = getattr(renderer, "play_emote_sequence", None)
+            if callable(player):
+                played = bool(player(result.gesture))
+            if not played:
+                # 回退：预设播不了（如 sprite 无对应帧）→ 走动作意图路径
+                played = bool(renderer.apply_action_intent(
+                    {"gesture": result.gesture, "intensity": result.scale}))
+            if played:
+                if cooldowns is not None:
+                    cooldowns[result.gesture] = now
+                logger.info("表达决策已执行: %s", result.as_line())
+            else:
+                logger.debug("表达决策动作未匹配: %s", result.gesture)
+        except Exception:
+            logger.debug("perception_mixin: 表达决策播放失败（忽略）", exc_info=True)
+
     # ── 调度器与感知控制器 ──────────────────────────────────
 
     def _init_schedulers(self):
@@ -112,6 +185,28 @@ class PerceptionMixin:
         # {action_id: last_trigger_time}
         self._action_cooldowns: dict[str, float] = {}
         self._action_cooldown_sec: float = 2.0  # 默认 2 秒冷却
+
+        # ── 表达决策器（本地引擎，可选）──
+        # 把「情绪」翻译成「具体表情预设」：主 LLM 定情绪，本地引擎在同情绪的
+        # 小组候选里挑细节动作。引擎离线/低置信时自动走兜底，绝不阻断对话。
+        # 配置：config.json 的 "expression_director": {"enabled": bool}
+        self._expression_director = None
+        try:
+            from core.expression_director import get_director
+
+            _ed_cfg = self.config.get("expression_director", {}) or {}
+            if _ed_cfg.get("enabled", False):
+                _char = self.config.get("character", "") or "miku"
+                self._expression_director = get_director(str(_char))
+                _ed_ok = self._expression_director.client.is_available()
+                logger.info(
+                    "表达决策器已启用（角色=%s，引擎=%s）",
+                    _char, "在线" if _ed_ok else "离线（将走兜底）",
+                )
+            else:
+                logger.debug("表达决策器未启用（config.expression_director.enabled=false）")
+        except Exception as e:
+            logger.warning("表达决策器初始化失败（非致命）: %s", e)
         try:
             from core.presence import PresenceScheduler
             self._presence = PresenceScheduler(on_presence=self._on_presence_action)

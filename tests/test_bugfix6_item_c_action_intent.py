@@ -89,12 +89,29 @@ def test_live2d_apply_action_intent_sets_param_target():
 
 
 def test_live2d_apply_action_intent_gesture_triggers_motion():
-    """C：gesture 名 → 触发 play_anim（含已知情绪名走表情映射）。"""
+    """C：gesture 名 → 触发 play_anim（含已知情绪名走表情映射）。
+
+    2026-09-20 修正：原用例传 "wave" 并断言原样透传，但 `wave` 现在是
+    别名表里的键（→ `waving`），实测日志里模型确实用过 `wave` 而播不出来。
+    归一后再透传是**期望行为**，所以这里改用不在别名表里的名字
+    （"__unmapped__"）来保持「未命中→兵底透传」这个原本的测试意图。
+    别名归一的专项测试见 tests/test_do_aliases.py。
+    """
+    r = object.__new__(Live2DRenderer)
+    r._param_intent = {}
+    r.play_anim = MagicMock()
+    r.apply_action_intent({"gesture": "__unmapped__"})
+    r.play_anim.assert_called_once_with("__unmapped__")
+
+
+def test_live2d_apply_action_intent_normalizes_alias():
+    """2026-09-20：日志实证的 gesture（wave / 歪头）必须被归一到可播的目标。"""
     r = object.__new__(Live2DRenderer)
     r._param_intent = {}
     r.play_anim = MagicMock()
     r.apply_action_intent({"gesture": "wave"})
-    r.play_anim.assert_called_once_with("wave")
+    # wave → waving（miku 的 motion 文件名是 waving，不是 wave）
+    r.play_anim.assert_called_once_with("waving")
 
 
 def test_live2d_apply_action_intent_invalid_safe():

@@ -242,8 +242,26 @@ class Live2DRenderer(AvatarRenderer):
     #
     # 参考 Amadeus 的 TRIGGER_ALIASES：**只给少量带语义的标签**，
     # 内部再归一到具体预设/motion。值与中文相近，模型用母语选更稳。
+    #
+    # ── 2026-09-20 扩容（实证依据）──
+    #
+    # `logs/oc_pet.log` 里 LLM 实际输出过但**播不出来**的名字：
+    #     gesture=歪头 × 4   → 不在别名表 → “未知动作 '歪头'”
+    #     gesture=wave × 2   → 不在别名表 → “未知动作 'wave'”
+    # 加上 `walk` 194 次、`extra` 63 次的刷屏（见 _ANIM_TO_MOTION_KW 缺项），
+    # 合计 257 条警告——全是“模型说对了、栅栏接不住”。
+    #
+    # 对照实验（deepseek-chat，真实 prompt 结构，10 个对话语境）：
+    #     旧 17 项清单 → **2/10**（“开心”“微笑”“困”“摸头”“害羞”全被判无效）
+    #     全 53 标签   → **10/10**
+    #     分组 25 项   → **10/10**
+    # 结论：**不是模型不会选，是清单里根本没有它想用的词**。
+    #
+    # 所以扩容原则：把“语义正确但当时没收录”的口语词全部接上。
+    # 预设的中文标签（见 core/capability_snapshot.PRESET_LABELS）由
+    # `_label_alias_map()` 自动并入，不再手抄一遍。
     _AI_DO_ALIASES: dict[str, str] = {
-        # 表情（走预设路径）
+        # ── 表情（走预设路径）──
         "害羞": "blush_shy",
         "脸红": "blush_shy",
         "微笑": "smile_soft",
@@ -262,18 +280,86 @@ class Live2DRenderer(AvatarRenderer):
         "生气": "angry_glare",
         "困": "stretch_yawn",
         "伸懒腰": "stretch_yawn",
-        # 肢体（走 motion 路径）
+        # ── 肢体（走 motion 路径）──
         "挥手": "waving",
         "打招呼": "waving",
         "摸头": "touch",
         "开心跳": "happy",
+        # ── 2026-09-20 新增：日志实证“模型用过但播不了”的 ──
+        "歪头": "head_tilt",
+        "wave": "waving",          # 英文同义（模型中英混用）
+        "walk": "walk",            # 走 _ANIM_TO_MOTION_KW 的 motion 路径
+        # ── 2026-09-20 新增：常见口语同义（模型倾向用这些）──
+        "高兴": "smile_bright",
+        "愉快": "smile_soft",
+        "温暖": "smile_soft",
+        "关心": "smile_soft",
+        "欣慰": "smile_soft",
+        "兴奋": "excited",
+        "惊喜": "surprise_gasp",
+        "吃惊": "surprise_gasp",
+        "发愣": "eye_wide",
+        "好奇": "gaze_side",
+        "疑问": "doubt",
+        "不解": "doubt",
+        "犯困": "sleepy",
+        "打哈欠": "yawn",
+        "疲惫": "sleepy",
+        "难过": "sad_droop",
+        "伤心": "sad_droop",
+        "沮丧": "sad_droop",
+        "委屈": "pout",
+        "不满": "angry_glare",
+        "无奈": "sigh",
+        "无语": "eye_roll",
+        "翻白眼": "eye_roll",
+        "挑眉": "brow_raise",
+        "嘟嘴": "lip_pucker",
+        "撅嘴": "pout",
+        "抿嘴": "mouth_pursed",
+        "吐舌": "tongue_out",
+        "耸肩": "shoulder_shrug",
+        "点头晃动": "head_bob",
+        "侧目": "gaze_side",
+        "偷看": "sneak_peek",
+        "偷瞄": "sneak_peek",
+        "眨眼俏皮": "wink",
+        "缓缓眨眼": "blink_slow",
+        "闭眼": "blink_slow",
+        "瞪眼": "eye_wide",
+        "眯眼": "eye_narrow",
+        "傻笑": "giggle",
+        "轻笑": "giggle",
+        "笑": "smile_bright",
+        "摆手": "waving",
+        "摇手": "waving",
+        # ── 2026-09-20 新增：分组标题词（prompt 里以“开心:xxx”形式出现）──
+        # 模型有概率直接把分组名当动作名用（如 gesture="开心"）。
+        # 实测旧 17 项清单时代，模型输出过 gesture=开心 / 微笑 / 困 / 摸头 / 害羞
+        # 都被判无效——现在全部接住，分组名也不会静默失败。
+        "平静": "smile_soft",
     }
 
     # 注入 prompt 的选项文案（只列 key + 极简说明；别再把 66 个名字堆上去）
+    #
+    # 2026-09-20：改为**按情绪分组**。实证（deepseek-chat，真实 prompt，10 语境）：
+    #   旧 17 项平铺 → 2/10（“开心”“微笑”等语义正确的名字因不在清单里被判无效）
+    #   分组 25 项    → 10/10，且 prompt 仅 319 字符（仍 <300 的旧上限附近）
+    # 分组让模型能先定位情绪、再选具体动作，比平铺一堆名词好选。
     _AI_DO_PROMPT: str = (
-        "害羞(脸红别开眼)/微笑/开心/大笑/惊讶/思考/疑惑/点头/摇头/"
-        "叹气/眨眼/得意/失落/生气/困/挥手/摸头"
+        "开心:灿烂笑容/咧嘴大笑/咯咯笑/兴奋/眼睛发亮/得意 "
+        "害羞:害羞脸红/羞怯/偷瞄/嘟嘴 "
+        "惊讶:惊讶吸气/瞪大眼睛/挑眉 "
+        "思考:思考/抬头往上看/抿嘴 "
+        "疑惑:疑惑歪头/歪头/侧目/耸肩 "
+        "生气:生气瞪视/翻白眼/眯起眼睛 "
+        "失落:失落垂眼/低头往下看/叹气 "
+        "困:犯困/打哈欠/伸懒腰打哈欠 "
+        "平静:温柔微笑/连续眨眼/点头/身体轻晃"
     )
+
+    # 模型专属 prompt 文件（放模型目录下，与 .model3.json 同级）
+    _MODEL_PROMPT_FILE = "model_prompt.txt"
 
     # 参数名映射：emote_presets.py 用下划线小写命名，StandardParams 用大写驼峰。
     # 2026-09-06 新增：修复“身体动作”预设（stretch/dance/body_sway/arm_wave）因参数名
@@ -3036,7 +3122,29 @@ class Live2DRenderer(AvatarRenderer):
         # 后续三类查找逻辑不变。
         # 为何需要这层：直接把 66 个预设/motion 名给模型，实测 `[do:]`
         # 全历史 0 次使用（见 _AI_DO_ALIASES 注释）。
+        #
+        # ⚠️ 先记下别名表是否命中：快照标签层（0.5）只应在**未命中**时兵底，
+        # 不能盖掉人工调的语义优先表（如「挥手」→ motion `waving`，
+        # 比标签的 `arm_wave` 预设更符合直觉）。
+        alias_hit = g in self._AI_DO_ALIASES
         g = self._AI_DO_ALIASES.get(g, g)
+
+        # ── 0.5 快照中文标签归一（2026-09-20）──
+        # 为什么需要：prompt 里给模型的候选是**中文语义标签**
+        # （「灿烂笑容」「害羞脸红」「瞪大眼睛」——见 _AI_DO_PROMPT）。
+        # 但 `_AI_DO_ALIASES` 只收了 69 条常用词，而快照有 53 个标签，
+        # 两者不是同一个集合——实测 33 个标签（如「灿烂笑容」）过完别名表
+        # 仍是中文，落到 play_anim 就变成「未知动作」→ **模型说对了却播不出来**。
+        #
+        # 这层把标签直接查回预设名，不再依赖别名表把每个标签都手抄一遍。
+        # 标签表由 core/capability_snapshot.PRESET_LABELS 提供（单一一来源）。
+        if not alias_hit and g not in self._EMOTE_PRESETS:
+            try:
+                from core.capability_snapshot import LABEL_TO_PRESET
+
+                g = LABEL_TO_PRESET.get(g, g)
+            except Exception:
+                logger.debug("live2d_renderer: 标签归一失败（忽略）", exc_info=True)
 
         # ── 1. 表情预设（2026-09-11 接线）──
         # avatar/emote_presets.py 里有 53 个带步骤序列的预设（wink / blush_shy /
