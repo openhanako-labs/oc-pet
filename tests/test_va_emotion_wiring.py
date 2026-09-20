@@ -87,6 +87,33 @@ def test_angry_threshold_is_conservative():
     assert PerceptionMixin._va_to_emotion(-0.6, 0.7) == "angry"
 
 
+# ── 已知局限：正价区分辨率不足（用日志真实样本钉住）──
+
+def test_positive_zone_collapses_to_happy_known_limitation():
+    """**已知局限的回归测试**（不是期望行为，是钉住现状）。
+
+    日志里的真实样本（`logs/oc_pet.log`）：
+
+        VA(0.6, 0.3) 「深夜还守着直播呀，记得让眼睛歇一歇」
+        VA(0.3,-0.2) 「快零点了还在调网关，眼睛该歇了」
+
+    语义上这两句是**关心**，不是开心。但本表把整个正价区（v ≥ 0.15）
+    压成一个 happy。同日另一条线的对照实验也得出「几何最近邻 3/9」——
+    方法不同，指向同一困难：**VA 二维坐标承载不了中文情绪细粒度**。
+
+    这条测试的意义：如果有人将来把正价区拆细了，这里会红——
+    那时应该顺便更新上面的 docstring，而不是默默改掉。
+    """
+    assert PerceptionMixin._va_to_emotion(0.6, 0.3) == "happy"
+    assert PerceptionMixin._va_to_emotion(0.3, -0.2) == "happy"
+    # 正价区没有任何其他出口——这正是局限所在
+    positive_outputs = {emo for v_lo, v_hi, _a1, _a2, emo in PerceptionMixin._VA_EMOTION_RULES
+                        if v_lo >= 0}
+    assert positive_outputs == {"happy"}, (
+        f"正价区现在能产出 {positive_outputs}——若已拆细，请更新 docstring 的局限说明"
+    )
+
+
 # ── 2. 端到端：真实解析器 → VA → 情绪 ──
 
 def test_real_llm_output_produces_non_neutral_emotion():
