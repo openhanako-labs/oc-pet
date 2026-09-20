@@ -127,3 +127,4 @@ tools/verify_session_pin.py
 tools/verify_session_pin_e2e.py
 tools/e2e_computer_use.py
 tools/e2e_mcp_probe.py
+tools/verify_spec_data_filter.py
