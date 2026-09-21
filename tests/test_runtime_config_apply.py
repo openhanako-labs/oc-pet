@@ -19,11 +19,11 @@ import pytest
 
 pet_mod = pytest.importorskip("pet")     # 需要 PySide6；装不上就跳过
 
-HOT = ("a2a", "game", "lip_sync", "llm_gate")
+HOT = ("a2a", "game", "lip_sync", "llm_gate", "atmosphere", "life_cursor")
 
 
 class _Host:
-    """最小宿主：接住四个装卸方法，记录谁被调了。"""
+    """最小宿主：接住装卸方法，记录谁被调了。"""
 
     HOT_CONFIG_KEYS = pet_mod.PetWindow.HOT_CONFIG_KEYS
     _apply_runtime_config = pet_mod.PetWindow._apply_runtime_config
@@ -49,6 +49,13 @@ class _Host:
 
     def _init_llm_gate(self):
         return self._hit("llm_gate")
+
+    # 2026-09-21：语境注入层（设置面板开关 → 热生效）
+    def _init_atmosphere_layer(self):
+        return self._hit("atmosphere")
+
+    def _init_p1_life_cursor(self):
+        return self._hit("life_cursor")
 
 
 def _cfg(**over):
@@ -160,6 +167,25 @@ def test_extra_keys_are_ignored():
     out = h._apply_runtime_config()
     assert "some_future_key" not in out
     assert set(out) == set(HOT)
+
+
+def test_context_layer_inits_must_report_bool():
+    """★ 语境注入层的 init 必须返回**明确的 bool**。
+
+    它们原先是隐式返回 None，而 `_apply_runtime_config` 把 None 当失败——
+    后果是**每次保存配置都重建一次**：氛围层的历史份额白攒、
+    生活游标的定时器重建。不报错，只是白干。
+    """
+    from pet_mixins.emotion_classify_mixin import EmotionClassifyMixin
+    from pet_mixins.perception_mixin import PerceptionMixin
+    from types import SimpleNamespace
+
+    atmo = EmotionClassifyMixin._init_atmosphere_layer(
+        SimpleNamespace(config={"atmosphere": {"enabled": False}}))
+    assert atmo is True
+
+    cur = PerceptionMixin._init_p1_life_cursor(SimpleNamespace(config={}))
+    assert cur is True
 
 
 def test_missing_blocks_are_treated_as_empty():

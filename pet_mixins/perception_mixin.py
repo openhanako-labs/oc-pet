@@ -545,7 +545,21 @@ class PerceptionMixin:
     LIFE_CURSOR_CHECK_MS = 5 * 60_000
 
     def _init_p1_life_cursor(self):
-        """生活游标：初始化状态机 + 起定时器（默认关）。"""
+        """生活游标：初始化状态机 + 起定时器（默认关）。
+
+        **可重复调用**（设置面板开关 → ``_apply_runtime_config`` 热生效）：
+        先停掉旧定时器再建新的，否则每次保存设置都会多留一个 QTimer，
+        它们会一起 fire——开关本身反而变成泄漏源。
+
+        返回给热重载记账用（True=装好，False=没装成）。**不能返回 None**：
+        None 会被当成失败，于是每次保存配置都重建一遍。
+        """
+        old = getattr(self, "_life_cursor_timer", None)
+        if old is not None:
+            try:
+                old.stop()
+            except Exception:
+                pass
         self._life_cursor = None
         self._life_cursor_timer = None
         try:
@@ -566,6 +580,8 @@ class PerceptionMixin:
         except Exception as exc:
             logger.warning("生活游标初始化失败（非致命）: %s", exc)
             self._life_cursor = None
+            return False
+        return True
 
     def _maybe_life_cursor(self):
         """定时器回调（主线程）：到期且有料 → 交后台线程渲染。

@@ -718,6 +718,33 @@ class SettingsDialog(QDialog):
         sess_layout.addRow(sess_hint)
         
         memory_layout.addWidget(sess_group)
+
+        # 2026-09-21: 语境注入层（氛围 / 近况）。两个都是**可选**的慢变量层，
+        # 开了都会调模型（氛围：越过阈值才调一次；近况：每小时最多一次），
+        # 所以默认关，且提示文字里要把成本说清楚。
+        # 热生效：保存即生效（pet.py 的 HOT_CONFIG_KEYS 里有这两项）。
+        ctx_group = QGroupBox("语境注入（会调用模型，默认关闭）")
+        ctx_layout = QFormLayout(ctx_group)
+        ctx_layout.setSpacing(10)
+
+        self.atmo_enabled = QCheckBox("启用氛围累积层（把最近的气氛攒成慢变量）")
+        self.atmo_enabled.setChecked(bool((self._config.get("atmosphere") or {}).get("enabled", False)))
+        ctx_layout.addRow(self.atmo_enabled)
+
+        self.life_cursor_enabled = QCheckBox("启用生活游标（最近在忙什么 → 【近况】一句）")
+        self.life_cursor_enabled.setChecked(bool((self._config.get("life_cursor") or {}).get("enabled", False)))
+        ctx_layout.addRow(self.life_cursor_enabled)
+
+        ctx_hint = QLabel(
+            "氛围：从对话中攒一个「紧/松」慢变量，越过阈值才注入【氛围】段。\n"
+            "近况：把最近几小时的活动压成一句【近况】（如「他刚在改配置」）。\n"
+            "两者都只想喂一句话，用不上时不会触发。保存即生效，无需重启。"
+        )
+        ctx_hint.setWordWrap(True)
+        ctx_hint.setStyleSheet("color: rgb(%s); font-size: 10px;" % rgb(self._ui_theme, "text_muted"))
+        ctx_layout.addRow(ctx_hint)
+
+        memory_layout.addWidget(ctx_group)
         memory_layout.addStretch()
 
         self.func_sub_tabs.addTab(memory_tab, "记忆")
@@ -1849,6 +1876,19 @@ class SettingsDialog(QDialog):
         # 2026-09-07: 会话记忆开关
         if hasattr(self, "sess_memory_enabled"):
             c["session_memory_enabled"] = self.sess_memory_enabled.isChecked()
+
+        # 2026-09-21: 语境注入层开关（氛围 / 生活游标）。
+        # 用**已加载块的拷贝**而不是 ``{"enabled": ...}``：后者一旦碰上
+        # 浅合并就会把 source/theta/half_life 全抹掉，退化成情绪族默认值——
+        # 不报错，只是阈值静默变错。拷贝版本还有个好处：没改就不会出现在 diff 里。
+        if hasattr(self, "atmo_enabled"):
+            blk = dict(self._config.get("atmosphere") or {})
+            blk["enabled"] = self.atmo_enabled.isChecked()
+            c["atmosphere"] = blk
+        if hasattr(self, "life_cursor_enabled"):
+            blk2 = dict(self._config.get("life_cursor") or {})
+            blk2["enabled"] = self.life_cursor_enabled.isChecked()
+            c["life_cursor"] = blk2
 
         # 快捷键
         c.setdefault("shortcuts", {})["enabled"] = self.shortcuts_enabled.isChecked()

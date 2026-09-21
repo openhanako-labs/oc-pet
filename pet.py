@@ -1030,7 +1030,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
     # ── 可热生效的运行时配置（改配置不用重启）──────────────────
 
     #: 支持热生效的配置子块（值只是给人看的；真正的装卸表在 _apply_runtime_config）
-    HOT_CONFIG_KEYS = ("a2a", "game", "lip_sync", "llm_gate")
+    HOT_CONFIG_KEYS = ("a2a", "game", "lip_sync", "llm_gate",
+                       "atmosphere", "life_cursor")
 
     def _apply_runtime_config(self, cfg=None):
         """把**可热生效**的配置重新装一遍。
@@ -1054,6 +1055,10 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             "game": self._init_game_watch,
             "lip_sync": self._init_lip_sync,
             "llm_gate": self._init_llm_gate,
+            # 2026-09-21：语境注入层。都是自包含的 init（重复调用安全），
+            # 所以设置面板的开关保存后立即生效，不用重启。
+            "atmosphere": self._init_atmosphere_layer,
+            "life_cursor": self._init_p1_life_cursor,
         }
         out = {}
         for key in self.HOT_CONFIG_KEYS:

@@ -170,23 +170,50 @@ class EmotionClassifyMixin:
         self._classify_enabled = bool(cfg.get("enabled", True))
         self._classify_min_conf = float(cfg.get("min_confidence", _MIN_CONFIDENCE))
 
+        # 氛围层与分类器**解耦**（2026-09-21）：结构族（source=ratio）不靠分类器，
+        # 所以初始化放在 enabled 早返回**之前**——不然"关掉分类器 + 开氛围"
+        # 会得到一个永远不初始化的层，而且一声不响。
+        self._last_user_text = ""
+        self._init_atmosphere_layer()
+
         if not self._classify_enabled:
             logger.info("情绪分类器已关闭（config.emotion_classifier.enabled=false）")
             return
         logger.info("情绪分类器已启用（首次使用前会在后台预热）")
 
-        # 氛围累积层（慢变量）：与情绪分类同源，但**默认关**。
-        # 它不新增模型契约（只消费分类器的类别输出），所以开不开都安全。
+    def _init_atmosphere_layer(self):
+        """按 ``config.atmosphere`` 装卸氛围累积层（**可热生效**）。
+
+        2026-09-21 从 ``_init_emotion_classifier`` 里拆出来，为的是让设置面板
+        的开关真能热生效（见 ``pet.py`` 的 ``_apply_runtime_config``）。
+        拆之前它和分类器初始化绑在一起，于是“只想开关氛围层”也得连坐重建
+        整套分类器（代价是丢掉已算好的嵌入与准备状态）。
+
+        可重复调用：每次按最新配置**重建**状态。关闭时状态对象直接置空，
+        不留输入缓冲（避免关掉之后还在后台攒）。
+
+        返回给热重载记账用：``True`` = 装好了（含"按配置关掉"），
+        ``False`` = 没装成。**不能返回 None** ——``_apply_runtime_config``
+        把 None 当失败，于是每次保存配置都会重建一遍（历史份额白攒）。
+        """
         self._atmosphere = None
         self._atmos_input = None
         self._atmos_source = "emotion"
         self._atmos_last_ts = None
-        self._last_user_text = ""
+        # 配置里写了块、但类型不对（比如 "atmosphere": "true"）：
+        # 静静地降级成"关闭"最省事，但那正是最难查的一类故障——
+        # 文件里明明有这一块，行为上却跟没写一样。至少得在日志里说一声。
+        raw = self.config.get("atmosphere")
+        if raw is not None and not isinstance(raw, dict):
+            logger.warning(
+                "config.atmosphere 应为对象，实际是 %s——氛围层保持关闭",
+                type(raw).__name__)
+            raw = None
         try:
             from core.atmosphere import AtmosphereState
             from core.atmosphere_input import RollingQuantileTristate, defaults_for
 
-            atmo_cfg = dict(self.config.get("atmosphere") or {})
+            atmo_cfg = dict(raw or {})
             src = str(atmo_cfg.get("source") or "emotion").strip().lower()
             self._atmos_source = src
             # 阈值按**族**取默认，不共用：两族的 clear 工作点不同
@@ -209,6 +236,8 @@ class EmotionClassifyMixin:
         except Exception as exc:  # noqa: BLE001
             logger.debug("氛围层初始化失败（非致命，保持关闭）: %s", exc)
             self._atmosphere = None
+            return False
+        return True
 
     def _ensure_classifier(self, view: str):
         """取（或创建）某视角的分类器。失败返回 None。"""
