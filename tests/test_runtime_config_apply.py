@@ -201,6 +201,29 @@ def test_non_dict_config_falls_back_to_self_config():
     assert set(out.values()) == {"applied"}
 
 
+def test_unchanged_reload_is_not_logged_as_info(caplog):
+    """★ 桌宠**一边散步一边写盘**（位置变化 → `_AsyncConfigSaver` 防抖 150ms），
+    每次写盘都会走到 `_on_config_file_changed`。原实现无条件 `logger.info(
+    "配置热生效：...")`，于是"全部 unchanged"的 INFO 每 40 秒刷一行
+    （实测 53 分钟 70 行）。真装卸了某个块才值得 INFO。
+    """
+    import logging
+
+    class _H2(_Host):
+        _on_config_file_changed = pet_mod.PetWindow._on_config_file_changed
+
+        def _apply_runtime_config(self, cfg=None):
+            return {k: "unchanged" for k in HOT}
+
+    h = _H2(_cfg())
+    with caplog.at_level("DEBUG"):
+        h._on_config_file_changed(h.config)
+    infos = [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO]
+    assert not any("配置热生效：" in m for m in infos), f"unchanged 不该打 INFO：{infos}"
+    assert any("无变化" in r.getMessage() for r in caplog.records), \
+        "降到 DEBUG 也得留痕，否则下次又得靠猜"
+
+
 # ── 源码护栏：三条路径真的都接上了 ────────────────────────
 
 

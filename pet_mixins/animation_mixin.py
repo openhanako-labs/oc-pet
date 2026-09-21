@@ -73,6 +73,13 @@ class AnimationMixin:
 
         全程 try/except 兜底：过渡若异常，降级为 snap 瞬切，绝不崩溃。
         """
+        # 2026-09-21：`extra` / 空 是上游约定的「**无动作**」哨兵
+        # （`capability_registry.ToolResult.anim` 的默认值就是 "extra"，
+        # a2a_capability / conversation_engine 也用同一个值），它**不是动作名**。
+        # 以前原样丢给渲染器 → 每次两条「未知动作 'extra'」警告（53 分钟 51 次）。
+        if seq_name in (None, "", "extra"):
+            logger.debug("_set_anim_seq: %r 是「无动作」哨兵，跳过", seq_name)
+            return True
         try:
             # 2026-09-19：**必须看返回值**。这个契约渲染器早就写着
             # （“False 表示无匹配（调用方不得声称已触发）”），但没人守——
@@ -205,4 +212,17 @@ class AnimationMixin:
                 motion_files = self._renderer._motion_files or []
                 if not any('walk' in str(f).lower() for f in motion_files):
                     anim = 'idle'
+        # 2026-09-21：**已经在 idle 就别再触发**。
+        #
+        # 物理层每次状态变化都会回调 set_anim('walk')；没有 walk motion 的模型
+        # 上面会把它降级成 idle —— 于是每 ~4 秒重播一次 idle motion 并打一行 INFO
+        # （实测 53 分钟 761 行，占日志 25%），idle 循环也被从头打断。
+        # 位移本来就由 physics 驱动，"再播一次 idle" 并不能表达走路。
+        #
+        # 通用性：判断依据是 **anim 与当前序列**，不认模型名。
+        # 有 walk motion 的模型不受影响（anim 仍是 'walk'，重复触发由渲染器的
+        # 「同 idx 已在播」去重守卫挡住）；sprite/atlas 走 running-left/right，
+        # 也到不了这里。
+        if anim == "idle" and getattr(self, "_anim_seq", None) == "idle":
+            return
         self._set_anim_seq(anim)

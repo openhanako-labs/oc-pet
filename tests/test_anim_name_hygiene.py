@@ -82,16 +82,25 @@ class _Sprite:
 
 
 class _Pet:
-    """复刻 PetWindow.set_anim 的行为（与 pet.py 保持同步）。"""
+    """复刻 PetWindow.set_anim / _set_anim_seq 的行为（与 pet.py 保持同步）。"""
+
+    _NO_ANIM = (None, "", "extra")   # 上游约定的「无动作」哨兵
 
     def __init__(self, renderer, facing_right=True):
         self._renderer = renderer
         self._facing_right = facing_right
+        self._anim_seq = None
         self.seq = []
+        self.renderer_calls = []
 
     def _set_anim_seq(self, anim, **kw):
+        if anim in self._NO_ANIM:
+            return True
         self.seq.append(anim)
+        self._anim_seq = anim
         player = getattr(self._renderer, "play_anim", None)
+        if callable(player):
+            self.renderer_calls.append(anim)
         return bool(player(anim)) if callable(player) else False
 
     def set_anim(self, anim):
@@ -104,6 +113,8 @@ class _Pet:
                 mf = self._renderer._motion_files or []
                 if not any("walk" in str(f).lower() for f in mf):
                     anim = "idle"
+        if anim == "idle" and self._anim_seq == "idle":
+            return
         self._set_anim_seq(anim)
 
 
@@ -204,6 +215,82 @@ class TestSafeAnimNames:
         )
         assert not pattern.search(src), "硬编码白名单已回归（safe_anims = ['idle','walk',...]）"
         assert "_safe_anim_names()" in src, "应调用 _safe_anim_names() 动态取白名单"
+
+
+# ══════════════════════════════════════════════════════════════
+#  第二波（2026-09-21）：警告消掉了，但**噪音搬去了下游**
+#
+#  2026-09-20 把 `walk` 降级成 `idle` 之后，「未知动作」警告确实没了 ——
+#  但物理层每个状态变化仍然回调 set_anim('walk')，于是**每 ~4 秒重播一次
+#  idle motion** 并打一行 INFO：53 分钟 761 行，占日志 25%。
+#  修一处噪音最容易犯的错，就是把它搬个地方。
+# ══════════════════════════════════════════════════════════════
+
+
+class TestNoIdleReplayChurn:
+    def test_repeat_walk_does_not_replay_idle(self):
+        """★ 物理层每次 tick 都回调 set_anim('walk')，但**只该播一次** idle。"""
+        p = _Pet(_l2d())
+        for _ in range(5):
+            p.set_anim("walk")
+        assert p.seq == ["idle"], f"idle 被重播了 {len(p.seq)} 次：{p.seq}"
+        assert p.renderer_calls == ["idle"], "不该反复调渲染器"
+
+    def test_walk_from_other_anim_still_settles_to_idle(self):
+        """从别的动作开始走 → 仍要收到一次 idle（别把降级一并修坏）。"""
+        p = _Pet(_l2d())
+        p.set_anim("happy")
+        p.set_anim("walk")
+        assert p.seq == ["happy", "idle"]
+
+    def test_idle_request_when_already_idle_is_noop(self):
+        p = _Pet(_l2d())
+        p.set_anim("idle")
+        p.set_anim("idle")
+        assert p.seq == ["idle"]
+
+    def test_model_with_walk_motion_unaffected(self):
+        """★ 通用性：有 walk motion 的模型（如 lafei）不该被这条改动影响 ——
+        它的重播去重由渲染器的「同 idx 已在播」守卫负责。"""
+        p = _Pet(_l2d(MIKU_MOTIONS + ["motions/walk.motion3.json"]))
+        for _ in range(3):
+            p.set_anim("walk")
+        assert p.seq == ["walk", "walk", "walk"], (
+            "有 walk motion 时请求仍应下传（去重在渲染器那层）")
+
+    def test_sprite_path_unaffected(self):
+        p = _Pet(_Sprite())
+        for _ in range(3):
+            p.set_anim("walk")
+        assert p.seq == ["running-right"] * 3
+
+
+class TestNoAnimSentinel:
+    """★ 'extra' 是上游约定的「无动作」哨兵，不是动作名。
+
+    `capability_registry.ToolResult.anim` 的默认值就是它，
+    a2a_capability / conversation_engine 也用同一个值 ——
+    以前原样丢给渲染器，换来每次两条「未知动作 'extra'」警告（53 分钟 51 次）。
+    """
+
+    @pytest.mark.parametrize("sentinel", ["extra", "", None])
+    def test_sentinel_never_reaches_the_renderer(self, sentinel):
+        p = _Pet(_l2d())
+        assert p._set_anim_seq(sentinel) is True   # 当"成功，无需换动作"
+        assert p.renderer_calls == [], f"{sentinel!r} 不该下传渲染器"
+        assert p._anim_seq is None, "不该把当前序列改成哨兵值"
+
+    def test_set_anim_with_sentinel_is_silent(self):
+        p = _Pet(_l2d())
+        p.set_anim("extra")
+        assert p.seq == []
+        assert p.renderer_calls == []
+
+    def test_real_but_unknown_names_still_warn(self):
+        """真·拼错的名字仍要吵 —— 别把哨兵特判扩大成「什么都不报」。"""
+        p = _Pet(_l2d())
+        assert p._set_anim_seq("teleport") is False
+        assert p.renderer_calls == ["teleport"]
 
 
 if __name__ == "__main__":

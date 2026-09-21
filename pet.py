@@ -1113,7 +1113,13 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
     def _on_config_file_changed(self, cfg):
         """磁盘上的 config.json 变了 → 只重装**可热生效**的子块。"""
         try:
-            logger.info("配置热生效：%s", self._apply_runtime_config(cfg))
+            out = self._apply_runtime_config(cfg)
+            # 桌宠散步就写盘（位置变化 → _AsyncConfigSaver 150ms 防抖），每次写盘都
+            # 走到这里；"全 unchanged"刷 INFO 没意义（实测 53 分钟 70 行）。
+            if any(v != "unchanged" for v in out.values()):
+                logger.info("配置热生效：%s", out)
+            else:
+                logger.debug("配置热生效（无变化）：%s", out)
         except Exception as e:
             logger.warning("配置热生效失败（非致命）: %s", e)
 
