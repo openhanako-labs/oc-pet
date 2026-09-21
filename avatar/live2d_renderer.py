@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -47,6 +48,66 @@ from avatar.decision_trace import trace
 logger = logging.getLogger(__name__)
 
 _global_l2d_inited: bool = False  # live2d.v3.init() 进程级只调一次（多宠不重复初始化）
+
+_MOC3_MAGIC = b"MOC3"
+
+
+def _classify_model_json(path: str) -> str:
+    """按**内容**判断模型设置文件的格式（不靠扩展名猜）。
+
+    返回：
+        "cubism3"   —— Cubism 3/4 的 model3.json（v3 引擎可加载）
+        "cubism2"   —— Cubism 2 的 <name>.model.json（v3 引擎加载必崩）
+        "not_model" —— 不是 Live2D 模型设置文件（如 oc-pet 的角色描述 model.json）
+        "bad_json"  —— 读取或解析失败
+
+    2026-09-21：扩展名判据在这里是双重错觉——项目自己的角色描述文件叫
+    ``model.json``，Cubism 2 的模型设置叫 ``<name>.model.json``，两者都满足
+    ``endswith(".model.json")``，却都不是 v3 能加载的东西。
+    """
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except Exception:
+        return "bad_json"
+    if not isinstance(data, dict):
+        return "bad_json"
+    refs = data.get("FileReferences")
+    if data.get("Version") == 3 and isinstance(refs, dict) and refs.get("Moc"):
+        return "cubism3"
+    if isinstance(data.get("model"), str):
+        return "cubism2"
+    return "not_model"
+
+
+def _moc3_magic_ok(model_json_path: str) -> tuple[bool, str]:
+    """校验 model3.json 引用的 Moc 文件确实是 moc3 二进制。
+
+    这一层必须挡在 live2d.v3 之前：Cubism Core 5 拿到非 moc3 数据时**不抛
+    Python 异常**，而是在原生层做 NULL 解引用 → access violation
+    (0xC0000005)，进程当场死，调用点的 try/except 一处都拦不住。
+    """
+    try:
+        with open(model_json_path, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except Exception as e:
+        return False, f"model3.json 解析失败: {e}"
+    refs = data.get("FileReferences") if isinstance(data, dict) else None
+    moc = (refs or {}).get("Moc") if isinstance(refs, dict) else None
+    if not moc:
+        return False, "model3.json 未声明 FileReferences.Moc"
+    moc_path = os.path.join(os.path.dirname(model_json_path), moc)
+    if not os.path.isfile(moc_path):
+        return False, f"Moc 文件不存在: {moc_path}"
+    try:
+        with open(moc_path, "rb") as f:
+            magic = f.read(4)
+    except Exception as e:
+        return False, f"Moc 文件不可读: {e}"
+    if magic != _MOC3_MAGIC:
+        return False, (f"Moc 文件魔数不是 MOC3（读到 {magic!r}）——"
+                       "这是 Cubism 2 的 .moc，v3 引擎无法加载，需要 .moc3")
+    return True, moc_path
 
 
 class Live2DRenderer(AvatarRenderer):
@@ -735,6 +796,14 @@ class Live2DRenderer(AvatarRenderer):
         for f in sorted(os.listdir(char_dir)):
             low = f.lower()
             if low.endswith(".model3.json") or low.endswith(".model.json"):
+                # 2026-09-21：扩展名会说谎，内容不会。非 model3.json 直接跳过，
+                # 否则 Cubism 2 的 <name>.model.json 会被喂进原生库并崩进程。
+                _kind = _classify_model_json(os.path.join(char_dir, f))
+                if _kind != "cubism3":
+                    logger.error(
+                        "Live2DRenderer: 跳过 %s（判定为 %s；v3 引擎只能加载 "
+                        "model3.json + moc3）", f, _kind)
+                    continue
                 self._model_path = os.path.join(char_dir, f)
                 # 可选：pet.json 里的 live2d 缩放/偏移覆盖
                 self._apply_live2d_meta(char_dir)
@@ -749,6 +818,13 @@ class Live2DRenderer(AvatarRenderer):
             for f in sorted(os.listdir(live2d_dir)):
                 low = f.lower()
                 if low.endswith(".model3.json") or low.endswith(".model.json"):
+                    # 同上：内容判据，而不是扩展名。
+                    _kind = _classify_model_json(os.path.join(live2d_dir, f))
+                    if _kind != "cubism3":
+                        logger.error(
+                            "Live2DRenderer: 跳过 %s（判定为 %s；v3 引擎只能加载 "
+                            "model3.json + moc3）", f, _kind)
+                        continue
                     self._model_path = os.path.join(live2d_dir, f)
                     # 可选：pet.json 里的 live2d 缩放/偏移覆盖
                     self._apply_live2d_meta(char_dir)
@@ -870,6 +946,18 @@ class Live2DRenderer(AvatarRenderer):
         self._debug = os.environ.get("L2D_DEBUG") == "1"  # 调试诊断输出总开关
         if self._ready or not self._model_path:
             return
+
+        # 2026-09-21 守门：把非 moc3 的模型挡在原生库门外。
+        # 教训：characters/kurisu 是 Cubism 2 模型（kurisu.moc.json 魔数为 "moc\n"），
+        # 被扩展名判据选中后 LoadModelJson 在原生层 NULL 解引用 → access violation
+        # (0xC0000005)，整个进程死、launcher 3 秒复活循环，Python 层没有异常可捕。
+        _moc_ok, _moc_why = _moc3_magic_ok(self._model_path)
+        if not _moc_ok:
+            logger.error("Live2DRenderer: 拒绝加载模型 %s（%s）", self._model_path, _moc_why)
+            self._ready = False
+            self._model = None
+            return
+
         try:
             import live2d.v3 as l2d
             self._live2d = l2d
