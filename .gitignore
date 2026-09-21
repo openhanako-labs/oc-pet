@@ -8,6 +8,7 @@ data/
 *.jpg
 *.ico
 crash_trace.txt
+crash_trace_*.txt
 logs/
 
 # Python

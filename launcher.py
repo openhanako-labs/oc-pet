@@ -172,6 +172,43 @@ def _latest_crash_dump() -> "Path | None":
     return zips[0] if zips else None
 
 
+def _package_child_crash(child_started_at: float) -> "Path | None":
+    """把**本次**子进程崩溃留下的现场打包成 zip；无新现场时返回 None。
+
+    2026-09-21：此前这里只打印 ``_latest_crash_dump()``（logs/ 下最新 zip）
+    却写"已打包"，而子进程 3s 后就复活，crash_collector._collect_stale_crash
+    又要求 crash_trace.txt 年龄 ≥30s 才肯打包——两个常量打架，导致自动复活
+    路径下**每次崩溃都不生成新包**，日志却指着几天前的旧 zip 说现场在此。
+
+    这里只认 mtime 晚于子进程启动时刻的 crash_trace.txt，否则会把上次崩溃
+    的旧栈重复打包，制造"每次都有现场"的假象。打包后把栈归档改名，避免
+    下次启动被当成"遗留现场"重复消费。
+    """
+    trace = HERE / "crash_trace.txt"
+    try:
+        if not trace.is_file() or trace.stat().st_mtime < child_started_at:
+            return None
+    except Exception:
+        return None
+    try:
+        from core.crash_collector import _collect_once
+        path = _collect_once("launcher_child_crash")
+    except Exception as e:
+        log.warning("崩溃现场打包失败: %s", e)
+        return None
+    if not path:
+        return None
+    try:
+        # 归档到 logs/（与 crash_dump zip 同处，且 logs/ 在 .gitignore 内，
+        # 不让一次性现场文件污染仓库根目录）
+        archive = HERE / "logs" / f"crash_trace_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        trace.replace(archive)
+    except Exception:
+        log.debug("launcher: 非致命异常(已静默吞掉)", exc_info=True)
+    return Path(path)
+
+
 # 启动自检只打印一次（每次 launcher 进程），避免自动复活时刷屏
 _startup_check_reported = [False]
 
@@ -326,13 +363,21 @@ def main() -> int:
             "子进程异常退出（退出码 %s，运行 %.1fs）。%s 后自动复活…",
             exit_code, uptime, RESTART_DELAY,
         )
-        # 崩溃现场提示：把最新 crash_dump zip 路径打到控制台，用户/排查者可直达
-        latest_zip = _latest_crash_dump()
-        if latest_zip is not None:
+        # 崩溃现场提示：只报「本次子进程留下的」现场，别再拿旧 zip 冒充。
+        crash_zip = _package_child_crash(launch_started)
+        if crash_zip is not None:
             log.warning(
                 "崩溃现场已打包: %s（含线程堆栈/C扩展列表/日志尾部，可直接解压查看）",
-                latest_zip,
+                crash_zip,
             )
+        else:
+            stale_zip = _latest_crash_dump()
+            if stale_zip is not None:
+                log.warning(
+                    "本次崩溃未生成新现场包（crash_trace.txt 无更新）；logs/ 下"
+                    "最近一次现场是 %s（可能与本问题无关，勿直接照单全收）",
+                    stale_zip,
+                )
         # 启动期崩溃时追加环境自检（父子同一环境，等价）。
         # 仅在未发出就绪哨兵（=启动失败）时跑，且每次 launcher 进程只跑一次。
         if ready_time is None and not _startup_check_reported[0]:

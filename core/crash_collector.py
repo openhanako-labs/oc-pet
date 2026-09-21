@@ -32,6 +32,10 @@ log = logging.getLogger(__name__)
 
 _COLLECTED = False
 
+# 本进程启动时刻（模块导入时间）。用于区分 crash_trace.txt 是「上次崩溃的
+# 遗留」还是「本次运行期刚写下的」——比固定秒数阈值可靠。
+_PROCESS_START = time.time()
+
 
 class _PydImportTracker:
     """记录每个 C 扩展（.pyd/.so）首次被哪个线程 import。
@@ -209,10 +213,13 @@ def _collect_stale_crash() -> str | None:
     ct = root / "crash_trace.txt"
     if not ct.exists():
         return None
-    # 仅当文件较旧（非本次运行刚生成）才视为上次的遗留
+    # 仅当文件早于本进程启动时刻，才视为上次崩溃的遗留。
+    # 2026-09-21：原先用「年龄 < 30s 视为当前运行期，跳过」的魔法数，与
+    # launcher 的 RESTART_DELAY=3s 直接打架——自动复活路径下每次重启都被判
+    # "太新"，于是崩溃线索系统性丢失（日志里最新现场永远是几天前的旧包）。
+    # 换成与进程启动时刻比较，语义精确，也不再依赖重启延迟这个易变常量。
     try:
-        age = time.time() - ct.stat().st_mtime
-        if age < 30:  # 30s 内视为当前运行期，跳过
+        if ct.stat().st_mtime >= _PROCESS_START:
             return None
     except Exception:
         log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
