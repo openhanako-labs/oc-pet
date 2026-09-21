@@ -413,6 +413,7 @@ class PerceptionMixin:
         self._init_p1_screen_enrich()
         self._init_p1_fact_store()
         self._init_p1_reflection()
+        self._init_p1_life_cursor()
         self._init_p1_embedding_check()
 
     # ── C 线：反重复 + 屏幕增强 ────────────────────────────
@@ -531,6 +532,95 @@ class PerceptionMixin:
         except Exception as e:
             logger.warning("P1 FactStore 初始化失败（非致命）: %s", e)
             self._fact_store = None
+
+    # ── 生活游标（事件流 → 一句近况 → prompt）────────────────
+    #
+    # 2026-09-21。与 ReflectionEngine 消费同一份事件流，但产品不同：
+    #   ReflectionEngine：24h 周期、200 条事件 → **洞察条目** → 只进 UI 面板
+    #   生活游标：6h 窗口、每小时刷新 → **一句叙述** → 注入对话 prompt
+    #
+    # 不搭在 presence 60s tick 上，而是**自己起一个 5 分钟定时器**：
+    # 一是本功能不需要 60s 粒度，二是 pet.py 已 3537 行（护栏 <3550），
+    # 能不加行就不加。真正的刷新间隔由 LifeCursor.interval_minutes 自己卡。
+    LIFE_CURSOR_CHECK_MS = 5 * 60_000
+
+    def _init_p1_life_cursor(self):
+        """生活游标：初始化状态机 + 起定时器（默认关）。"""
+        self._life_cursor = None
+        self._life_cursor_timer = None
+        try:
+            from core.life_cursor import LifeCursor
+            cfg = self.config.get("life_cursor") or {}
+            self._life_cursor = LifeCursor(cfg)
+            if self._life_cursor.enabled:
+                c = self._life_cursor.snapshot()
+                logger.info(
+                    "生活游标已启用（窗口 %.1fh / 刷新间隔 %.0fmin / 最少 %d 条）",
+                    c["window_hours"], c["interval_minutes"], c["min_events"])
+                timer = QTimer(self)
+                timer.timeout.connect(self._maybe_life_cursor)
+                timer.start(self.LIFE_CURSOR_CHECK_MS)
+                self._life_cursor_timer = timer
+            else:
+                logger.info("生活游标未启用（config.life_cursor.enabled=false）")
+        except Exception as exc:
+            logger.warning("生活游标初始化失败（非致命）: %s", exc)
+            self._life_cursor = None
+
+    def _maybe_life_cursor(self):
+        """定时器回调（主线程）：到期且有料 → 交后台线程渲染。
+
+        主线程只做"算不算到期"这种廉价判断；取事件与调模型全在后台。
+        """
+        cur = getattr(self, "_life_cursor", None)
+        if cur is None or not cur.enabled:
+            return
+        try:
+            stream = getattr(self, "_event_stream", None)
+            if stream is None:
+                return
+            now = time.time()
+            start, _end = cur.window(now)
+            records = stream.read_since(start) or []
+            brief = cur.maybe_brief(records, now=now)
+            if not brief:
+                return
+            import threading
+            threading.Thread(target=self._render_life_cursor_worker,
+                             args=(brief,), daemon=True).start()
+        except Exception:
+            logger.debug("生活游标检查跳过", exc_info=True)
+
+    def _render_life_cursor_worker(self, brief: str):
+        """后台线程：utility 模型润色 → 推送【近况】段。
+
+        拿不到模型就用**确定性 brief** 兜底——这一层不静默消失。
+        线程安全性依据同氛围层：``chat_direct`` 对非 user 来源不写
+        ``adapter._history``（见 ``harness_adapter._records_history``）。
+        """
+        try:
+            from core.life_cursor import build_prompt, prompt_section
+            adapter = getattr(getattr(self, "_engine", None), "_adapter", None)
+            text = ""
+            if adapter is not None and hasattr(adapter, "render_life_cursor"):
+                text = adapter.render_life_cursor(build_prompt(brief))
+            if not text:
+                text = brief
+            cur = getattr(self, "_life_cursor", None)
+            if cur is not None:
+                cur.mark_rendered(text, brief=brief)
+            if adapter is not None and hasattr(adapter, "set_life_cursor"):
+                adapter.set_life_cursor(prompt_section(text))
+            logger.info("生活游标 → 注入：%s", text[:70])
+        except Exception:
+            logger.debug("生活游标渲染跳过", exc_info=True)
+
+    def life_cursor_status(self) -> dict:
+        """生活游标状态（供 /pet/state 与排障用）。"""
+        cur = getattr(self, "_life_cursor", None)
+        if cur is None:
+            return {"enabled": False, "reason": "未初始化或初始化失败"}
+        return cur.snapshot()
 
     def _init_p1_reflection(self):
         """B 线 P1-3：ReflectionEngine 注入 + 定时触发（presence 60s tick）。"""

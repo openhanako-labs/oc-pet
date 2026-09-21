@@ -60,6 +60,33 @@ class HanakoPetAdapter:
         except Exception as e:  # 绝不因氛围推送打断对话
             logger.debug("set_atmosphere 失败（非致命）: %s", e)
 
+    def set_life_cursor(self, text: str) -> None:
+        """把生活游标的近况推给记忆注入咽喉点（【近况】段）。
+
+        2026-09-21：同 ``set_atmosphere``。素材是事件流（带时间轴），由
+        ``core/life_cursor.py`` 压成一句话。未推送 / 推空串 → 该段不出现。
+        """
+        try:
+            self._context.set_life_cursor(text)
+        except Exception as e:  # 绝不因近况推送打断对话
+            logger.debug("set_life_cursor 失败（非致命）: %s", e)
+
+    def render_life_cursor(self, prompt: str) -> str:
+        """用 utility 模型把事件流简报润成一句近况。
+
+        走 ``chat_direct(source="life_cursor")`` —— 该来源在 ``_UTILITY_SOURCES``
+        与 ``_DIRECT_SOURCES`` 里都有，因此不抢主对话配额、也绝不进 Hanako 会话。
+        拿不到文字 → 回空串，调用方退化为确定性 brief（这一层不静默消失）。
+        """
+        try:
+            text, _emotion = self.chat_direct(
+                prompt, inject_memory=False, extra_context="", source="life_cursor",
+            )
+            return str(text or "").strip()
+        except Exception as e:  # 非致命：没有文字还有确定性 brief
+            logger.debug("render_life_cursor 失败（退化为 brief）: %s", e)
+            return ""
+
     def render_atmosphere(self, prompt: str, *, timeout_note: str = "") -> str:
         """用 utility 模型把氛围数值渲染成一句自然语言（1-2 句）。
 
@@ -444,6 +471,8 @@ class HanakoPetAdapter:
         "proactive", "idle",
         # 2026-09-21：氛围累积层的低频渲染（实测约 8% 的轮次才触发）
         "atmosphere",
+        # 2026-09-21：生活游标（事件流 → 一句近况），默认每小时最多一次
+        "life_cursor",
     })
 
     #: 内部来源：一律本地 LLM 直连，**绝不进 Hanako session**。
@@ -457,7 +486,7 @@ class HanakoPetAdapter:
     # 提取成具名常量，并把 atmosphere 一次补上。
     _DIRECT_SOURCES = frozenset({
         "proactive", "idle", "memory_extract", "memory_reflect",
-        "screen_enrich", "atmosphere",
+        "screen_enrich", "atmosphere", "life_cursor",
     })
 
     def _output_rules(self) -> str:

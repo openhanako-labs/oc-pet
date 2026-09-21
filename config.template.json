@@ -331,6 +331,16 @@
     "warmup": 8,
     "half_life_hours": 3.0
   },
+  "life_cursor": {
+    "_comment": "生活游标：把事件流（~/.oc-pet/memory/<agent>_events.jsonl，带时间轴）压成**一句近况**，注入 prompt 的【近况】段。治「桌宠不知道你今天怎么过的」。详见 core/life_cursor.py",
+    "_why": "素材早就有了（core/event_stream.py 一直在写），但**没有消费者把它变成叙述**；已有的 ReflectionEngine 是 24h 周期、产出**洞察条目**、只进 UI 面板，回答的是「你是个怎样的人」而不是「你刚在干嘛」。",
+    "_note": "⚠️ 不用事件流里的 emotion 字段（旧管线产物，正价区全塌成 happy），只用 category/scenario/intent/topic + 时间戳。⚠️ source=vision 的事件双重排除。模型可选：拿不到就用确定性 brief 兜底。默认关：开启后每小时最多一次 utility 模型调用。",
+    "enabled": false,
+    "window_hours": 6.0,
+    "interval_minutes": 60.0,
+    "min_events": 5,
+    "max_events": 120
+  },
   "plugin_tools": {
     "enabled": true
   }

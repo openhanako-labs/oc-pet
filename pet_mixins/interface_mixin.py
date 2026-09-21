@@ -345,8 +345,21 @@ class InterfaceMixin:
             # 没有这个字段就完全看不出"到底活着没"。异常一律降级为 None，
             # 不能因为排障字段把状态口搞挂。
             "atmosphere": self._atmosphere_snapshot(),
+            # 2026-09-21：生活游标（事件流 → 一句近况）。默认关、每小时最多一次，
+            # 同样需要可观测（last_skip 能区分"没配好"和"时间没到"）。
+            "life_cursor": self._life_cursor_snapshot(),
             "ts": time.time(),
         }
+
+    def _life_cursor_snapshot(self) -> dict | None:
+        """生活游标的只读快照（供状态口）。未启用/未初始化 → None。"""
+        fn = getattr(self, "life_cursor_status", None)
+        if fn is None:
+            return None
+        try:
+            return fn()
+        except Exception:
+            return {"enabled": False, "error": "snapshot 失败"}
 
     def _atmosphere_snapshot(self) -> dict | None:
         """氛围层的只读快照（供状态口）。未启用/未初始化 → None。"""

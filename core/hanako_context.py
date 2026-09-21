@@ -305,6 +305,20 @@ class HanakoContext:
         """
         return getattr(self, "_atmosphere", "") or ""
 
+    # ── 生活游标（近况）─────────────────────────
+    #
+    # 2026-09-21：素材来自 ``~/.oc-pet/memory/<agent>_events.jsonl``
+    # （事件流，带时间轴），由 pet 侧周期性压成**一句近况**后推到这里。
+    # 与【氛围】同属"当下语境"，所以紧跟在它后面。
+    # 同样不参与事实过滤：它不是记忆事实，是当下状态。
+    def set_life_cursor(self, text: str) -> None:
+        """更新近况段（由 pet 侧在渲染完成后推送）。"""
+        self._life_cursor = str(text or "")
+
+    def read_life_cursor(self) -> str:
+        """读取近况段（未推送过 → 空串，该段不出现）。"""
+        return getattr(self, "_life_cursor", "") or ""
+
     def build_memory_context(self, max_chars: int = 1000) -> str:
         """组合记忆文件为上下文摘要（today / facts / longterm / memory）。
 
@@ -335,13 +349,15 @@ class HanakoContext:
         # 2026-09-21：氛围段插在最前。理由：它的内容只有一行（~40 字），
         # 插在前面几乎不占空间，却能保证「语气参考」总是先于事实清单被读到；
         # 排在后面的话，一旦前面的段吃满预算，它就成了最先被砍的那个。
+        # 近况段同理（也是一行），紧随其后。
         sections = [
             ("氛围", self.read_atmosphere, None, False, 0.08),
-            ("今日", self.read_today, 300, False, 0.12),
-            ("事实", self.read_facts, None, False, 0.18),
-            ("桌宠", self.read_pet_memory, None, True, 0.14),
-            ("长期", self.read_longterm, None, True, 0.14),
-            ("记忆", self.read_memory, None, True, 0.14),
+            ("近况", self.read_life_cursor, None, False, 0.08),
+            ("今日", self.read_today, 300, False, 0.11),
+            ("事实", self.read_facts, None, False, 0.17),
+            ("桌宠", self.read_pet_memory, None, True, 0.12),
+            ("长期", self.read_longterm, None, True, 0.12),
+            ("记忆", self.read_memory, None, True, 0.12),
         ]
         # 保底字数约束：太小无意义，太大反而把前面的段锁死
         min_floor, max_floor = 60, 600
