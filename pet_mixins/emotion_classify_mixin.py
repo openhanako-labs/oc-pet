@@ -170,11 +170,10 @@ class EmotionClassifyMixin:
         self._classify_enabled = bool(cfg.get("enabled", True))
         self._classify_min_conf = float(cfg.get("min_confidence", _MIN_CONFIDENCE))
 
-        # 氛围层与分类器**解耦**（2026-09-21）：结构族（source=ratio）不靠分类器，
-        # 所以初始化放在 enabled 早返回**之前**——不然"关掉分类器 + 开氛围"
-        # 会得到一个永远不初始化的层，而且一声不响。
+        # 2026-09-21：氛围层**不在这里**初始化，也不受这个早返回影响。
+        # 它由 `_apply_runtime_config` 统一装卸——那才是唯一一条路，
+        # 开关的热生效也挂在同一条路上。结构族（source=ratio）本就不靠分类器。
         self._last_user_text = ""
-        self._init_atmosphere_layer()
 
         if not self._classify_enabled:
             logger.info("情绪分类器已关闭（config.emotion_classifier.enabled=false）")

@@ -251,8 +251,11 @@ class _InitFake(EmotionClassifyMixin):
 
 
 def _init(atmo):
+    # 2026-09-21：氛围层的接缝从 `_init_emotion_classifier` 换成了它自己的
+    # `_init_atmosphere_layer`（拆出来是为了让设置面板的开关能热生效）。
+    # 启动/保存统一由 `_apply_runtime_config` 调度，这里只测初始化语义本身。
     f = _InitFake(atmo)
-    EmotionClassifyMixin._init_emotion_classifier(f)
+    EmotionClassifyMixin._init_atmosphere_layer(f)
     return f
 
 
@@ -295,5 +298,6 @@ def test_init_disabled_still_constructs():
 def test_init_never_raises_on_garbage_config():
     for cfg in (None, "x", 123, {"enabled": True, "source": 42},
                 {"enabled": True, "beta": "x", "window": -3}):
-        f = _init(cfg)                      # 不应抛出
-        assert getattr(f, "_atmosphere", None) is not None or True
+        f = _InitFake(cfg)
+        # 不应抛出；而且必须回报 True（None 会被热重载当成失败→反复重建）
+        assert EmotionClassifyMixin._init_atmosphere_layer(f) is True, cfg

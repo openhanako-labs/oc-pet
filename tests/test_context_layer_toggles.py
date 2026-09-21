@@ -62,10 +62,15 @@ def test_applier_targets_exist_on_the_mixins():
     assert hasattr(PerceptionMixin, "_init_p1_life_cursor")
 
 
-def test_classifier_init_still_builds_the_atmosphere_layer():
-    """拆成独立方法后，原来的初始化入口不能忘了调它。"""
-    src = _read("pet_mixins/emotion_classify_mixin.py")
-    assert "self._init_atmosphere_layer()" in src
+def test_startup_does_not_own_the_context_layers():
+    """★ 启动路径不能自己再装一遍。
+
+    否则启动时初始化两次（日志里同一行打两遍），而且两套路径各记各的账。
+    这与仓库已有的 ``test_startup_no_longer_calls_inits_separately`` 是同一条纪律：
+    **启动也只走 `_apply_runtime_config` 这一条路**。
+    """
+    assert "self._init_atmosphere_layer()" not in _read("pet_mixins/emotion_classify_mixin.py")
+    assert "self._init_p1_life_cursor()" not in _read("pet_mixins/perception_mixin.py")
 
 
 # ── 2. 可重复调用 ───────────────────────────────────────

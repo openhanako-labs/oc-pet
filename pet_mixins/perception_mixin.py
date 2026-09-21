@@ -413,7 +413,9 @@ class PerceptionMixin:
         self._init_p1_screen_enrich()
         self._init_p1_fact_store()
         self._init_p1_reflection()
-        self._init_p1_life_cursor()
+        # 2026-09-21：生活游标**不在这里**初始化——它由 `_apply_runtime_config`
+        # 统一装卸（启动/保存设置/手改 config.json 都走那一条路，
+        # 否则启动时会被初始化两次，设置面板的开关也没法热生效）。
         self._init_p1_embedding_check()
 
     # ── C 线：反重复 + 屏幕增强 ────────────────────────────
