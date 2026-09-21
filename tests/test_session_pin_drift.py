@@ -148,6 +148,22 @@ def _adapter(tmp_path, monkeypatch, pinned=None, owned=None):
     return a
 
 
+def _validate_and_wait(a, timeout=5.0):
+    """跑一次 pin 校验并**等它跑完**。
+
+    2026-09-21：以前直接 `a._validate_pin_async()` 就走，留下一个孤儿线程 ——
+    测试结束、monkeypatch 撤销之后它才调 `_save_pinned_sessions()`，于是：
+      - 落到**真实**的 `~/.hanako/pets/session_ophelia.json`（实测 189B → 73B）；
+      - 或者落进**下一个测试**正被 monkeypatch 的路径，把人家刚写好的 pin 冲掉
+        （全量回归里偶发的 `assert None == 'sess_ROUNDTRIP'`）。
+    顺带：过去那几条断言其实是在赌“线程跑得快”，现在才是真的确定。
+    """
+    t = a._validate_pin_async()
+    if t is not None and hasattr(t, "join"):
+        t.join(timeout=timeout)
+    return t
+
+
 def test_unowned_pin_is_discarded(tmp_path, monkeypatch):
     """★ 无归属标记的 pin = 漂移残留 → 丢弃。
 
@@ -157,20 +173,35 @@ def test_unowned_pin_is_discarded(tmp_path, monkeypatch):
                  pinned={"ophelia": "sess_DRIFTED"}, owned={})
     a._pinned_session_id = "sess_DRIFTED"
 
-    a._validate_pin_async()
+    _validate_and_wait(a)
 
     assert "ophelia" not in a._agent_pinned, "无标记的 pin 应被丢弃"
     assert a._pinned_session_id is None
 
 
+def _offline(monkeypatch):
+    """模拟"联网失败"（`_check` 里是 `HanaClient.from_env().list_sessions()`）。
+
+    2026-09-21：原来这几条测试**没等**后台校验就断言 —— 它们在赌"线程跑得慢"。
+    一旦真的等它（join），本机真能连上 Hana，`sess_MINE` 自然不存在 → 被丢弃，
+    测试就红了。契约是"**联网失败**时不误删"，那就该把联网失败**演出来**，
+    而不是指望这台机器恰好连不上。
+    """
+    def _boom(*a, **k):
+        raise RuntimeError("离线（测试：不因联网失败误删合法 pin）")
+
+    monkeypatch.setattr("core.hana_client.HanaClient.from_env", staticmethod(_boom))
+
+
 def test_owned_pin_is_kept(tmp_path, monkeypatch):
-    """有标记且指向同一会话 → 信任（不因联网失败而误删）。"""
+    """有标记且指向同一会话 → 联网失败也不该误删。"""
+    _offline(monkeypatch)
     a = _adapter(tmp_path, monkeypatch,
                  pinned={"ophelia": "sess_MINE"},
                  owned={"ophelia": "sess_MINE"})
     a._pinned_session_id = "sess_MINE"
 
-    a._validate_pin_async()
+    _validate_and_wait(a)
 
     assert a._agent_pinned.get("ophelia") == "sess_MINE", "合法 pin 不该被丢"
 
@@ -180,7 +211,7 @@ def test_owned_mismatch_is_discarded(tmp_path, monkeypatch):
     a = _adapter(tmp_path, monkeypatch,
                  pinned={"ophelia": "sess_X"},
                  owned={"ophelia": "sess_Y"})
-    a._validate_pin_async()
+    _validate_and_wait(a)
     assert "ophelia" not in a._agent_pinned
 
 
@@ -188,12 +219,32 @@ def test_discard_persists_to_disk(tmp_path, monkeypatch):
     """丢弃必须落盘——否则下次启动又读到同一条脏 pin。"""
     a = _adapter(tmp_path, monkeypatch,
                  pinned={"ophelia": "sess_DRIFTED"}, owned={})
-    a._validate_pin_async()
+    _validate_and_wait(a)
 
     p = tmp_path / "session_ophelia.json"
     assert p.exists(), "丢弃后应落盘"
     data = json.loads(p.read_text(encoding="utf-8"))
     assert "ophelia" not in (data.get("pinned") or {})
+
+
+def test_validation_is_joinable(tmp_path, monkeypatch):
+    """★ 联网校验必须能被 `join`。
+
+    它是个后台线程，没问题；问题是它以前**没人拿得住**（返回 None），
+    于是测试无法等它 —— 孤儿线程的落盘时机就完全看运气：
+    测试结束、monkeypatch 撤销之后它才写，就落到真实 pin 上了。
+
+    注意：无归属标记的 pin 走**同步**分支（不联网、不起线程），所以这里
+    必须用带 owned 标记的 pin 才能拿到线程。
+    """
+    _offline(monkeypatch)
+    a = _adapter(tmp_path, monkeypatch,
+                 pinned={"ophelia": "sess_MINE"},
+                 owned={"ophelia": "sess_MINE"})
+    t = a._validate_pin_async()
+    assert t is not None, "联网校验应当把线程交出来"
+    assert hasattr(t, "join"), "至少要能 join"
+    t.join(timeout=5.0)
 
 
 # ══════════════════════════════════════════════════════════════

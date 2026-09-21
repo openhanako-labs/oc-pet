@@ -477,6 +477,61 @@ def test_plugins_dir_stamp_handles_missing_dirs(monkeypatch):
     assert ConversationEngine._plugins_dir_stamp() is None
 
 
+# ── ②b 真跑一遍 `_plugin_roots`（2026-09-21 补）────────────────
+
+
+def test_real_plugin_roots_are_reachable():
+    """★ 不注入，真的走一遍 `_plugin_roots()`。
+
+    2026-09-21：这一行里藏过一个 **NameError** —— 本模块没 `import Path`，
+    而 `_plugins_dir_stamp` 的宽 except 把它吞成"拿不到戳"。后果是 mtime 守卫
+    **永远跳过不了**：每 30s 全量重扫插件目录 + 正则解析上百个 JS 文件，
+    2026-09-14 那次优化白写，而且一行日志都不说原因（用户看到的就是
+    日志里每 30s 刷两行 "Tool registry: 100 tools from plugins"）。
+
+    上面四条测试全都 monkeypatch 了 `_plugin_roots`，正好绕过这一行 ——
+    它们全绿，而线上每 30s 烧一次。**注入点既是测试的便利，也是测试的盲区。**
+    """
+    from core.conversation_engine import ConversationEngine
+
+    roots = ConversationEngine._plugin_roots()          # 不许抛
+    assert roots, "插件根目录列表不该是空的"
+    assert all(hasattr(r, "is_dir") for r in roots)
+
+    has_plugin_dirs = False
+    for r in roots:
+        try:
+            if r.is_dir() and any(c.is_dir() for c in r.iterdir()):
+                has_plugin_dirs = True
+                break
+        except OSError:
+            continue
+    if has_plugin_dirs:
+        assert ConversationEngine._plugins_dir_stamp() is not None, \
+            "有插件目录却拿不到戳 → 守卫失效，会退化成每轮全量重扫"
+
+
+def test_stamp_failure_is_loud(monkeypatch, caplog):
+    """★ 拿不到戳时必须留下日志。
+
+    一个永远走昂贵分支的"保守回退"不是回退，是常态 ——
+    而安静的常态没人会去查。但也不能每 30s 吵一次（那只是换一种刷屏）。
+    """
+    from core.conversation_engine import ConversationEngine
+
+    def _boom():
+        raise RuntimeError("假装根目录算不出来")
+
+    monkeypatch.setattr(ConversationEngine, "_plugin_roots", staticmethod(_boom))
+    monkeypatch.setattr(ConversationEngine, "_stamp_warned", False, raising=False)
+
+    with caplog.at_level("WARNING"):
+        assert ConversationEngine._plugins_dir_stamp() is None
+    assert any("插件目录戳获取失败" in r.message for r in caplog.records), \
+        "静默回退：没人会知道守卫失效了"
+    assert ConversationEngine._stamp_warned is True, "吵过一次就该闭嘴"
+
+
 # ── ③ 后台任务避让 ──
 
 

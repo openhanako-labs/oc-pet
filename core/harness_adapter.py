@@ -342,8 +342,19 @@ class HanakoPetAdapter:
             self._save_pinned_sessions()
 
         import threading
-        threading.Thread(target=_check, daemon=True,
-                         name="pin-validate").start()
+        t = threading.Thread(target=_check, daemon=True, name="pin-validate")
+        t.start()
+        # 2026-09-21：把线程交出去，调用方（尤其是测试）才能 join。
+        #
+        # 原先它是个**孤儿**，而且两个毛病都从这一个点长出来：
+        #   ① 测试结束、monkeypatch 已撤销之后它才调 `_save_pinned_sessions()`，
+        #      于是落到了**真实**的 `~/.hanako/pets/` 上（实测把真 pin 从
+        #      189B 擦成 73B）；
+        #   ② 更阴的是它会落进**下一个测试**当时正被 monkeypatch 的路径里，
+        #      把那个测试刚写好的 pin 冲掉 —— 全量回归里偶发的
+        #      `assert None == 'sess_ROUNDTRIP'` 就是它。
+        # 异步本身没错，错的是“没人拿得住它”。
+        return t
 
     def _save_pinned_sessions(self) -> None:
         """把 pin 写回磁盘（失败静默——不因写盘失败影响对话）。"""

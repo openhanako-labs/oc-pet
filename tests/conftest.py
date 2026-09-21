@@ -243,3 +243,85 @@ def _workspace_config_snapshot_guard():
         "conftest 的 _block_real_config_writes 守卫。请检查是否又出现新的落盘入口"
         "（尤其是会跨测试边界的后台线程/定时器）。"
     )
+
+
+# ══════════════════════════════════════════════════════════════
+#  会话级守卫：pin 一律不得落到真实 ~/.hanako/pets/
+# ══════════════════════════════════════════════════════════════
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _block_real_pin_writes(tmp_path_factory):
+    """会话级：把 pin 落盘路径钉到临时目录，收尾再核对真实文件没被动过。
+
+    2026-09-21。`_validate_pin_async()` 会起一个后台线程去核对「会话是否仍存在」，
+    核对失败就 `_save_pinned_sessions()`。这个线程**没人 join**，于是常常在
+    测试结束、monkeypatch 撤销**之后**才落盘：
+
+      - 写进真实的 `~/.hanako/pets/session_ophelia.json`（实测 189B → 73B）；
+      - 更阴的是落进**下一个测试**当时正被 monkeypatch 的路径，把人家刚写好的
+        pin 冲掉 —— 全量回归里偶发的 `assert None == 'sess_ROUNDTRIP'` 就是它。
+
+    定位手段（留着以后用）：临时挂个 `-p` 插件包住 `_save_pinned_sessions`，
+    打印目标路径 + 调用栈，一眼能看到
+    `threading.py <- harness_adapter.py:342` 在写真实路径。
+
+    上面那个 config 守卫是「改了就报错」；这里改成「**先拦住**、再对账」：
+    pin 丢了会让桌宠下次对话重开会话，拦住比报警值钱。
+    """
+    import core.harness_adapter as ha
+
+    class _Probe:
+        agent_id = "ophelia"
+
+    real = None
+    try:
+        real = ha.HanakoPetAdapter._pinned_path(_Probe())
+    except Exception:  # noqa: BLE001  拿不到就算了，下面按 None 跳过对账
+        real = None
+    before = None
+    try:
+        if real is not None and real.is_file():
+            before = real.read_bytes()
+    except OSError:
+        before = None
+
+    sandbox = tmp_path_factory.mktemp("pin-sandbox")
+    orig = ha.HanakoPetAdapter.__dict__.get("_pinned_path")
+    ha.HanakoPetAdapter._pinned_path = (
+        lambda self=None: sandbox / f"session_{getattr(self, 'agent_id', 'x')}.json")
+    yield sandbox
+
+    # 收尾顺序很重要：**先等孤儿线程写完**（重定向还在，它们写进沙箱），
+    # 再撤重定向、再对账。反过来的话，线程会在属性还原之后才落盘 →
+    # 又写回真实文件（第一版就是这么漏的：前 189B → 后 72B）。
+    import threading
+
+    for t in threading.enumerate():
+        if t.name == "pin-validate" and t.is_alive():
+            t.join(timeout=15)
+
+    if orig is not None:
+        ha.HanakoPetAdapter._pinned_path = orig
+
+    if real is None:
+        return
+    try:
+        now = real.read_bytes() if real.is_file() else None
+    except OSError:
+        return
+    if now == before:
+        return
+
+    note = "未恢复"
+    try:
+        if before is not None:
+            real.write_bytes(before)
+            note = "已自动恢复原内容"
+    except OSError as e:
+        note = f"恢复失败：{e}"
+    raise AssertionError(
+        f"测试改写了真实 pin（{real}，{note}）——说明有落盘路径绕过了 "
+        "_block_real_pin_writes 守卫。最可能是后台线程/定时器跨了测试边界"
+        "（`_validate_pin_async` 的 pin-validate 线程就是历史元凶）。"
+    )

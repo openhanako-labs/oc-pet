@@ -20,7 +20,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-
+from pathlib import Path
 from .harness_adapter import HanakoPetAdapter
 from .perception import PerceptionController
 
@@ -1092,7 +1092,18 @@ class ConversationEngine:
                         mt = 0.0
                     parts.append(f"{d.name}:{mt:.0f}")
             return "|".join(parts) if parts else None
-        except Exception:
+        except Exception as exc:  # 拿不到戳 → 调用方保守地做一次全量刷新
+            # 2026-09-21：这里原来是裸 `except Exception: return None` + 完全静默。
+            # 后果：`_plugin_roots()` 里一个 **NameError**（本模块没 import Path）
+            # 被吞成"拿不到戳"→ mtime 守卫**永远跳过不了** → 每 30s 全量重扫
+            # 一遍插件（2026-09-14 那次性能优化白写），而且没有一行日志说明原因。
+            #
+            # 教训：**保守回退必须吵**。一个永远走昂贵分支的"回退"不是回退，
+            # 是常态；而安静的常态没人会去查。
+            if not getattr(cls, "_stamp_warned", False):
+                cls._stamp_warned = True
+                logger.warning(
+                    "插件目录戳获取失败（守卫失效，每轮热刷新都会全量重扫）: %s", exc)
             return None
 
     def _is_stale(self, gen: int) -> bool:
