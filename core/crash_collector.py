@@ -80,6 +80,33 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _purge_own_dump() -> None:
+    """删除本进程刚生成的 dump（按 PID 精确匹配 CrashDumps/*.dmp）。
+
+    Windows Error Reporting 异步写 dump，删除可能失败——失败无害，launcher
+    启动时通过 _cleanup_legacy_dumps 兜底清理。仅 Python 异常路径能跑到
+    这里；C 层崩溃 atexit 不跑，靠 launcher 兜底。不碰其他进程的 dump。
+    """
+    import os as _os
+    local = _os.environ.get("LOCALAPPDATA", "")
+    if not local:
+        return
+    crash_dir = _os.path.join(local, "CrashDumps")
+    if not _os.path.isdir(crash_dir):
+        return
+    try:
+        pid = _os.getpid()
+        marker = f".{pid}."
+        for name in _os.listdir(crash_dir):
+            if name.endswith(".dmp") and marker in name:
+                try:
+                    _os.remove(_os.path.join(crash_dir, name))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 def _collect_once(reason: str) -> str | None:
     """执行一次收集，返回生成的 zip 路径或 None。幂等（只跑一次）。"""
     global _COLLECTED
@@ -165,6 +192,13 @@ def _collect_once(reason: str) -> str | None:
                 f"platform={sys.platform}",
             ]
             zf.writestr("env.txt", "\n".join(env))
+
+        # 6) 删掉本进程刚生成的 Windows Error Reporting dump
+        # Python 异常路径能跑到这里；C 层崩溃 atexit 不跑，靠 launcher 启动时兜底。
+        try:
+            _purge_own_dump()
+        except Exception:
+            log.debug("crash_collector: 非致命异常(已静默吞掉)", exc_info=True)
 
         log.warning("崩溃现场已打包: %s", zip_path)
         return str(zip_path)

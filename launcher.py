@@ -24,6 +24,36 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
+# ── 崩溃 dump 清理（2026-09-21）──
+# Windows Error Reporting 在任何进程 Access Violation 时会自动写本地 dump
+# 到 %LOCALAPPDATA%\CrashDumps\，大小可达几百 MB（例如 oc_pet.exe 崩一次
+# 就 22 MB，python.exe 崩一次 668 MB）。d3e8585 修完 Live2D v3 moc3 守门后
+# oc-pet 已稳定，但如果未来某个未知 bug 让它挂，dump 会永远躺在用户 C 盘
+# ——Windows 不会自动清理，用户也没预期自己机器上会积累这些文件。
+#
+# 本函数在每次启动早期运行一次：扫目录 + 按前缀删除，开销毫秒级（无后台
+# 线程、无 PEB hack、无注册表改动，也不影响用户其他程序如 chrome.exe 的
+# dump）。开发机上 python.exe 自己产生的 dump 不在清理范围内——由用户自行
+# 排查，或按需在开发环境手动清理。
+def _cleanup_legacy_dumps() -> None:
+    """删除 CrashDumps 下 oc_pet.exe.*.dmp 的残留。静默失败，永不抛。"""
+    local = os.environ.get("LOCALAPPDATA", "")
+    if not local:
+        return
+    crash_dir = os.path.join(local, "CrashDumps")
+    try:
+        if not os.path.isdir(crash_dir):
+            return
+        for name in os.listdir(crash_dir):
+            if name.startswith("oc_pet.exe.") and name.endswith(".dmp"):
+                try:
+                    os.remove(os.path.join(crash_dir, name))
+                except OSError:
+                    pass  # 文件被 WER 占用或删除失败都不影响监督
+    except OSError:
+        pass
+
+
 # ── 日志（2026-09-10 加固）──
 # 原来只靠 basicConfig 的 stderr StreamHandler。实测事故：HanaAgent → cmd /c →
 # launcher → main.py，cmd 的 stderr 是**无人读取的管道**，写满后 launcher 自己
@@ -251,6 +281,10 @@ def _resolve_python() -> str:
 def main() -> int:
     python = _resolve_python()
     log.info("OC 桌宠监督器启动 | python=%s | main=%s", python, MAIN.name)
+
+    # 启动早期清一次历史 dump：C 层崩溃时 atexit 不跑，crash_collector
+    # 无法清理，这里作为兜底。开销毫秒级，无后台线程。
+    _cleanup_legacy_dumps()
 
     restart_timestamps: list[float] = []
     child: "subprocess.Popen | None" = None
