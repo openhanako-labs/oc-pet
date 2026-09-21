@@ -40,6 +40,24 @@ TOOL_END_SUMMARY_MIN_CHARS = 8
 # 工具链耗时超过该秒数视为"长任务"（无摘要文本时也主动汇报）
 LONG_TOOL_MIN_SECONDS = 30.0
 
+# ── 庆祝时机（2026-09-21）─────────────────────
+# 庆祝的**触发点**从 tool_end success 改到了 turn_end：
+#
+#   旧行为：一次对话里几十个工具调用 = 几十次「完成啦！」撒花 + 语音播报。
+#           实测 19:28–19:30 三分钟内播了 6 次（工具结束只是中间步骤，
+#           不是"做完了"）。
+#   新行为：只在一轮对话真的结束时庆祝一次。
+#
+# ⚠️ 这条链路历史上是**死的**（监视归属绑错键，助手自己的对话被挡在门外），
+# 所以它的强度从没被真实流量检验过；2026-09-21 修复生效后才暴露。
+
+#: 两次庆祝之间的最小间隔（秒）。只用于防刷屏（WS 重放/镜像/子代理会话
+#: 都可能带来成串的 turn_end），不承担"每次都不播"的语义。
+CELEBRATE_MIN_INTERVAL = 10.0
+
+#: 只有"本回合真跑过工具"才庆祝。否则每句闲聊（"谢谢"）都撒花播报。
+CELEBRATE_REQUIRES_TOOL = True
+
 
 def clean_bubble_text(text: str) -> str:
     """清理气泡文本：去代码块、markdown、HTML 标签、元信息。
@@ -311,18 +329,22 @@ def map_event_to_mood(event: dict) -> tuple:
         message = event_tool_message(event)
         emotion = "neutral"
     elif event_type == "turn_end":
-        message = ""  # 不往气泡塞“待机中”，避免覆盖对话回复
-        emotion = "neutral"
+        # 2026-09-21：庆祝**挪到这里** —— 只有真正的对话回合结束才庆祝。
+        # 原先挂在 tool_end success 上：一次对话里几十个工具调用 = 几十次
+        # 「完成啦！」撒花 + 语音播报（实测 19:28–19:30 三分钟内 6 次）。
+        # 工具结束只是中间步骤，不是"做完了"；回合结束才是用户能感知的那件事。
+        mood = "celebrating"
+        message = ""   # 气泡交给庆祝分支；这里不塞字，避免覆盖对话回复
+        emotion = "happy"
 
     # tool_end 特殊处理（有 success 字段）
-    # G：success → mood="celebrating"（emotion 仍 happy）；failure → 维持 error。
-    # 注意：celebrating 是新增状态键，不替换 happy（happy 词表/表情全保留）。
+    # G：failure → error（遇到问题）；2026-09-21 起 success **不再庆祝**（见上），
+    # 只把状态钉在 working，免得工具链中途被推回 idle 再弹起来。
     if event_type == "tool_end":
-        success = event.get("success", True)
-        if success:
-            mood = "celebrating"
-            message = "完成啦"
-            emotion = "happy"
+        if event.get("success", True):
+            mood = "working"
+            message = ""
+            emotion = "neutral"
         else:
             mood = "error"
             message = "遇到问题"
@@ -453,6 +475,9 @@ class HanakoMonitor:
         self._tool_end_last_push = 0.0
         # BugFix #5-E：缓存最近一次成功 tool_end 事件（celebrating 带摘要汇报用）
         self._last_tool_end_event: dict = {}
+        # 2026-09-21：本回合有没有跑过工具 + 上次庆祝时刻（见 CELEBRATE_* 常量）
+        self._turn_had_tool = False
+        self._celebrate_last_push = 0.0
 
     # ── BugFix #5-E：tool_end 摘要提取 ─────────────────────
 
@@ -800,6 +825,10 @@ class HanakoMonitor:
         # BugFix #5-E：缓存最近一次成功 tool_end 事件（celebrating 带摘要汇报用）
         if event_type == "tool_end" and event.get("success", True) is not False:
             self._last_tool_end_event = dict(event)
+        # 2026-09-21：本回合有没有跑过工具——庆祝只在"真的干了活"的回合发生。
+        # 必须写在**任何早返回之前**：tool_start 会被 1s 节流吞掉。
+        if event_type in ("tool_start", "tool_progress"):
+            self._turn_had_tool = True
         
         # P0 修复：mood_start/mood_text/mood_end —— 累积 <mood> 内省块文本，
         # 解析真实情绪词（开心/好奇/生气…）映射到 emotion key 驱动 Live2D 表情。
@@ -821,15 +850,33 @@ class HanakoMonitor:
             mood, message, emotion = result
             event_type = event.get("type", "")
             
-            # E-watchdog: turn_end 是明确终止信号，立即回 idle
+            # E-watchdog: turn_end 是明确终止信号
+            #
+            # 2026-09-21：**庆祝就在这里发生**（原先挂在 tool_end success 上，
+            # 一次对话几十个工具调用 = 几十次「完成啦！」语音播报）。
+            #
+            # ⚠️ 本分支原先硬编码推 "idle" 并 return —— map_event_to_mood 对
+            # turn_end 的返回值在这条路径上是**死代码**。两处必须一起改，
+            # 否则"改了却不见效"。
             if event_type == "turn_end":
                 self._mood_last_push.clear()  # P2: 清除所有 mood 节流
                 self._current_emotion = "neutral"
                 self._current_state_name = "idle"
                 self._current_anim = "idle"
                 self._mood_acc = ""  # P0：清掉未收尾的 mood 内省块累积
+                had_tool = self._turn_had_tool
+                self._turn_had_tool = False  # 下一回合重新计
                 if self._on_state_change:
-                    self._on_state_change("idle", "", emotion="neutral", state="idle")
+                    now = time.time()
+                    want = (mood == "celebrating"
+                            and (had_tool or not CELEBRATE_REQUIRES_TOOL)
+                            and now - self._celebrate_last_push >= CELEBRATE_MIN_INTERVAL)
+                    if want:
+                        self._celebrate_last_push = now
+                        self._on_state_change("happy", "", emotion="happy",
+                                              state="celebrating")
+                    else:
+                        self._on_state_change("idle", "", emotion="neutral", state="idle")
                 return
             
             # P0 节流：thinking/tool 事件在 turn 期间高频到来，

@@ -287,7 +287,11 @@ class BubbleMixin:
                 # BugFix #5-E：长任务完成带摘要汇报（tool_end details/summary
                 # 有实质摘要时显示摘要气泡+TTS；否则维持原庆祝动画）
                 summary = self._get_celebration_summary()
-                self._do_celebrating(summary=summary)
+                # 2026-09-21：庆祝现在只在**对话回合结束**发生（原先挂在 tool_end 上）。
+                # 回合结束时气泡正显示着助手的回复——默认文案「完成啦！」会把它
+                # 盖掉，所以只在真有长任务摘要时才让它出气泡。
+                self._do_celebrating(summary=summary,
+                                     fallback_bubble=bool((summary or "").strip()))
                 return
             # 开关关闭 → 恢复旧 happy 行为（mood=happy, anim=waving）
             state = "happy"
@@ -454,11 +458,15 @@ class BubbleMixin:
         self._celebration_in_progress = True
         return True
 
-    def _do_celebrating(self, summary: str = ""):
+    def _do_celebrating(self, summary: str = "", fallback_bubble: bool = True):
         """G celebrating：撒花动作 + 3s 情绪表情 + 气泡 + 完工音 + 3s 后回 idle。
 
         BugFix #5-E：summary 非空时气泡/TTS 显示摘要（长任务完成汇报），
         否则维持原「完成啦」庆祝动画。
+
+        ``fallback_bubble=False``（2026-09-21）：无摘要时**不出气泡**，只撒花+
+        表情+完工音。理由：庆祝已改到对话回合结束触发，而那时气泡正显示着
+        助手的回复，塞一句「完成啦！」会把回复盖掉。
 
         硬约束：只通过 AvatarRenderer 统一接口（PetStatusMapper.render_for）驱动，
         不 import/触碰渲染器内部实现（Live2D C 层/渲染线程），不新增渲染线程。
@@ -490,8 +498,11 @@ class BubbleMixin:
             logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         # 3. 气泡（完工反馈；BugFix #5-E：有摘要显示摘要）
         try:
-            bubble_text = (summary or "").strip() or "完成啦！"
-            self._show_bubble(bubble_text, emotion="happy", priority=1)
+            bubble_text = (summary or "").strip()
+            if not bubble_text and fallback_bubble:
+                bubble_text = "完成啦！"
+            if bubble_text:
+                self._show_bubble(bubble_text, emotion="happy", priority=1)
         except Exception:
             logger.debug("bubble_mixin: 非致命异常(已静默吞掉)", exc_info=True)
         # 4. TTS 完工音：走现有 tts provider 管道，非阻塞（后台合成 → 信号回主线程）
