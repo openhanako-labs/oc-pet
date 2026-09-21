@@ -18,6 +18,7 @@
 3. **模板兜底**：两个 key 都得在 config.template.json 里有块——面板能写出去的键，
    模板里必须存在，否则用户配置里会凭空长出没人知道默认值的键。
 """
+import copy
 import json
 import os
 import re
@@ -190,3 +191,82 @@ def test_settings_panel_exposes_both_switches():
     # 收集段：两个键都要被写进待保存的配置里
     assert 'c["atmosphere"] = blk' in src
     assert 'c["life_cursor"] = blk2' in src
+
+
+# ── 4. 真把面板造出来（不是字符串检查）──────────────────
+
+class _StubPM:
+    def list_pets(self):
+        return []
+
+    def get_pet(self, *a, **k):
+        return None
+
+
+def _make_dialog(config):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from ui.settings_dialog import SettingsDialog
+
+    QApplication.instance() or QApplication([])
+    return SettingsDialog(config=copy.deepcopy(config), pet_manager=_StubPM())
+
+
+def _ctx_config():
+    return {
+        "atmosphere": {"enabled": True, "source": "ratio", "theta_hi": 0.5,
+                       "theta_lo": 0.4, "beta": 0.1, "half_life_hours": 3.0},
+        "life_cursor": {"enabled": False, "window_hours": 6.0,
+                        "interval_minutes": 60.0, "min_events": 5,
+                        "max_events": 120},
+        "dialog": {"agent_id": "ophelia"},
+        "agents": [{"id": "miku", "enabled": True,
+                    "position": {"x": 0, "y": 0}, "scale": 1.0,
+                    "builtin": True}],
+        "character": "miku",
+    }
+
+
+def test_panel_switch_reflects_config():
+    dlg = _make_dialog(_ctx_config())
+    assert dlg.atmo_enabled.isChecked() is True
+    assert dlg.life_cursor_enabled.isChecked() is False
+
+
+def test_panel_toggle_preserves_sibling_keys():
+    """★ 开关只能改 `enabled`，**不能把 source / theta / half_life 吃掉**。
+
+    真被吃掉的话不会报错：阈值静默退回情绪族默认值，迟滞带整个落空。
+    这是本次改动里唯一一个"写得出来、也错得出来"的地方。
+    """
+    dlg = _make_dialog(_ctx_config())
+    dlg.atmo_enabled.setChecked(False)
+    dlg.life_cursor_enabled.setChecked(True)
+    dlg._save()                       # 原地改 self._config（写盘在 _commit）
+    out = dlg.get_config()
+    assert out["atmosphere"]["enabled"] is False
+    assert out["life_cursor"]["enabled"] is True
+    assert out["atmosphere"]["source"] == "ratio", "兄弟键被吃了"
+    assert out["atmosphere"]["theta_hi"] == 0.5
+    assert out["atmosphere"]["half_life_hours"] == 3.0
+    assert out["life_cursor"]["window_hours"] == 6.0
+
+
+def test_toggle_shows_up_in_the_write_patch():
+    """★ 开关必须进写盘补丁——不然用户勾了保存，等于没勾。
+
+    写盘走 `config.config_diff(基线快照, 面板现状)`，只落"用户真动过的键"。
+    这一步断了不会报任何错。
+    """
+    import config as cfg_mod
+
+    base = _ctx_config()
+    dlg = _make_dialog(base)
+    dlg.life_cursor_enabled.setChecked(True)
+    dlg._save()
+    patch = cfg_mod.config_diff(base, dlg.get_config())
+    assert "life_cursor" in patch, "开关没进补丁 → 保存等于没点"
+    assert patch["life_cursor"].get("enabled") is True
+    # 没动过的氛围层不该跟着一起落盘
+    assert "atmosphere" not in patch
