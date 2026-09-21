@@ -479,6 +479,33 @@ class PerceptionMixin:
 
     # ── B 线：事实库 + 反思引擎 ────────────────────────────
 
+    def _push_pet_memory(self) -> None:
+        """把 FactStore 渲染成 prompt 段，推给 HanakoPetAdapter。
+
+        2026-09-21：读取侧合并——不迁移真源。Hanako 的 .md 仍归 Hanako，
+        桌宠的事实库仍归桌宠，只在 prompt 组装时把后者当额外一段（【桌宠】）。
+        任何失败静默跳过，绝不阻断对话；没有 adapter / 没有事实库 → 推空串，
+        该段不出现（行为与旧版一致）。
+
+        位置说明：pet.py 有「不得继续膨胀」的护栏测试（上限 3550 行），
+        本方法归 FactStore 的拥有者（本 mixin）而不是 pet.py。
+        """
+        try:
+            adapter = getattr(getattr(self, "_engine", None), "_adapter", None)
+            if adapter is None or not hasattr(adapter, "set_pet_memory"):
+                return
+            store = getattr(self, "_fact_store", None)
+            if store is None:
+                adapter.set_pet_memory("")
+                return
+            from core.memory_facts import render_facts_for_prompt
+            text = render_facts_for_prompt(
+                store.facts(), limit=12, max_chars=600,
+            )
+            adapter.set_pet_memory(text)
+        except Exception as exc:
+            logger.debug("推送桌宠本体记忆跳过: %s", exc)
+
     def _init_p1_fact_store(self):
         """B 线 P1-2：FactStore 注入 + 对话事实记录钩子。"""
         try:
@@ -497,6 +524,10 @@ class PerceptionMixin:
             self._fact_store.set_changed_callback(self._on_fact_store_changed)
             logger.info("P1 FactStore ready (agent=%s, adapter=%s)",
                         self._agent_id, "yes" if adapter else "no")
+            # 2026-09-21：建库后立即推一次本体记忆段，否则要等第一次变化
+            # 才会进 prompt（冷启动时旧事实会静默缺席）。
+            if hasattr(self, "_push_pet_memory"):
+                self._push_pet_memory()
         except Exception as e:
             logger.warning("P1 FactStore 初始化失败（非致命）: %s", e)
             self._fact_store = None

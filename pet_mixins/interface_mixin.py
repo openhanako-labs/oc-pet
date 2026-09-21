@@ -341,8 +341,22 @@ class InterfaceMixin:
             "renderer_format": self._renderer_format(),
             "celebrating_active": celebrating_active,
             "screen": self._screen_snapshot(),
+            # 2026-09-21：氛围层可观测。它默认关闭、而且触发率只有约 3.6%，
+            # 没有这个字段就完全看不出"到底活着没"。异常一律降级为 None，
+            # 不能因为排障字段把状态口搞挂。
+            "atmosphere": self._atmosphere_snapshot(),
             "ts": time.time(),
         }
+
+    def _atmosphere_snapshot(self) -> dict | None:
+        """氛围层的只读快照（供状态口）。未启用/未初始化 → None。"""
+        fn = getattr(self, "atmosphere_status", None)
+        if fn is None:
+            return None
+        try:
+            return fn()
+        except Exception:
+            return {"enabled": False, "error": "snapshot 失败"}
 
     def _screen_snapshot(self) -> dict:
         """当前屏幕观察的只读快照（缓存读取，零成本）。

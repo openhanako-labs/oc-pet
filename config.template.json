@@ -293,6 +293,17 @@
       "proactive": 30
     }
   },
+  "shadow_decision": {
+    "_comment": "影子模式：本地引擎并行判断「这条主动搭话值不值得花一次 LLM 生成」，只写 JSONL、不改任何行为。详见 core/shadow_decision.py 与 docs/决策模型接入架构-参照TerraBlind-2026-09-21.md",
+    "_why": "llm_gate 只管数量（并发/预算/429），不管「这一次值不值得」。先并行测量一段时间，算出「引擎判『不值得』的那些里多少事后看真没必要」，再决定是否升级成真的闸门（P1）。",
+    "enabled": false,
+    "_note": "启用前需先启动本地引擎 projects/local-rlcd/start_server.ps1（127.0.0.1:8077，约 3GB 显存）",
+    "jsonl_path": "data/shadow_decisions",
+    "engine_base_url": "",
+    "timeout": 8,
+    "queue_size": 128,
+    "question": "这条主动搭话值不值得花一次 LLM 生成？"
+  },
   "expression_director": {
     "_comment": "表达决策层：主 LLM 定情绪，本地引擎在同情绪的候选组里挑具体表情预设。引擎离线/低置信时自动走兜底，不阻断对话。详见 docs/表达决策层-2026-09-20.md",
     "enabled": false,
@@ -303,7 +314,22 @@
     "_why": "VA 坐标映射承载不了情绪细粒度（正价区全塌成 happy）；改 LLM 契约又测不出主 LLM。这条路不碰契约、不问模型。",
     "enabled": true,
     "min_confidence": 0.45,
-    "_note": "两个视角共用一套算法：user（用户消息）与 pet（桌宠回复）。语料向量首次会建缓存（core/data/emotion_corpus_vecs_*.json），之后秒起。分类走后台线程，不打主线程。"
+    "_note": "两个视角共用一套算法：user（用户消息）与 pet（桌宠回复）。语料向量首次会建缓存（core/data/emotion_vecs_*.json），之后秒起。分类走后台线程，不打主线程。"
+  },
+  "atmosphere": {
+    "_comment": "氛围累积层（慢变量）：把最近约 10 轮的输入累积成 3 态份额，过阈值时用一句话描述注入 prompt，治「长对话里语气越来越像同一个人」。默认**结构族**（量节奏/形态，不量情绪）。详见 core/atmosphere.py、core/atmosphere_input.py 与 docs/氛围累积层-方案-2026-09-21.md",
+    "_why": "四轮实测，情绪族已被判死：连续效价 + 一阶 IIR 0.0%（解析矛盾）；14 类类别份额 0.0%；3 态极性份额 EMA 原始越阈率 8.1% 但**状态机 arm 率只有 1.4%**，且 θ_hi 只能在 [0.35,0.45] 三格里动、>0.45 直接归零（真实 clear 峰值≈0.45）——根因是上游分类器对中文技术陈述句系统性误判（「让我先搞清楚问题在哪」→ confused、「不用等，现在就跑」→ anxiety），输入没有动态范围。\n\n换结构族后：clear 峰值 0.62–0.98，θ_hi 从 0.45 到 0.65 有**真实梯度**。",
+    "_note": "实测定案（138 轮 / **仅 5 个 session**，滚动窗口 30）：ratio θ_hi=0.50/θ_lo=0.40 → arm 3.6% / 覆盖 26.1% / 中位段 5 轮 / 抖动 0 / 5.1 次每百轮；drift_u θ_hi=0.45/θ_lo=0.35 → arm 3.8% / 覆盖 42.9% / 中位段 10 轮 / 抖动 0。\n\n⚠️ **样本量警告**：轮数分布 [2,8,12,34,82]，116/138 来自两个长会话——参数**有依据，但不够格说验证过**。\n⚠️ θ 必须按族取（见 atmosphere_input.defaults_for）：情绪族 0.40/0.25、结构族 0.50/0.40。混用会让迟滞带整个落空（结构量套 0.25 的 θ_lo → 一旦 arm 就再也不 release，覆盖 87%、中位段 60 轮）。\n⚠️ half_life_hours=3：用户两轮回话间隔是双峰的（同一场对话中位 14.5 分钟，跨开对话 p90 24.3 小时），取几何中点 √(0.24h×24.3h)≈2.4h 取整。隔夜剩 0.2%，不会冒充「最近」。",
+    "source": "ratio",
+    "enabled": false,
+    "beta": 0.1,
+    "theta_hi": 0.5,
+    "theta_lo": 0.4,
+    "delta_render": 0.15,
+    "render_min_turns": 8,
+    "window": 30,
+    "warmup": 8,
+    "half_life_hours": 3.0
   },
   "plugin_tools": {
     "enabled": true

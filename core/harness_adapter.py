@@ -36,6 +36,47 @@ class HanakoPetAdapter:
     不再保留独立的角色 prompt 和 API 配置。
     """
 
+    def set_pet_memory(self, text: str) -> None:
+        """把桌宠本体记忆（FactStore 渲染结果）推给记忆注入咽喉点。
+
+        2026-09-21：读取侧合并——桌宠的事实库不进 Hanako 的 .md，也不反过来
+        迁移，而是由 pet 侧在 FactStore 变化时推到这里，``build_memory_context``
+        把它当额外一段（【桌宠】）。未推送过 → 该段不出现，行为与旧版一致。
+        """
+        try:
+            self._context.set_pet_memory(text)
+        except Exception as e:  # 绝不因记忆推送打断对话
+            logger.debug("set_pet_memory 失败（非致命）: %s", e)
+
+    def set_atmosphere(self, text: str) -> None:
+        """把氛围累积层的渲染结果推给记忆注入咽喉点（【氛围】段）。
+
+        2026-09-21：与 ``set_pet_memory`` 同一套路子——氛围层只算出"该说什么"，
+        真正进 prompt 由 ``build_memory_context`` 的统一分段预算负责。
+        未推送 / 推空串 → 该段不出现，行为与旧版一致。
+        """
+        try:
+            self._context.set_atmosphere(text)
+        except Exception as e:  # 绝不因氛围推送打断对话
+            logger.debug("set_atmosphere 失败（非致命）: %s", e)
+
+    def render_atmosphere(self, prompt: str, *, timeout_note: str = "") -> str:
+        """用 utility 模型把氛围数值渲染成一句自然语言（1-2 句）。
+
+        为什么单独包一层：氛围层的触发是**低频**的（实测约 8% 的轮次），
+        但它需要一次额外模型调用。走 ``chat_direct(source="atmosphere")``
+        ——该来源已列入 ``_UTILITY_SOURCES``，会路由到用户配置的 utility 模型，
+        不抢主对话配额。失败 / 未配置 utility → 回空串，由调用方退化为数值直陈。
+        """
+        try:
+            text, _emotion = self.chat_direct(
+                prompt, inject_memory=False, extra_context="", source="atmosphere",
+            )
+            return str(text or "").strip()
+        except Exception as e:  # 非致命：没有文字还有数值兜底
+            logger.debug("render_atmosphere 失败（退化为数值）: %s", e)
+            return ""
+
     def __init__(self, agent_id: str = "yuexinmiao", builtin: bool = False):
         self.agent_id = agent_id
         self._builtin = builtin
@@ -401,6 +442,22 @@ class HanakoPetAdapter:
     _UTILITY_SOURCES = frozenset({
         "memory_extract", "memory_reflect", "screen_enrich",
         "proactive", "idle",
+        # 2026-09-21：氛围累积层的低频渲染（实测约 8% 的轮次才触发）
+        "atmosphere",
+    })
+
+    #: 内部来源：一律本地 LLM 直连，**绝不进 Hanako session**。
+    #
+    # 与 `_UTILITY_SOURCES` 是**两个不同的轴**（前者问「走不走主对话会话」，
+    # 后者问「谁在消耗对话配额」），所以刻意不复用同一个集合——
+    # 否则以后往任一个轴加来源，都会静默地改变另一个轴的行为。
+    #
+    # 2026-09-21：原先这个清单是写在 `chat()` 里的一行硬编码元组，新增来源
+    # （atmosphere）时必须记得同步改两处，漏一处就会把内部调用打进真实会话。
+    # 提取成具名常量，并把 atmosphere 一次补上。
+    _DIRECT_SOURCES = frozenset({
+        "proactive", "idle", "memory_extract", "memory_reflect",
+        "screen_enrich", "atmosphere",
     })
 
     def _output_rules(self) -> str:
@@ -748,7 +805,7 @@ class HanakoPetAdapter:
         # screen_enrich：屏幕感知语义化标注（pet.py 已显式走 chat_direct，设计意图如此）。
         # chat_direct 内部对非 user 来源不写 self._history（见 _records_history），
         # 避免抽取/反思/主动文案污染本地上下文（deque 会被注入后续对话）。
-        if source in ("proactive", "idle", "memory_extract", "memory_reflect", "screen_enrich"):
+        if source in self._DIRECT_SOURCES:
             return self.chat_direct(message, False, extra_context, tools=None, source=source)
 
         # direct 模式：跳过 Hanako

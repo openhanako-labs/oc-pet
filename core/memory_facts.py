@@ -848,6 +848,82 @@ class FactStore:
         return {"total": len(self._facts), "by_status": counts}
 
 
+def render_facts_for_prompt(
+    facts: list[dict],
+    *,
+    limit: int = 12,
+    max_chars: int = 900,
+    now: datetime | None = None,
+) -> str:
+    """把事实库渲染成可注入 prompt 的文本（每行一条）。
+
+    2026-09-21：oc-pet 自建事实库此前只在 UI 卡片与场景召回里可见，**不进对话**。
+    本函数是「读取侧合并」的渲染端——不迁移真源，只把已有事实按可信度排序
+    后交给 ``hanako_context.build_memory_context`` 当额外一段（读而不再写）。
+
+    排序依据是事实库自己的证据模型（``fact_confidence``），级别用 ``importance``
+    做同名次的稳定排序键；``archive_candidate`` 视为已判定该淘汰，不进对话。
+
+    Args:
+        facts: ``FactStore.facts()`` 的列表（原始 dict 即可，内部容错）
+        limit: 最多渲染几条
+        max_chars: 文本总长上限（防御性；分段预算另有一层）
+        now: 注入时间（测试用）
+
+    Returns:
+        多行文本；无可用事实时返回空串（调用方据此跳过该段）
+    """
+    if not facts:
+        return ""
+
+    now = now or datetime.now(timezone.utc)
+    ranked: list[tuple[float, float, str]] = []
+    for f in facts:
+        if not isinstance(f, dict):
+            continue
+        text = str(f.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            status = derive_status(f, now)
+        except Exception:
+            status = str(f.get("status") or "pending")
+        if status == "archive_candidate":
+            continue
+        try:
+            conf = float(fact_confidence(f, now))
+        except Exception:
+            conf = 0.0
+        try:
+            imp = float(f.get("importance") or 0)
+        except Exception:
+            imp = 0.0
+        ranked.append((conf, imp, text))
+
+    if not ranked:
+        return ""
+
+    ranked.sort(key=lambda t: (t[0], t[1]), reverse=True)
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    used = 0
+    for _conf, _imp, text in ranked:
+        if len(lines) >= limit:
+            break
+        key = normalize_fact_text(text)
+        if key in seen:
+            continue
+        seen.add(key)
+        text = text[:FACT_MAX_TEXT_CHARS]
+        cost = len(text) + 3  # "- " + 换行
+        if used + cost > max_chars:
+            break
+        lines.append(f"- {text}")
+        used += cost
+    return "\n".join(lines)
+
+
 __all__ = [
     "FactStore",
     "DEFAULT_MEMORY_DIR",
@@ -864,4 +940,5 @@ __all__ = [
     "derive_status",
     "fact_confidence",
     "initial_reinforcement_from_importance",
+    "render_facts_for_prompt",
 ]

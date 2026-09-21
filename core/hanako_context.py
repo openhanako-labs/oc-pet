@@ -272,6 +272,39 @@ class HanakoContext:
         """读取 longterm.md — 长期记忆"""
         return _read_file(self._agent_dir / "memory" / "longterm.md")
 
+    # ── 桌宠本体记忆（读取侧合并，不做真源迁移）──────────────
+    #
+    # 2026-09-21：oc-pet 自建的事实库（core/memory_facts.FactStore）带证据双
+    # 时钟、状态机与隐私过滤，但此前只活在 UI 卡片与场景召回里，**不进对话**。
+    # 这里不迁移真源：Hanako 的 .md 仍归 Hanako，桌宠的事实库仍归桌宠，
+    # 只是在 prompt 组装时把后者“推”进来当额外一段（push 模式，见
+    # pet_mixins.perception_mixin 的推送点）。这样两边都不需要改存储格式，
+    # 也不需要决定“谁是真源”。
+    def set_pet_memory(self, text: str) -> None:
+        """更新桌宠本体记忆段（由 pet 侧在 FactStore 变化时推送）。"""
+        self._pet_memory = str(text or "")
+
+    def read_pet_memory(self) -> str:
+        """读取桌宠本体记忆段（未推送过 → 空串，该段不出现）。"""
+        return getattr(self, "_pet_memory", "") or ""
+
+    # ── 氛围累积层（慢变量情绪）────────────────────
+    #
+    # 2026-09-21：与桌宠本体记忆同一套路子——氛围层只负责"算出该说的一句"，
+    # 真正进 prompt 走本函数的分段预算。未渲染 / 推空串 → 该段不出现。
+    def set_atmosphere(self, text: str) -> None:
+        """更新氛围段（由 pet 侧在 atmos 触发渲染后推送）。"""
+        self._atmosphere = str(text or "")
+
+    def read_atmosphere(self) -> str:
+        """读取氛围段（未推送过 → 空串，该段不出现）。
+
+        注意：本段不参与事实过滤（facts_only=False）——它不是一条"关于用户的
+        记忆事实"，而是当下语气参考；让它过 filter_facts_only 会被按事实词典
+        误判丢弃。
+        """
+        return getattr(self, "_atmosphere", "") or ""
+
     def build_memory_context(self, max_chars: int = 1000) -> str:
         """组合记忆文件为上下文摘要（today / facts / longterm / memory）。
 
@@ -283,28 +316,46 @@ class HanakoContext:
         可能不存在（_read_file 已返回空串，不抛异常，见 read_today /
         read_facts / read_longterm）。
         """
-        # (标签, 读取器, 单段硬上限, 是否只保留事实类)
+        # (标签, 读取器, 单段硬上限, 是否只保留事实类, 保底份额)
         # 2026-09-10 接线 core/memory_filter.py：该模块记录的产品决策是
         # 「只用事实类记忆，避免'AI 太懂我'的恐怖谷」，但一直零调用。
         # 所有记忆注入都经本函数，故只需在这一处过滤（单一咽喉点）。
         # 今日/事实两段不筛：前者按日期作用域，后者文件名即事实。
+        #
+        # 2026-09-21 分段保底预算（reserved floor）：原实现是「先到先得」——
+        # 每段只能吃到「当前剩余」，一段吃满就把后面的段饿成空串。事实段
+        # 没有硬上限（cap=None），实测可以把「长期」「记忆」整段挤掉。
+        # 现在每段为后面的段预留 floor，前面的段只能在「剩余 - 后面各段
+        # 保底（含前缀与分隔符）」之内取用；保底总和超预算时按比例压缩，
+        # 连前缀开销都装不下时退化为不预留（保持旧行为）。
+        #
+        # 保底用「份额」而非固定字数：预算是 800–6000 随模型浮动，固定值
+        # 在大预算下会失去保护作用。份额合计 0.80，留 20% 给前面的段去争。
+        #
+        # 2026-09-21：氛围段插在最前。理由：它的内容只有一行（~40 字），
+        # 插在前面几乎不占空间，却能保证「语气参考」总是先于事实清单被读到；
+        # 排在后面的话，一旦前面的段吃满预算，它就成了最先被砍的那个。
         sections = [
-            ("今日", self.read_today, 300, False),
-            ("事实", self.read_facts, None, False),
-            ("长期", self.read_longterm, None, True),
-            ("记忆", self.read_memory, None, True),
+            ("氛围", self.read_atmosphere, None, False, 0.08),
+            ("今日", self.read_today, 300, False, 0.12),
+            ("事实", self.read_facts, None, False, 0.18),
+            ("桌宠", self.read_pet_memory, None, True, 0.14),
+            ("长期", self.read_longterm, None, True, 0.14),
+            ("记忆", self.read_memory, None, True, 0.14),
         ]
+        # 保底字数约束：太小无意义，太大反而把前面的段锁死
+        min_floor, max_floor = 60, 600
         try:
             from core.memory_filter import filter_facts_only
         except Exception as e:  # 过滤不可用 → 不过滤，绝不阻断记忆注入
             logger.warning("memory_filter 不可用，跳过事实类过滤: %s", e)
             filter_facts_only = None
 
-        parts: list[str] = []
-        total = 0
-        for label, reader, cap, facts_only in sections:
-            if total >= max_chars:
-                break
+        sep = "\n\n"
+
+        # ── 第一遍：读 + 过滤，收集非空段（保底份额→字数）──
+        prepared: list[tuple[str, str, int | None, int]] = []
+        for label, reader, cap, facts_only, share in sections:
             text = reader() or ""
             if not text:
                 continue
@@ -328,21 +379,48 @@ class HanakoContext:
                 text = kept
                 if not text:
                     continue
+            floor = max(min_floor, min(max_floor, int(share * max_chars)))
             if cap is not None:
-                text = text[:cap]
-            remaining = max_chars - total
-            if remaining <= 0:
-                break
-            # 计入「【标签】\n」前缀长度，确保整体不超过预算
+                floor = min(floor, cap)   # 段自身装不下的保底没意义
+            prepared.append((label, text, cap, floor))
+        if not prepared:
+            return ""
+
+        # ── 保底预算缩放：保底总和 + 前缀/分隔符开销必须装得下 ──
+        overhead = sum(len(sep) + len(f"【{label}】\n") for label, _, _, _ in prepared)
+        if len(prepared) > 1:
+            overhead -= len(sep)  # 首段之前没有分隔符
+        total_floor = sum(floor for _, _, _, floor in prepared)
+        room_for_floors = max_chars - overhead
+        scale = 1.0
+        if total_floor > 0:
+            if room_for_floors <= 0:
+                scale = 0.0            # 预算连前缀都装不下 → 不预留（回到先到先得）
+            elif total_floor > room_for_floors:
+                scale = room_for_floors / total_floor
+
+        # ── 第二遍：按顺序分配；每段为后面的段预留 floor ──
+        parts: list[str] = []
+        used = 0  # 已占字符数（含段间分隔符）
+        for i, (label, text, cap, _floor) in enumerate(prepared):
             prefix = f"【{label}】\n"
-            body_room = remaining - len(prefix)
-            if body_room <= 0:
-                break
-            text = text[:body_room]
-            total += len(prefix) + len(text)
-            if text:
-                parts.append(f"{prefix}{text}")
-        return "\n\n".join(parts)
+            sep_cost = len(sep) if parts else 0
+            reserve_after = 0
+            for j in range(i + 1, len(prepared)):
+                j_label, _, _, j_floor = prepared[j]
+                reserve_after += len(sep) + len(f"【{j_label}】\n") + int(j_floor * scale)
+            room = max_chars - used - sep_cost - len(prefix) - reserve_after
+            if room <= 0:
+                # 本段吃不到东西（预算已留给后续保底段）→ 跳过，不影响后面的段
+                continue
+            if cap is not None:
+                room = min(room, cap)
+            body = text[:room]
+            if not body:
+                continue
+            parts.append(f"{prefix}{body}")
+            used += sep_cost + len(prefix) + len(body)
+        return sep.join(parts)
 
     # ── 当前 Session ──
 

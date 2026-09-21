@@ -94,6 +94,103 @@ def _block_real_config_writes(monkeypatch):
     return spy
 
 
+@pytest.fixture(autouse=True)
+def _isolate_shadow_decisions(monkeypatch, tmp_path):
+    """禁止任何测试写入仓库真实的 `shadow_decisions/` 目录。
+
+    ## 为什么（2026-09-21 实测）
+
+    `tests/test_shadow_decision.py` 里 `ShadowDecisionRecorder({"enabled": True})`
+    **不传 `jsonl_path`** → 落到默认相对目录 `./shadow_decisions/`，于是
+    `record_outcome("did", ...)` 往**真实数据文件**追加了一条 `decision_id="did"`
+    的占位记录。
+
+    实测复现：跑一次 `pytest tests/test_shadow_decision.py`，
+    `shadow_decisions/shadow_YYYY-MM-DD.jsonl` 从 6 行变 7 行。
+
+    ## 为什么严重
+
+    这份 JSONL 是影子模式攒数据用的（分析目标：「引擎判『不值得』的那些，
+    事后看真的没必要吗」）。测试灌进去的占位记录永远 join 不上真实 decision，
+    只会污染统计。
+
+    ## 同 2808c8a 的教训
+
+    仓库刚为 `config.json` 修过一模一样的事故（测试改写真实产物），
+    那里用的是「源头替换 + 会话级对账」两道守卫；这里给新产物补上第一道。
+
+    Args:
+        monkeypatch: pytest 夹具
+        tmp_path: 每个用例独立的临时目录
+    """
+    import core.shadow_decision as shadow_mod
+
+    fake_dir = tmp_path / "shadow_decisions"
+    monkeypatch.setattr(shadow_mod, "DEFAULT_JSONL_DIR", str(fake_dir),
+                        raising=False)
+    return fake_dir
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _shadow_decisions_snapshot_guard():
+    """会话级兜底：整个会话期间 workspace 的 `shadow_decisions/` 不得被改写。
+
+    为什么还要这一层：`_isolate_shadow_decisions` 是**函数级**守卫，只盖住
+    通过默认路径落盘的实例；若某处直接构造了带真实路径的记录器、或用了
+    后台线程跨测试边界写盘（`_AsyncConfigSaver` 就是这么漏的），函数级
+    守卫拦不住。所以再加一道与文件对账的兜底：会话结束若发现被改 → 恢复
+    原内容，并让本次会话报错。
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent / "shadow_decisions"
+    before: dict[pathlib.Path, bytes] = {}
+    if root.is_dir():
+        for p in root.rglob("*"):
+            try:
+                if p.is_file():
+                    before[p] = p.read_bytes()
+            except OSError:
+                continue
+
+    yield
+
+    if not root.is_dir():
+        return
+    added: list[str] = []
+    changed: list[str] = []
+    for p in root.rglob("*"):
+        try:
+            if not p.is_file():
+                continue
+            data = p.read_bytes()
+        except OSError:
+            continue
+        old = before.get(p)
+        if old is None:
+            added.append(p.name)
+        elif old != data:
+            changed.append(p.name)
+    if not added and not changed:
+        return
+
+    # 新增的删掉；被追加的截回原长度（只做能确保无损的恢复）
+    for name in added:
+        try:
+            (root / name).unlink()
+        except OSError:
+            pass
+    for name in changed:
+        p = root / name
+        try:
+            p.write_bytes(before[p])
+        except OSError:
+            pass
+    raise AssertionError(
+        f"测试改写了 workspace 的 shadow_decisions/（新增 {added}，改动 {changed}）"
+        "——说明有写盘路径绕过了 conftest 的 _isolate_shadow_decisions 守卫。"
+        "请给对应测试传显式 jsonl_path，或检查是否又出现新的落盘入口。"
+    )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _workspace_config_snapshot_guard():
     """会话级兜底：整个会话期间 workspace 的 config.json 不得被改写。

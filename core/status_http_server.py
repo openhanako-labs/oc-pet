@@ -6,7 +6,8 @@
 接口：
     GET  /pet/state      -> {"state": <6态>, "emotion": ..., "anim": ...,
                              "scenario": ..., "agent_id": ..., "renderer_format": ...,
-                             "celebrating_active": bool, "ts": ...}
+                             "celebrating_active": bool, "screen": {...},
+                             "atmosphere": {...}|null, "ts": ...}
     GET  /pet/health     -> {"ok": True}
     POST /pet/set-mode   -> body {"mode": "celebrating"}；白名单校验
                              → EventBus.emit("pet_set_mode", mode=...)
