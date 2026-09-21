@@ -385,9 +385,14 @@ def test_save_with_default_in_multi_pet_mode_does_not_converge_to_single():
          patch.object(dialog, "_save_env", lambda: None):
         dialog._save()
 
-    by_id = {a["id"]: a for a in saved.get("agents", [])}
-    assert by_id["miku"]["enabled"] is True, "多宠模式保存不得收敛成单宠"
-    assert by_id["yuexinmiao"]["enabled"] is True
+    # 2026-09-21：_save 改成补丁语义（config_diff 只提交用户动过的键）。
+    # 多宠状态没被动过 → 补丁里根本不该出现 agents。这比"原样写回"更强：
+    # 磁盘上的 agents 一个字节都不会变，谈不上"悄悄收敛成单宠"。
+    assert "agents" not in saved, "没动过的 agents 不应进入补丁（磁盘上原样保留）"
     assert "character_package" not in saved, (
         "BugFix #4：基础 tab 保存不再写 character_package 死字段"
     )
+    # 磁盘侧的多宠状态不受影响
+    by_id = {a["id"]: a for a in config["agents"]}
+    assert by_id["miku"]["enabled"] is True, "多宠模式保存不得收敛成单宠"
+    assert by_id["yuexinmiao"]["enabled"] is True

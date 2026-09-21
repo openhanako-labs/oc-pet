@@ -221,3 +221,53 @@ def test_schedule_then_wait_does_not_touch_config_json():
     assert cfg.read_bytes() == before, (
         "async_config_saver 在等待窗口后写了真实 config.json"
     )
+
+
+# ══════════════════════════════════════════════════════════
+#  2026-09-21 事故回归：写盘方只能提交自己拥有的键
+# ══════════════════════════════════════════════════════════
+
+def test_pet_manager_submits_only_agents_slice():
+    """PetManager 只能交 `agents` 切片，不得交整份快照。
+
+    原 bug：`update_agent_cfg` 把 `self._config`（**启动时读到的整份快照**）
+    交给共享防抖器，而防抖器的旧语义是"最后提交者胜"——一次拖拽就把用户在
+    设置面板里改过的开关整体盖回启动值（重启后开关复原）。
+    """
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "pet_manager.py").read_text(encoding="utf-8")
+
+    assert 'schedule({"agents":' in src, "PetManager 应只提交 agents 切片"
+    assert "schedule(self._config)" not in src, (
+        "PetManager 又把整份快照交给防抖器了——拖拽会盖掉用户刚改的设置"
+    )
+
+
+def test_no_full_config_snapshot_is_scheduled():
+    """全仓扫描：任何地方都不得把整份配置快照交给防抖写盘器。
+
+    共享防抖器的合并是**顶层补丁**语义，交整份快照等于"我拥有所有键"，
+    会把别的写入者（设置面板、另一个桌宠实例、手改 config.json）的改动盖掉。
+    需要写哪个键就只交哪个键。
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    offenders: list[str] = []
+    for rel in ("pet.py", "pet_manager.py", "main.py"):
+        for src_path in [root / rel]:
+            if src_path.is_file():
+                _scan_snapshot_schedules(src_path, offenders)
+    for sub in ("pet_mixins", "ui", "core"):
+        for src_path in (root / sub).glob("*.py"):
+            _scan_snapshot_schedules(src_path, offenders)
+
+    assert not offenders, (
+        "这些地方把整份 config 快照交给了防抖写盘器：" + ", ".join(offenders)
+    )
+
+
+def _scan_snapshot_schedules(src_path: pathlib.Path, offenders: list[str]) -> None:
+    text = src_path.read_text(encoding="utf-8")
+    for pattern in ("async_config_saver.schedule(self.config)",
+                    "async_config_saver.schedule(self._config)"):
+        if pattern in text:
+            offenders.append(str(src_path.name))

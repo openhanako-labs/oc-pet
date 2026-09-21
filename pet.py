@@ -668,13 +668,14 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             logger.warning("T05 proactive generator 注入失败（回退模板池）: %s", e)
 
     def _on_fact_store_changed(self, result: dict):
-        """主线程：事实库变化通知（日志；后续可接记忆面板刷新）。"""
+        """主线程：事实库变化通知（日志；本体记忆推送见 perception_mixin）。"""
         try:
             added = int(result.get("added", 0) or 0)
             if added:
                 logger.info("[FactStore] added=%d facts", added)
         except Exception:
             logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
+        self._push_pet_memory()  # 重渲染本体记忆段并推给 adapter（实现见 mixin）
 
     def _record_conversation_facts(self, text: str) -> None:
         """对话记忆写入点：engine.send 后把用户文本交给 FactStore 抽取事实。
@@ -1334,14 +1335,23 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             if hasattr(self, '_engine') and self._engine:
                 if hasattr(self._engine, 'set_session_manager'):
                     self._engine.set_session_manager(session_manager)
+            # 记住会话管理器：设置面板改了助手绑定后要重新订正监视归属
+            self._hanako_session_manager = session_manager
             # 注入到 HanakoMonitor（共享 WS 订阅）
             if hasattr(self, '_hanako_monitor') and self._hanako_monitor:
                 if hasattr(self._hanako_monitor, 'set_ws_client'):
                     self._hanako_monitor.set_ws_client(ws_client)
-                # 绑定本桌宠对应的助手：只观测该助手的会话，
-                # 不转播其他 agent 的活动（一个桌宠对应一个助手）
+                # 绑定本桌宠对应的**助手**：只观测该助手的会话。
+                #
+                # 2026-09-21 修：必须用 _persona_agent_id()（dialog.agent_id，如
+                # ophelia），而不是 self._agent_id（那是个 **Live2D 模型包 id**，
+                # 如 miku）。事件按助手目录落盘，用包 id 比就永远不等——
+                # 实测后果：助手自己的主对话全被挡下，而子进程会话因为归属
+                # 判不出而"保守放行"，于是任意助手的子进程活动都能驱动本桌宠。
                 if hasattr(self._hanako_monitor, 'set_agent_context'):
-                    self._hanako_monitor.set_agent_context(self._agent_id, session_manager)
+                    self._hanako_monitor.set_agent_context(
+                        self._persona_agent_id(), session_manager
+                    )
             # G2/A4：会话管理器到手，顺势把派活通道接上（默认关）
             self._init_a2a(session_manager)
             logger.info("Hanako WS injected into PetWindow")
@@ -1446,10 +1456,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             if not tid:
                 return
             cfg.setdefault("dialog", {})["agent_id"] = tid
-            save_config(cfg)
-            # 同步 self.config 快照，避免退出时旧值覆盖
+            # 只提交自己拥有的键（dialog.agent_id），不写整份快照
+            save_config({"dialog": {"agent_id": tid}})
+            # 同步 self.config 快照（只改这一个键）
             try:
-                self.config = cfg
+                self.config.setdefault("dialog", {})["agent_id"] = tid
             except Exception:
                 logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
             # 应用到引擎
@@ -1731,7 +1742,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             def _mark_done():
                 self.config.setdefault("ui", {})["onboarded"] = True
                 try:
-                    save_config(self.config)
+                    save_config({"ui": {"onboarded": True}})
                 except Exception:
                     logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
 
@@ -1745,7 +1756,8 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         """切换行为模式 - 通过 BehaviorParams 完全参数化"""
         self._behavior_mode = mode
         self.config["behavior"] = mode
-        save_config(self.config)
+        # 只提交自己拥有的键，不写整份快照
+        save_config({"behavior": mode})
         self._stop_walking()
         self._motion_state = "idle"
         self._rest_counter = 0
@@ -2027,11 +2039,11 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             if new_scale != self._pet_scale:
                 self._pet_scale = new_scale
                 self._apply_scale()
-                # 持久化到 config
+                # 持久化到 config（只提交自己拥有的键：scale）
                 try:
                     self.config["scale"] = new_scale
-                    from config import save_config, async_config_saver
-                    async_config_saver.schedule(self.config)
+                    from config import async_config_saver
+                    async_config_saver.schedule({"scale": new_scale})
                 except Exception:
                     logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
                 # 缩放反馈：立即更新气泡（缩放是用户主动行为，优先级 ≥ 已显示的对对话气泡）。
@@ -2059,7 +2071,7 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
             try:
                 self.config["scale"] = new_scale
                 from config import async_config_saver
-                async_config_saver.schedule(self.config)
+                async_config_saver.schedule({"scale": new_scale})
             except Exception:
                 logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
         return self._pet_scale
@@ -2421,12 +2433,10 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         mode_label = {"auto": "自动（跟随时间）", "light": "浅色", "dark": "深色"}.get(mode, mode)
         logger.info("主题模式切换：%s", mode_label)
 
-        # 持久化到 config.json
+        # 持久化到 config.json（只提交自己拥有的键）
         try:
-            from config import load_config, save_config
-            cfg = load_config()
-            cfg["theme_mode"] = mode
-            save_config(cfg)
+            from config import save_config
+            save_config({"theme_mode": mode})
         except Exception as e:
             logger.warning("保存主题模式到 config 失败：%s", e)
 
@@ -2477,17 +2487,15 @@ class PetWindow(AudioMixin, AnimationMixin, InteractionMixin, ChatMixin, Behavio
         dialog = SettingsDialog(parent=None, config=self.config, pet_manager=self._pet_manager)
         if dialog.exec():
             self.config = dialog.get_config()
-            save_config(self.config)
+            # 写盘在设置面板内部完成：它用 config.config_diff 只提交**用户真动过的
+            # 键**。这里不再整份回写——整份写会把面板打开期间别的写入者改过的键
+            # 一起盖掉；旧版还要靠"刷新防抖 pending"来补救，那本身就是症状。
+
             # 热重载运行时配置：设置里改了**立刻生效**，不用重启
             # （启动 / 设置保存 / config.json 改动走同一条路 _apply_runtime_config）
             self._apply_runtime_config()
-            # 刷新防抖写盘 pending：避免退出时 async_config_saver 用旧 config 引用
-            # 把设置面板刚保存的切换结果覆盖回原角色。
-            try:
-                from config import async_config_saver
-                async_config_saver.schedule(self.config)
-            except Exception:
-                logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
+            # 助手绑定可能变了（per-pet dialog.agent_id）→ 监视归属跟着换
+            self._rebind_monitor_agent()
             logger.info("配置已保存")
             # 应用即时生效的设置
             self._apply_settings()

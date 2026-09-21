@@ -185,11 +185,9 @@ def open_settings():
     if ok and path:
         os.environ["FRAMEBAKER_PATH"] = path
         logger.info("FrameBaker 路径已设置: %s", path)
-        # 持久化到配置
+        # 持久化到配置（只提交自己拥有的键）
         try:
-            from config import load_config, save_config
-            cfg = load_config()
-            cfg.setdefault("framebaker", {})["path"] = path
-            save_config(cfg)
+            from config import save_config
+            save_config({"framebaker": {"path": path}})
         except Exception as e:
             logger.warning("保存 FrameBaker 配置失败: %s", e)

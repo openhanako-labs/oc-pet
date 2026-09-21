@@ -194,17 +194,19 @@ def test_switch_pet_blocks_missing_resource(monkeypatch):
     assert "shizuku" not in by_id, "缺资源角色不应被启用"
 
 
-def test_switch_pet_schedules_async_saver_on_success(monkeypatch):
-    """切换成功时刷新 async_config_saver pending，避免退出时被旧 config 覆盖回原角色。"""
+def test_switch_pet_commits_only_changed_keys(monkeypatch, _block_real_config_writes):
+    """切换桌宠成功 → 只提交变化过的键（补丁语义）。
+
+    2026-09-21：旧契约是"刷新 async_config_saver pending"，用来压住"退出时
+    被旧 config 覆盖回原角色"的竞态。那个竞态本身来自**整份快照写盘**；
+    现在写盘是补丁语义（config_diff），谁都只能影响自己提交的键，竞态不存在，
+    所以改为断言新契约：补丁里只有真正变了的 agents/character。
+    """
     config = _base_config()
     dialog = _build_dialog(config)
 
     import avatar.factory as fac
     monkeypatch.setattr(fac, "resource_available", lambda cid: (True, ""))
-
-    import config as cfg_mod
-    scheduled = []
-    monkeypatch.setattr(cfg_mod.async_config_saver, "schedule", lambda c: scheduled.append(c))
 
     import ui.settings_dialog as sd
     monkeypatch.setattr(sd.QMessageBox, "information", lambda *a, **k: None)
@@ -218,5 +220,13 @@ def test_switch_pet_schedules_async_saver_on_success(monkeypatch):
 
     dialog._switch_pet()
 
-    assert scheduled, "切换成功应刷新 async_config_saver pending"
-    assert scheduled[-1] is config, "pending 应为最新 config（含切换结果）"
+    calls = _block_real_config_writes.calls
+    assert calls, "切换成功应落盘"
+    patch = calls[-1]
+    allowed = {"agents", "character", "character_package"}
+    assert set(patch) <= allowed, (
+        f"补丁里出现了与切换无关的键：{sorted(set(patch) - allowed)}"
+    )
+    by_id = {a["id"]: a for a in patch.get("agents", [])}
+    assert by_id["sample_live2d"]["enabled"] is True
+    assert patch.get("character") == "sample_live2d"

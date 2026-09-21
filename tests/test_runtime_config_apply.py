@@ -187,10 +187,12 @@ def test_three_entrypoints_share_one_path():
     # 启动
     assert "self._apply_runtime_config()" in src
     assert "self._start_config_watch()" in src
-    # 设置保存（在 save_config 之后）
+    # 设置保存（面板内部写盘；重载在面板返回之后）
     body = src[src.index("def _open_settings"):]
     assert "self._apply_runtime_config()" in body
-    assert body.index("save_config(self.config)") < body.index("self._apply_runtime_config()")
+    # 2026-09-21：写盘由设置面板内部用 config_diff 提交（只含动过的键），
+    # _open_settings 不再整份回写；不变的是"先落盘、后热重载"的次序。
+    assert body.index("dialog.exec()") < body.index("self._apply_runtime_config()")
 
 
 def test_startup_no_longer_calls_inits_separately():

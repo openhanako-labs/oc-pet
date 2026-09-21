@@ -22,6 +22,13 @@ TODO_FILE = Path.home() / ".hanako/plugin-data/todo/todos.json"
 # NOTIFY_FILE imported from paths
 # RESPONSE_FILE imported from paths
 
+# 会话路径 → agent 归属：HanaAgent 把每个助手的会话放在
+# `~/.hanako/agents/<agent_id>/{sessions,subagent-sessions,workflow-sessions}/` 下。
+# 取 `agents/` 后那一段即可——**刻意不限定 `/sessions/`**：子代理会话在
+# `agents/<agent_id>/subagent-sessions/` 下，旧实现只认 `/sessions/`，于是
+# 子进程会话被判成"判断不出归属"，走保守放行混了进来。
+AGENT_DIR_RE = re.compile(r"/agents/([^/]+)/")
+
 # ── 气泡精简算法（移植自 HanakoPro） ─────────────────────
 
 BUBBLE_MAX_CHARS = 72
@@ -728,36 +735,50 @@ class HanakoMonitor:
         self._agent_id = agent_id
         self._session_manager = session_manager
 
-    def _event_belongs_to_agent(self, event: dict) -> bool:
-        """判断事件是否属于本桌宠对应的助手。
+    def _agent_of_event(self, event: dict):
+        """判断事件属于哪个助手；判断不出返回 ``None``。
 
-        事件本身只带 sessionId/sessionPath，优先用 session_manager 把
-        session 映射到 SessionRef（含 agent_id）；映射不到时从
-        session_path 推断（路径形如 ~/.hanako/agents/<agent>/sessions/...）。
+        优先级：
 
-        未绑定 agent_id 时不过滤（向后兼容）；完全无法判断时保守放行
-        （避免误滤掉正常事件）。
+        1. ``sessionPath`` 里的 ``agents/<agent_id>/`` —— 磁盘上的真实归属，最可靠；
+        2. ``session_manager`` 的 ``sessionId`` → ``SessionRef.agent_id``。
+
+        路径形态实测有三种：``sessions`` / ``subagent-sessions`` /
+        ``workflow-sessions``。后两种下属于该助手的会话一样是它在干活，但旧实现
+        因为匹配不上 ``/sessions/`` 而把它归为"判断不出"，走保守放行让**任意**
+        助手的子进程活动都驱动本桌宠（用户报告的正是这个）。
         """
-        if not self._agent_id:
-            return True
-        agent = None
+        path = str(event.get("sessionPath") or "").replace("\\", "/")
+        m = AGENT_DIR_RE.search(path)
+        if m:
+            return m.group(1).strip() or None
         sm = self._session_manager
         if sm is not None:
             try:
                 session = sm._session_for_event(event) if hasattr(sm, "_session_for_event") else None
                 if session is not None:
-                    agent = getattr(session, "agent_id", None) or None
+                    return (getattr(session, "agent_id", None) or "").strip() or None
             except Exception:
-                agent = None
-        # 兜底：从 session_path 解析 agent（路径含 agents/<agent_id>/）
-        if not agent:
-            path = str(event.get("sessionPath") or "").replace("\\", "/")
-            m = re.search(r"/agents/([^/]+)/sessions/", path)
-            if m:
-                agent = m.group(1)
+                return None
+        return None
+
+    def _event_belongs_to_agent(self, event: dict) -> bool:
+        """判断事件是否属于本桌宠对应的助手。
+
+        归属判定见 :meth:`_agent_of_event`。规则：
+
+        - 未绑定 agent_id → 不过滤（向后兼容）
+        - 归属 = 绑定的助手 → 放行（**含**它自己的 ``subagent-sessions``：
+          子任务也是这个助手在干活）
+        - 归属 = 别的助手 → 挡掉（**含**别的助手的子代理会话）
+        - 真的判断不出归属 → 保守放行（避免误滤掉正常事件）
+        """
+        if not self._agent_id:
+            return True
+        agent = self._agent_of_event(event)
         if agent is None:
             return True  # 无法判断，保守放行
-        return agent == self._agent_id
+        return agent.casefold() == str(self._agent_id).strip().casefold()
 
     def push_event(self, event: dict):
         """直接推送事件（WebSocket 模式回调）。

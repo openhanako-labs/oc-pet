@@ -182,8 +182,12 @@ class InteractionMixin:
                         pos = self.pos()
                         self.config.setdefault("window", {})["x"] = pos.x()
                         self.config.setdefault("window", {})["y"] = pos.y()
-                        # 异步防抖保存：释放瞬间不阻塞 GUI 线程（避免拖拽卡顿）
-                        async_config_saver.schedule(self.config)
+                        # 异步防抖保存：释放瞬间不阻塞 GUI 线程（避免拖拽卡顿）。
+                        # 只提交本窗口拥有的切片（window），不交整份 config ——
+                        # 整份快照会把用户在设置面板改过的其他键一起盖掉。
+                        async_config_saver.schedule(
+                            {"window": {"x": pos.x(), "y": pos.y()}}
+                        )
                         if self._on_position_change:
                             self._on_position_change(pos.x(), pos.y())
                     elif self._pet_cuddle:
@@ -283,11 +287,11 @@ class InteractionMixin:
         # 应用旋转效果（朝边缘方向倾斜）
         self._apply_sitting_rotation(edge)
 
-        # 保存位置
+        # 保存位置（只交本窗口拥有的切片，见 drag 释放处的说明）
         self.config.setdefault("window", {})["x"] = x
         self.config.setdefault("window", {})["y"] = y
         # 异步防抖保存（避免通用写盘阻塞）
-        async_config_saver.schedule(self.config)
+        async_config_saver.schedule({"window": {"x": x, "y": y}})
         if self._on_position_change:
             self._on_position_change(x, y)
 

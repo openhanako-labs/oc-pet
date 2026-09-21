@@ -581,6 +581,26 @@ class PerceptionMixin:
             logger.debug("pet: 读 dialog.agent_id 失败", exc_info=True)
         return self._current_char
 
+    def _rebind_monitor_agent(self) -> None:
+        """按当前配置重新绑定监视归属（设置面板保存后调用）。
+
+        为什么必须有这条：`set_hanako_ws` 只在启动时注入一次，而设置面板可以改
+        per-pet 的 `dialog.agent_id`（换助手）。不重新绑定的话，监视归属会一直停在
+        启动时的助手身上——用户看到的就是"换个助手后桌宠还在跟旧的那个"。
+
+        2026-09-21：与 `set_hanako_ws` 共用同一个归属键（`_persona_agent_id()`），
+        两处不一致就又把"看错人"的 bug 请回来了。
+        """
+        mon = getattr(self, "_hanako_monitor", None)
+        if mon is None or not hasattr(mon, "set_agent_context"):
+            return
+        try:
+            mon.set_agent_context(
+                self._persona_agent_id(), getattr(self, "_hanako_session_manager", None)
+            )
+        except Exception:
+            logger.debug("pet: 非致命异常(已静默吞掉)", exc_info=True)
+
     def _substitute_card_vars(self, text: str) -> str:
         """替换角色卡模板变量（{{userName}} 等）。
 

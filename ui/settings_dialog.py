@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import copy
 import logging
 import os
 from PySide6.QtWidgets import (
@@ -41,6 +42,9 @@ class SettingsDialog(QDialog):
     def __init__(self, config: dict = None, pet_manager=None, parent=None):
         super().__init__(parent)
         self._config = config or load_config()
+        # 面板打开时的基线快照：保存时用 config.config_diff 算"用户真动过的键"，
+        # 只把它们落盘，而不是整份回写（详见 _commit）。
+        self._baseline = copy.deepcopy(self._config)
         self._pet_manager = pet_manager
         self.setWindowTitle("设置")
         self.setMinimumSize(380, 400)  # P2: 调小最小尺寸，减少空余空间
@@ -1208,19 +1212,9 @@ class SettingsDialog(QDialog):
             return
 
         # 统一应用切换：agents[].enabled + character + character_package
+        # （_apply_package_selection 内部已用 _commit() 落盘：只提交相对面板基线的变化）
         self._apply_package_selection(agent_id)
-        
-        # P2 Fix: 刷新防抖写盘 pending，确保旧配置不会覆盖本次切换结果。
-        # 原顺序（save → schedule）有竞态：若后台线程正在写旧角色配置，
-        # schedule 的新配置会被覆盖。改为先 flush 旧配置，再保存新配置。
-        try:
-            from config import async_config_saver
-            async_config_saver.shutdown()  # 立即写盘 pending（若有）
-            async_config_saver.schedule(self._config)  # 登记新配置
-        except Exception:
-            logger.debug("settings_dialog: 非致命异常(已静默吞掉)", exc_info=True)
-        
-        save_config(self._config)
+
         self._pkg_status_label.setText(f"已切换到: {agent_id}")
         QMessageBox.information(self, "切换成功", f"桌宠已切换为 '{agent_id}'，重启后生效")
 
@@ -1290,9 +1284,9 @@ class SettingsDialog(QDialog):
         self._config["character_package"] = agent_id
         
         # 2026-09-08: 切换桌宠后自动保存配置（避免用户需要手动保存）
+        # 2026-09-21: 改走 _commit()（只提交相对面板基线的变化），不再整份回写
         try:
-            from config import save_config
-            save_config(self._config)
+            self._commit()
             self._pkg_status_label.setText(f"已切换为: {agent_id}（下次重启生效）")
         except Exception as e:
             self._pkg_status_label.setText(f"切换成功但保存失败: {e}")
@@ -1996,9 +1990,31 @@ class SettingsDialog(QDialog):
             hbc["localhost_only"] = self.hb_localhost_only.isChecked()
 
         # 落盘：将内存改动持久化到 config.json（原子写），否则关闭后配置丢失。
-        save_config(self._config)
+        # 落盘：只提交**用户真动过的键**（相对面板打开时的基线算差异）。
+        self._commit()
 
         self.accept()
+
+    def _commit(self):
+        """把用户真动过的键写盘（只提交差异，不整份回写）。
+
+        用 :func:`config.config_diff` 挑出“相对面板基线变了”的键：
+
+        - 顺手修掉了 `dict.pop` 表达不了删除的问题：键从配置里消失时，
+          补丁里会带上 ``DELETE``（旧实现里 pop 等于没写）。
+        - 没动过的字段不会进入补丁，也就不会把同名键的旧值写回去。
+
+        Returns:
+            实际写出的补丁；无变化返回 ``None``（不写盘）。
+        """
+        from config import config_diff
+
+        patch = config_diff(self._baseline, self._config)
+        if patch:
+            save_config(patch)
+        # 提交后基线跟着前移：同一面板里连续两次操作不会重复提交同一批键
+        self._baseline = copy.deepcopy(self._config)
+        return patch
 
     # ── A2A 派活标签页（G2/A4：把活交给别的助手）──
 

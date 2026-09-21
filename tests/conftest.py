@@ -67,11 +67,21 @@ def _block_real_config_writes(monkeypatch):
     monkeypatch.setattr(config_mod, "save_config", spy, raising=False)
 
     # 扫描已加载模块：把此前绑定了原函数的，一并换成 spy
+    #
+    # 2026-09-21：补上 `isinstance(cur, _ConfigWriteSpy)` 这一支。
+    # 原实现只替换"绑的是原函数"的模块，而模块若在**某个用例内部**首次导入，
+    # 它绑到的是那个用例的 spy；用例结束后 monkeypatch 会把 config.save_config
+    # 还原成原函数，却不会碰 `模块.save_config`（那个属性当初不是它设的）——
+    # 于是模块手里捏着一个**上一个用例的旧 spy**。后果：
+    #   · 某个用例断言自己拿到的 spy.calls → 永远为空（写跑到了旧 spy 里）
+    #   · 该文件的断言“模块里绑的应是当前 spy”随机失败，取决于文件顺序
+    # 把旧 spy 也归入“需替换”即可，与导入时机/用例顺序无关。
     if original is not None:
         for mod in list(sys.modules.values()):
             if mod is None or mod is config_mod:
                 continue
-            if getattr(mod, "save_config", None) is original:
+            cur = getattr(mod, "save_config", None)
+            if cur is original or isinstance(cur, _ConfigWriteSpy):
                 monkeypatch.setattr(mod, "save_config", spy, raising=False)
 
     # 异步保存器（窗口位置等高频写入路径）

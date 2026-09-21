@@ -160,6 +160,7 @@ def test_settings_save_triggers_reload():
     src = Path(__file__).resolve().parents[1].joinpath("pet.py").read_text(encoding="utf-8")
     body = src[src.index("def _open_settings"):]
     # 2026-09-19：从只重载 a2a 改成统一入口（a2a/game/lip_sync/llm_gate）
+    # 2026-09-21：写盘改由设置面板内部完成（config_diff 只提交用户动过的键），
+    # 这里不再整份 save_config；重载仍必须在面板返回之后（拿的是新 config）。
     assert "self._apply_runtime_config()" in body
-    # 必须在 save_config 之后（拿的是新 config）
-    assert body.index("save_config(self.config)") < body.index("self._apply_runtime_config()")
+    assert body.index("dialog.exec()") < body.index("self._apply_runtime_config()")

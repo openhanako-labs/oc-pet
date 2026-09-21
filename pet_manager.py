@@ -718,13 +718,19 @@ class PetManager:
         """更新 agent 配置（position, scale 等）
 
         位置这类高频写入走异步防抖保存，避免阻塞 GUI 线程（拖拽卡顿根因）。
+
+        2026-09-21 修：这里原先把 **self._config（启动时读到的整份快照）** 交给
+        防抖器，而防抖器的旧语义是"最后提交者胜"——于是一次拖拽就把用户在设置
+        面板里改过的所有开关整体盖回启动值（重启后开关复原）。
+        现在只提交 PetManager 真正拥有的切片：``agents``。防抖器是补丁累积的，
+        没被提交的键一律保持磁盘现值。
         """
         for agent in self.agents:
             if agent["id"] == agent_id:
                 agent.update(kwargs)
                 try:
                     from config import async_config_saver
-                    async_config_saver.schedule(self._config)
+                    async_config_saver.schedule({"agents": self._config.get("agents", [])})
                 except Exception:
                     self._save_config()
                 return

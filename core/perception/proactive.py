@@ -28,6 +28,10 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# 影子模式：本地引擎并行判断「这条主动搭话值不值得花一次 LLM 生成」。
+# 关掉开关（默认）时纯旁路，行为与改动前完全一致（见 core/shadow_decision.py）。
+from core.shadow_decision import ShadowDecisionRecorder
+
 from .intent import classify_intent, LATE_NIGHT_WORK_MINUTES
 from .scenarios import get_reaction, is_disruptive, get_recall_reaction, get_associate_reaction
 from .proactive_contracts import (
@@ -171,6 +175,12 @@ class ProactiveScheduler:
         # 注入后 tick 会把它并入 signals，供意图触发/场景回忆使用；未注入零变化。
         self._screen_scene_provider = None
 
+        # ── 影子模式：本地引擎并行判断「这条主动搭话值不值得花一次 LLM 生成」──
+        # 默认关闭；启用后（config.shadow_decision.enabled=true）走纯旁路记录，
+        # 不改任何返回值 / 分支 / 时序。详见 core/shadow_decision.py 模块注释。
+        self._shadow: ShadowDecisionRecorder | None = None
+        self._shadow_decision_id: str = ""  # 当前在途生成的影子决策 ID
+
         # ── P1-5 反重复（语义指纹 + 跨会话去重；与 throttle 字符串相似去重互补）──
         self._anti_repeat = None            # AntiRepeatCorpus 实例（可选注入）
         self._anti_repeat_name: str = ""    # 角色名（corpus 分 key）
@@ -284,6 +294,16 @@ class ProactiveScheduler:
         self._fullscreen_threshold = float(config.get("fullscreen_threshold", 0.95))
         self._fullscreen_suppress = bool(config.get("fullscreen_suppress", True))
 
+        # 影子模式：从 config.shadow_decision 装载（可选；缺省按 enabled=false）
+        shadow_cfg = (config.get("shadow_decision") or {}) if isinstance(config, dict) else {}
+        try:
+            if self._shadow is None:
+                self._shadow = ShadowDecisionRecorder(dict(shadow_cfg))
+            elif isinstance(shadow_cfg, dict) and shadow_cfg:
+                self._shadow.set_config(shadow_cfg)
+        except Exception as e:
+            logger.debug("[proactive] 影子模式配置装载失败（非致命）: %s", e)
+
     def set_generator(self, generator: ProactiveGenerator | None, llm_generation: bool | None = None) -> None:
         """注入 LLM 生成器（P0-1）。
 
@@ -304,7 +324,8 @@ class ProactiveScheduler:
             and not self._generation_in_flight
         )
 
-    def _start_generation(self, context: dict, fallback_prompt: str, source_key: str) -> bool:
+    def _start_generation(self, context: dict, fallback_prompt: str, source_key: str,
+                          shadow_decision_id: str = "") -> bool:
         """启动一次异步 LLM 生成（P0-1）。
 
         成功返回 True（生成已在后台执行，结果经 Qt Signal 回主线程后投递）；
@@ -320,6 +341,10 @@ class ProactiveScheduler:
         self._generation_in_flight = True
         self._pending_fallback_prompt = fallback_prompt or ""
         self._pending_source_key = source_key or ""
+        # 影子模式：保存本次生成对应的 decision_id（由调用方传入），供回调处写 outcome。
+        # 注意：**不能在这里清空** —— 调用方设好的 id 会被抹掉，导致回调拿到的
+        # id 恒为空、所有 outcome 被 record_outcome 静默丢弃（2026-09-21 修复）。
+        self._shadow_decision_id = shadow_decision_id or ""
         try:
             self._generator.set_callbacks(
                 on_generated=self._on_generation_result,
@@ -343,12 +368,17 @@ class ProactiveScheduler:
         self._generation_in_flight = False
         fallback_prompt = self._pending_fallback_prompt
         source_key = self._pending_source_key
+        shadow_decision_id = self._shadow_decision_id  # 影子模式：在清空前保留
         self._pending_fallback_prompt = ""
         self._pending_source_key = ""
+        self._shadow_decision_id = ""
         text = (text or "").strip()
         if not text:
             logger.info("[proactive] fallback: generation empty -> %s", fallback_prompt)
-            self._deliver(fallback_prompt, source_key=source_key)
+            self._deliver(
+                fallback_prompt, source_key=source_key,
+                shadow_decision_id=shadow_decision_id,
+            )
             return
         # P0-2 同会话去重：与近期主动搭话高度相似 → 跳过（不投递、不计数）
         if self._throttle.is_duplicate(text):
@@ -356,7 +386,11 @@ class ProactiveScheduler:
             return
         self._throttle.record_chat(text)
         logger.info("[proactive] generated via llm: %s", text)
-        self._deliver(text, source_key=source_key)
+        self._deliver(
+            text, source_key=source_key,
+            # 用局部变量：self._shadow_decision_id 此时已被清空（2026-09-21 修复）
+            shadow_decision_id=shadow_decision_id,
+        )
 
     def _on_generation_fallback(self, fallback_text: str) -> None:
         """LLM 生成失败/超时回退回调（主线程经 Qt Signal 调用）。
@@ -366,10 +400,51 @@ class ProactiveScheduler:
         self._generation_in_flight = False
         fallback_prompt = self._pending_fallback_prompt or (fallback_text or "")
         source_key = self._pending_source_key
+        shadow_decision_id = self._shadow_decision_id  # 影子模式：在清空前保留
         self._pending_fallback_prompt = ""
         self._pending_source_key = ""
+        self._shadow_decision_id = ""
         logger.info("[proactive] fallback: %s", fallback_prompt)
-        self._deliver(fallback_prompt, source_key=source_key)
+        self._deliver(
+            fallback_prompt, source_key=source_key,
+            shadow_decision_id=shadow_decision_id,
+        )
+
+    def _record_shadow_decision(self, kind: str, context: dict, fallback_prompt: str = "") -> str:
+        """记录一次「值不值得花一次 LLM 生成」的影子判断。
+
+        **纯旁路**：永不抛异常、永不阻塞主线程（详见 core/shadow_decision.py）。
+        关闭影子模式时（config.shadow_decision.enabled=false，默认）本方法直接
+        返回空字符串，且**不产生任何调用 / I/O** —— 保证行为与改动前一致。
+        """
+        try:
+            if self._shadow is None or not self._shadow.enabled():
+                return ""
+            did = self._shadow.record_decision(
+                kind=kind, context=context or {}, fallback_prompt=fallback_prompt or "",
+            )
+            return did or ""
+        except Exception as e:
+            logger.debug("[proactive] 影子决策记录失败（非致命）: %s", e)
+            return ""
+
+    def _record_shadow_outcome(
+        self, decision_id: str, *, delivered: bool, prompt: str = "",
+        source: str = "",
+    ) -> None:
+        """为某次影子决策写入投递结果（多次追加均可）。
+
+        **纯旁路**：永不抛异常、永不阻塞。decision_id 为空 / 关闭时静默返回。
+        """
+        try:
+            if not decision_id or self._shadow is None or not self._shadow.enabled():
+                return
+            self._shadow.record_outcome(
+                decision_id, delivered=delivered, prompt=prompt or "",
+                source=source or "",
+            )
+        except Exception as e:
+            logger.debug("[proactive] 影子 outcome 记录失败（非致命）: %s", e)
 
     def set_usage_memory(self, memory) -> None:
         """注入 UsageMemory（可选；不注入时惰性创建单例）。"""
@@ -433,7 +508,7 @@ class ProactiveScheduler:
             return ""
         return key
 
-    def _deliver(self, prompt: str, source_key: str = "") -> None:
+    def _deliver(self, prompt: str, source_key: str = "", shadow_decision_id: str = "") -> None:
         """统一投递入口：记录触发 + 节流 + on_proactive。
 
         生成路径（_on_generation_result/_on_generation_fallback）与同步模板路径共用，
@@ -449,6 +524,11 @@ class ProactiveScheduler:
         # P1-5 语义去重（生成路径兜底：fallback 模板也可能与历史话题重复）
         if not self._anti_repeat_allows(prompt, now):
             return
+        # 影子模式：内容真正通过节流与去重检查，视为已投递
+        self._record_shadow_outcome(
+            shadow_decision_id, delivered=True,
+            prompt=prompt, source=source_key or "",
+        )
         self._record_proactive_trigger(now)
         if source_key:
             self._throttle.record_used(source_key, kind="chat", now=now)
@@ -688,7 +768,17 @@ class ProactiveScheduler:
                     "signals": signals,
                     "fallback_prompt": prompt,
                 }
-                started = self._start_generation(context, fallback_prompt=prompt, source_key=scenario)
+                # 影子模式（旁路）：记录本地引擎对「是否值得花 LLM 生成」的判断。
+                # 开关关闭时（默认）此调用直接返回空字符串，不产生任何调用 / I/O。
+                _did = self._record_shadow_decision(
+                    kind="proactive.intent",
+                    context=context,
+                    fallback_prompt=prompt,
+                )
+                started = self._start_generation(
+                    context, fallback_prompt=prompt, source_key=scenario,
+                    shadow_decision_id=_did or "",
+                )
                 if started:
                     logger.info(
                         "Proactive intent -> generation: scenario=%s intent=%s conf=%.2f %s",

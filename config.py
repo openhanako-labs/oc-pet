@@ -1,4 +1,5 @@
 """配置管理"""
+import copy
 import json
 import os
 import threading
@@ -414,57 +415,160 @@ HANAKO_STATE_MAP = {
     "speaking": {"anim": "idle", "desc": "说话", "bubble_bright": True},
 }
 
-def load_config():
-    """加载配置，深度合并默认值（确保新增字段不丢失）"""
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        merged = _deep_merge(DEFAULT_CONFIG.copy(), cfg)
-        return merged
-    return DEFAULT_CONFIG.copy()
+# ── 合并语义 ──────────────────────────────────────────────
+#
+# 2026-09-21：把"加载"和"写盘"的合并语义拆开了，因为同一个函数被两条路复用，
+# 而两条路上"空值"的含义是相反的：
+#
+#   · 加载：磁盘说了算。键存在（哪怕值是空串）就以磁盘为准，只补"缺失"的键。
+#   · 写盘：调用方说了算。显式提供的键一律覆盖，好让"清空字段"能被表达。
+#
+# 旧实现两条路共用一个 `_deep_merge`，里面有一条"空值不覆盖"保护——它本来
+# 是给写盘路挡"旧快照用空串冲掉真值"的，副作用却是**任何字段一旦有值就再也
+# 清不掉**（实测：清空麦克风设备 / MCP token / Skyrim dll 全都不生效），而且
+# `dict.pop` 表达不了"删除"（取消勾选"随机截屏间隔"后旧范围一直留在配置里）。
+# 那个"旧快照"根因已在写盘侧修掉（见 `_AsyncConfigSaver`：只累积补丁，各调用
+# 方只提交自己拥有的键），所以保护可以撤掉，换成下面这些显式规则。
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
-    """深度合并：override 的键覆盖 base，但 base 独有的键保留。
+class _DeleteSentinel:
+    """写盘补丁里的"显式删除"标记（用法：``{"screen": {"interval_min": DELETE}}``）。
 
-    空值保护：override 的值为空字符串/None 时不覆盖 base 的已有非空值，
-    避免旧快照用空值把真实配置（如 dialog.agent_id=aimis）冲掉。
+    合并式写盘分不清"没提到这个键"和"要把这个键删掉"，`dict.pop` 的意图会静默
+    丢失。需要删除时把这个对象当值放进补丁即可。
     """
-    result = base.copy()
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - 只为日志可读
+        return "<DELETE>"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+DELETE = _DeleteSentinel()
+
+
+class _NoChange:
+    """`config_diff` 的内部标记："这一枝没有变化"。
+
+    刻意不复用 ``None``：None 是配置里合法的一个值，两者必须能区分。
+    """
+
+    __slots__ = ()
+
+
+def _merge_over(base: dict, override: dict) -> dict:
+    """写盘语义的合并：override 显式提供的键一律覆盖 base（含空串/None）。
+
+    值为 ``DELETE`` 的键从结果里删除。
+    base 里独有、override 没提到的键**保持不变**——这正是"只提交自己拥有的
+    键"能成立的前提：调用方提交什么，就只影响什么。
+    """
+    result = dict(base) if isinstance(base, dict) else {}
     for k, v in override.items():
+        if v is DELETE:
+            result.pop(k, None)
+            continue
         if k in result and isinstance(result[k], dict) and isinstance(v, dict):
-            result[k] = _deep_merge(result[k], v)
-        elif v is None or v == "":
-            # 空值不覆盖已有非空值（保留 base 现值）
-            if k in result:
-                continue
-            result[k] = v
+            result[k] = _merge_over(result[k], v)
         else:
             result[k] = v
     return result
 
-def save_config(cfg):
-    """原子写入配置文件（合并式）
 
-    以磁盘现有内容为底，用传入 cfg 覆盖后写回。
-    这样只更新调用方关心的字段，不会把其他系统（如 dialog.agent_id）
-    用旧快照冲掉——避免 F5 绑定丢失问题。
+def _diff(before, after):
+    """内部递归：返回补丁 / 值，或 ``_NoChange`` 表示这一枝没变。"""
+    if isinstance(before, dict) and isinstance(after, dict):
+        patch: dict = {}
+        for k, v in after.items():
+            sub = _diff(before[k] if k in before else _NoChange, v)
+            if sub is not _NoChange:
+                patch[k] = sub
+        for k in before:
+            if k not in after:
+                patch[k] = DELETE
+        return patch if patch else _NoChange
+    if before is not _NoChange and before == after:
+        return _NoChange
+    return after
+
+
+def config_diff(before: dict, after: dict):
+    """算出 `after` 相对 `before` 的**最小写盘补丁**，无变化返回 ``None``。
+
+    - 新增/改动 → 带上新值
+    - before 有、after 没有 → 带上 ``DELETE``（表达"删掉"）
+    - 两边都是 dict → 递归；某枝无变化则整枝略过
+
+    设置面板用它把"用户真动过的键"挑出来落盘，避免"打开面板再保存"顺手把
+    没动过的字段也写一遍（那正是同名字段互相覆盖、空值冲掉真值的来源）。
+
+    Args:
+        before: 打开面板时的基线快照
+        after: 编辑后的配置
+    Returns:
+        补丁字典，或 None（没有变化，调用方不应写盘）
     """
-    import tempfile
-    merged = {}
-    try:
-        if os.path.exists(CONFIG_PATH):
+    patch = _diff(before, after)
+    return None if patch is _NoChange else patch
+
+
+def load_config():
+    """加载配置：以磁盘为准，只补"磁盘里缺失"的键（默认值取深拷贝）。
+
+    与写盘的差别：这里**不再**把空串当"未提供"。磁盘上写了 `""` 就是 `""`
+    ——"清空"是合法值（见 `_merge_over` 注释）。
+    默认值必须深拷贝：否则调用方改一处嵌套默认值就会污染模块级的
+    ``DEFAULT_CONFIG``，下一个 load 出来的是被改过的"默认"。
+    """
+    if os.path.exists(CONFIG_PATH):
+        try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                merged = json.load(f)
-    except Exception:
-        merged = {}
-    # 传入的 cfg 覆盖（含其内部 dict 键）
-    for k, v in cfg.items():
-        if k in merged and isinstance(merged[k], dict) and isinstance(v, dict):
-            merged[k] = _deep_merge(merged[k], v)
-        else:
-            merged[k] = v
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(CONFIG_PATH), suffix='.tmp')
+                cfg = json.load(f)
+        except Exception as e:
+            logger.warning("config 解析失败，本次回退默认配置（%s: %s）", CONFIG_PATH, e)
+            return copy.deepcopy(DEFAULT_CONFIG)
+        if isinstance(cfg, dict):
+            return _merge_over(copy.deepcopy(DEFAULT_CONFIG), cfg)
+    return copy.deepcopy(DEFAULT_CONFIG)
+
+
+def write_merged(path: str, patch: dict) -> dict:
+    """把补丁合并进 `path` 上的 json 并原子落盘，返回落盘后的完整字典。
+
+    两条与调用方无关的纪律：
+
+    1. **文件存在但读不出来 → 放弃本次写入**。合并式写盘最危险的失败模式是
+       "读失败当成空文件"——那会把整份配置写成只剩补丁里那几个键，把用户的
+       东西全删了。宁可这次不写。
+    2. 合并是**补丁语义**：patch 没提到的键一律保持磁盘现值。
+
+    Args:
+        path: 目标 json 路径
+        patch: 只含"要写的键"的补丁（值可为 ``DELETE`` 表示删除）
+    Returns:
+        落盘后的完整配置字典
+    Raises:
+        RuntimeError: 目标已存在但读不出来（放弃写入，保护原文件）
+    """
+    merged: dict = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                raise ValueError("config 顶层不是 JSON 对象")
+            merged = loaded
+        except Exception as e:
+            raise RuntimeError(
+                f"config 读取失败，已放弃本次写入以免覆盖整份配置（{path}: {e}）"
+            ) from e
+    merged = _merge_over(merged, patch)
+
+    import tempfile
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix='.tmp')
     try:
         with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
             json.dump(merged, f, ensure_ascii=False, indent=2)
@@ -472,7 +576,7 @@ def save_config(cfg):
         # os.replace 直接抛 PermissionError 会让设置保存崩溃。加短重试。
         for attempt in range(5):
             try:
-                os.replace(tmp_path, CONFIG_PATH)  # 原子替换
+                os.replace(tmp_path, path)  # 原子替换
                 break
             except PermissionError:
                 if attempt == 4:
@@ -484,33 +588,63 @@ def save_config(cfg):
         except OSError:
             logger.debug("config: 非致命异常(已静默吞掉)", exc_info=True)
         raise
+    return merged
+
+
+def save_config(cfg):
+    """把补丁原子写入 ``CONFIG_PATH``（补丁语义，不是整份替换）。
+
+    调用方应当只提交**自己拥有的键**：``{"scale": 1.2}``、``{"agents": [...]}``、
+    ``{"ui": {"onboarded": True}}``。提交整份快照会把别人的改动一起盖掉——
+    2026-09-21 的"开关不持久"就是 PetManager 拿启动时的整份快照覆盖了设置面板
+    刚写进去的开关值。
+
+    需要"删掉某个键"时用 ``DELETE`` 当值（``dict.pop`` 的意图表达不出来）。
+    """
+    return write_merged(CONFIG_PATH, cfg)
 
 
 class _AsyncConfigSaver:
     """防抖异步配置保存器 — 高频位置写入不阻塞 GUI 线程。
 
     设计：
-      - 同一次调度周期内多次 schedule() 只落盘一次（保留最新配置）
+      - 同一次调度周期内多次 schedule() 只落盘一次
+      - 多次 schedule() 的补丁**累积**（深合并），不是后者替换前者
       - 写盘在后台线程执行，绝不阻塞调用方（GUI 主线程）
       - 线程安全：schedule 可从任意线程调用
 
-    用法：
+    不变量（2026-09-21 结构性修复）：
+        一个来源只能影响**它提交的键**，与调度先后顺序无关。
+
+    原实现是"保留最新一份"，于是"谁最后提交"决定了谁的值活下来：
+    PetManager 每次拖拽都会提交它启动时读到的**整份快照**，而它正好排在窗口
+    自己那次提交之后 —— 用户刚在设置面板关掉的开关，拖一下桌宠就被整体盖回
+    原值，退出时 ``shutdown()`` 再落一次盘，重启后开关又是开着的。
+
+    用法::
+
         saver = AsyncConfigSaver()
-        saver.schedule(cfg)   # 防抖 150ms 后异步写盘
+        saver.schedule({"scale": 1.2})                        # 只提交自己拥有的键
+        saver.schedule({"window": {"x": 10, "y": 20}})
+        saver.schedule({"screen": {"interval_min": DELETE}})  # 表达"删掉"
     """
 
     def __init__(self, debounce_ms: int = 150):
         self._debounce = debounce_ms / 1000.0
         self._lock = threading.Lock()
-        self._pending: dict | None = None          # 待写的最新配置
+        self._pending: dict | None = None          # 累积中的补丁
         self._due: float | None = None             # 下次写盘时刻（防抖窗口）
         self._thread: threading.Thread | None = None
         self._stop = False
 
     def schedule(self, cfg: dict) -> None:
-        """登记一次保存。同窗口内多次调用合并为一次落地。"""
+        """登记一次写入。同窗口内多次调用**累积**成一份补丁，再一次性落盘。
+
+        Args:
+            cfg: 只含调用方拥有的键的补丁（值可为 ``DELETE`` 表示删除）
+        """
         with self._lock:
-            self._pending = cfg
+            self._pending = _merge_over(self._pending or {}, cfg)
             now = time.monotonic()
             self._due = now + self._debounce
             if self._thread is None or not self._thread.is_alive():
@@ -518,7 +652,7 @@ class _AsyncConfigSaver:
                 self._thread.start()
 
     def _run(self) -> None:
-        """后台循环：等到防抖窗口，写盘最新快照。"""
+        """后台循环：等到防抖窗口，写盘累积到的补丁。"""
         while True:
             with self._lock:
                 if self._stop:
@@ -533,7 +667,7 @@ class _AsyncConfigSaver:
             if wait is not None:
                 time.sleep(wait)
                 continue
-            # 窗口已到：取最新快照并写盘
+            # 窗口已到：取累积补丁并写盘
             with self._lock:
                 cfg = self._pending
                 self._pending = None
@@ -559,5 +693,5 @@ class _AsyncConfigSaver:
                 logger.debug("config: 非致命异常(已静默吞掉)", exc_info=True)
 
 
-# 进程级共享实例：桌宠位置这类高频写入都走它，合并落盘。
+# 进程级共享实例：桌宠位置/缩放这类高频写入都走它，累积成一份补丁再落盘。
 async_config_saver = _AsyncConfigSaver()

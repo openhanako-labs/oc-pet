@@ -129,8 +129,9 @@ class AnimationMixin:
         pos = self.pos()
         self.config.setdefault("window", {})["x"] = pos.x()
         self.config.setdefault("window", {})["y"] = pos.y()
-        # 异步防抖保存：散步每次到达都写盘会周期性卡顿，改走后台
-        async_config_saver.schedule(self.config)
+        # 异步防抖保存：散步每次到达都写盘会周期性卡顿，改走后台，
+        # 且只交本窗口拥有的切片（整份快照会盖掉设置面板刚改的键）。
+        async_config_saver.schedule({"window": {"x": pos.x(), "y": pos.y()}})
         if self._on_position_change:
             self._on_position_change(pos.x(), pos.y())
         params = self._get_behavior_params()
@@ -148,7 +149,7 @@ class AnimationMixin:
         self._bounce_active = False
         self.config.setdefault("window", {})["x"] = x
         self.config.setdefault("window", {})["y"] = y
-        async_config_saver.schedule(self.config)
+        async_config_saver.schedule({"window": {"x": x, "y": y}})
 
     def on_facing_change(self, facing_right: bool):
         """朝向变化：同步给渲染器（atlas 方向动画靠它决定左右）。"""
