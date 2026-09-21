@@ -139,6 +139,8 @@ linjian-peek → MCP Plugin → Hanako tool calling ─────────�
 > 仅监听 `127.0.0.1`（不对外网暴露）。
 > **电脑操作默认关闭动作**：`computer_use.allow_actions=false` 时只读窗口信息，
 > 不执行点击/输入——避免桌宠被误用来操作你的桌面。
+> 想真的用起来（装驱动 → 起 daemon → 开写权限 → Hana 侧授权），
+> 见下方「[电脑操作（Computer Use，可选）](#电脑操作computer-use可选)」。
 
 ### 通知
 - 📱 **ntfy 通知** -- 推送通知到手机（需安装 ntfy app）
@@ -288,10 +290,13 @@ Live2DRenderer: 播放动作 idx=2（motions/waving.motion3.json）
    ```
 2. 在 Hanako 的 MCP 连接器配置里加 `oc-pet`，指向上面这个地址
 3. 重启 Hanako
+4. 把连接器**授权到 agent 级**（只在 host 级打开不够），确认弹出的工具授权卡
 
 - ✅ Hanako 能看到 21 个 `pet_*` 工具
 - ❌ 连不上 → **顺序问题**：Hanako 比桌宠先起，且不会自动重试。
   先开桌宠，再开 Hanako。
+- ❌ 连接器显示 `running`、`toolCount=21`，但调用报「未找到工具」→
+  **授权层级问题**：host 级开着、agent 级没开。见下方「电脑操作」第 4 节。
 
 ### 第 5 步（可选）：语音
 
@@ -448,6 +453,107 @@ LINJIAN_TOKEN=your-linjian-token
 4. 保存并启用宏
 
 > 💡 如果桌宠和手机在同一局域网，用电脑的内网 IP。如果需要外网访问，考虑用 ngrok 或 frp 做内网穿透。
+
+## 电脑操作（Computer Use，可选）
+
+桌宠除了被 AI 驱动着表演，还能当 AI 的**手**：枚举窗口、读元素树、启动应用、
+点击、输入、按键。执行侧由独立的 **cua-driver**（[trycua/cua](https://github.com/trycua/cua)，MIT）
+完成，桌宠只做代理——所以桌宠本身不碰键盘鼠标，能力的边界和权限都归 cua-driver 管。
+
+> ⚠️ 写操作（启动 / 点击 / 输入 / 按键）默认**关闭**。打开就等于把桌面交给 AI，
+> 请确认你知道自己在开什么。
+
+### 1. 安装 cua-driver（一次性）
+
+它不是 pip 包，是独立二进制；Windows 上免管理员、免开发者模式：
+
+```powershell
+irm https://cua.ai/driver/install.ps1 | iex
+```
+
+验证：
+
+```powershell
+cua-driver --version   # 例：cua-driver 0.28.2
+cua-driver doctor      # 完整环境自检
+```
+
+安装位置（桌宠按「`driver_path` → 环境变量 `CUA_DRIVER_PATH` → PATH → 已知位置」
+自动探测，一般无需手配）：
+
+- `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe`
+- `%USERPROFILE%\.cua-driver\packages\current\cua-driver.exe`
+
+### 2. 让 daemon 跑起来
+
+`pet_computer_*` 最终都落到 cua-driver 的 CLI 上，而 CLI 需要一个在跑的 daemon；
+`cua-driver status` 会告诉你它在不在。两种起法，**二选一**：
+
+| 方式 | 怎么做 | 适合 |
+|---|---|---|
+| 手动 | 终端里 `cua-driver serve`，窗口保持开着 | 只在用的时候开 |
+| 开机常驻 | `cua-driver autostart enable`（注册登录自启计划任务） | 想一直能用 |
+
+验证：
+
+```powershell
+cua-driver status   # 期望：Cua Driver daemon is running
+```
+
+> 桌宠自己**不会**替你拉起 daemon（`computer_use.auto_start_daemon` 默认 `false`）——
+> 不想要常驻后台进程，就别开它。
+
+### 3. 打开写权限
+
+`config.json`：
+
+```json
+{
+  "mcp_server":   { "enabled": true },
+  "computer_use": {
+    "enabled": true,
+    "driver_path": "",
+    "allow_actions": false,
+    "auto_start_daemon": false,
+    "timeout_s": 30
+  }
+}
+```
+
+`allow_actions` 改成 `true`，才允许启动 / 点击 / 输入 / 按键。
+
+两个坑，都踩过：
+
+- **改完必须重启桌宠。** `computer_use` 和 `mcp_server` **不在**热生效列表里
+  （热生效只有 `a2a` / `game` / `lip_sync` / `llm_gate`）。
+- **改之前先退出桌宠。** 桌宠运行期间会把自己内存里的整份 config 异步写回文件
+  （缩放、设置保存等动作都会触发），手改的键会被覆盖回去。
+
+### 4. Hana 侧要授权到 agent 这一层
+
+MCP 连接器在 Hanako 里是**两级**开关：host 级 + agent 级。只开 host，
+桌宠虽然显示 `running`、`toolCount` 也是 21，但工具**进不了 agent 的工具索引**，
+调用会报「未找到工具」。开到 agent 级后，Hanako 会弹一张授权卡，
+**确认之后**工具才真正可用。
+
+### 工具一览
+
+| 只读（默认可用） | 写（需 `allow_actions: true`） |
+|---|---|
+| `pet_computer_status` 驱动 / daemon 状态 | `pet_computer_launch` 启动应用 |
+| `pet_computer_apps` 列出应用 | `pet_computer_click` 点元素 / 坐标 |
+| `pet_computer_windows` 列出窗口 | `pet_computer_type` 输入文字 |
+| `pet_computer_window_state` 读窗口 UIA 元素树 | `pet_computer_key` 按键 |
+
+### 已知限制
+
+- **自绘界面读不到内容。** QQ、部分 Electron 应用把整个窗口画成一块画布，
+  UIA 树里只有一个空 `Document` 节点，`pet_computer_window_state` 拿不到文字；
+  这类应用只能靠它一并返回的**窗口截图**来「看」。
+- **`pet_computer_window_state` 的返回会带一张窗口截图**（base64），
+  在元素多 / 窗口大的应用上体积可能到 MB 级。
+- 写操作默认走后台 UIA Invoke（不抢焦点）；坐标点击是元素句柄缺失时的回退。
+- 这套能力能点到你桌面上任何东西——默认关是有意的，不是没做完。
 
 ## 测试指南
 

@@ -114,6 +114,8 @@ Hanako — **the pet is not just a shell being driven; AI can operate it too**.
 > bound to `127.0.0.1` only (never exposed externally).
 > **Computer actions are off by default**: with `computer_use.allow_actions=false`
 > the pet only reads window info and will not click or type.
+> To actually turn it on (install driver → run daemon → open write access →
+> grant on the Hana side), see [Computer Use (optional)](#computer-use-optional) below.
 
 ### Notifications
 - 📱 **ntfy Notification** -- Push notifications to phone (requires the ntfy app installed)
@@ -233,6 +235,112 @@ LINJIAN_TOKEN=your-linjian-token
 4. Save and enable the macro
 
 > 💡 If the pet and phone are on the same LAN, use the PC's internal IP. For external access, consider using ngrok or frp for intranet penetration.
+
+## Computer Use (optional)
+
+Besides being driven to perform, the pet can act as the AI's **hands**: enumerate
+windows, read element trees, launch apps, click, type, press keys. The execution
+side is handled by a separate **cua-driver** ([trycua/cua](https://github.com/trycua/cua), MIT);
+the pet only proxies — it never touches your keyboard or mouse itself.
+
+> ⚠️ Write actions (launch / click / type / key) are **off by default**. Turning them
+> on hands your desktop to an AI. Make sure you know what you are enabling.
+
+### 1. Install cua-driver (one-time)
+
+Not a pip package — a standalone binary. On Windows it needs neither admin
+rights nor Developer Mode:
+
+```powershell
+irm https://cua.ai/driver/install.ps1 | iex
+```
+
+Verify:
+
+```powershell
+cua-driver --version   # e.g. cua-driver 0.28.2
+cua-driver doctor      # full environment report
+```
+
+Install locations (the pet auto-detects in this order: `driver_path` → env
+`CUA_DRIVER_PATH` → PATH → known locations, so usually you configure nothing):
+
+- `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe`
+- `%USERPROFILE%\.cua-driver\packages\current\cua-driver.exe`
+
+### 2. Get the daemon running
+
+Every `pet_computer_*` call ends up on the cua-driver CLI, and that CLI needs a
+running daemon; `cua-driver status` tells you whether one is up. Pick **one**:
+
+| Way | How | Good for |
+|---|---|---|
+| Manual | `cua-driver serve` in a terminal, keep the window open | Only when you need it |
+| At logon | `cua-driver autostart enable` (registers a logon scheduled task) | Always available |
+
+Verify:
+
+```powershell
+cua-driver status   # expect: Cua Driver daemon is running
+```
+
+> The pet does **not** start the daemon for you (`computer_use.auto_start_daemon`
+> defaults to `false`) — don't enable it if you don't want a resident background process.
+
+### 3. Open write access
+
+In `config.json`:
+
+```json
+{
+  "mcp_server":   { "enabled": true },
+  "computer_use": {
+    "enabled": true,
+    "driver_path": "",
+    "allow_actions": false,
+    "auto_start_daemon": false,
+    "timeout_s": 30
+  }
+}
+```
+
+Set `allow_actions` to `true` to permit launch / click / type / key.
+
+Two pitfalls, both hit in practice:
+
+- **Restart the pet afterwards.** `computer_use` and `mcp_server` are **not** in the
+  hot-reload list (that list is only `a2a` / `game` / `lip_sync` / `llm_gate`).
+- **Quit the pet before editing.** While running, the pet asynchronously writes its
+  in-memory config back to disk (zooming, saving settings, etc.), which can overwrite
+  your manual edit.
+
+### 4. Grant it on the Hana side, down to the agent level
+
+An MCP connector in Hanako has **two** switches: host level and agent level. With only
+host level on, the pet still shows `running` and `toolCount: 21`, but its tools never
+reach any agent's tool index and calls fail with "tool not found". Enable it at the
+agent level and Hanako shows a grant card — tools only become usable after you **confirm it**.
+
+### Tool list
+
+| Read-only (available by default) | Write (needs `allow_actions: true`) |
+|---|---|
+| `pet_computer_status` driver / daemon status | `pet_computer_launch` start an app |
+| `pet_computer_apps` list apps | `pet_computer_click` click element / coordinates |
+| `pet_computer_windows` list windows | `pet_computer_type` type text |
+| `pet_computer_window_state` read a window's UIA element tree | `pet_computer_key` press a key |
+
+### Known limitations
+
+- **Self-drawn UIs yield nothing.** QQ and some Electron apps paint the whole window
+  as one canvas; the UIA tree contains a single empty `Document` node, so
+  `pet_computer_window_state` returns no text. For those, you can only "see" via the
+  **window screenshot** it returns alongside.
+- **`pet_computer_window_state` includes a window screenshot** (base64), which can reach
+  MB scale on element-heavy or large windows.
+- Write actions default to background UIA Invoke (no focus stealing); coordinate clicks
+  are the fallback when no element handle is available.
+- This can click anything on your desktop — off by default is intentional, not unfinished.
 
 ## Testing Guide
 

@@ -71,38 +71,9 @@ third_party_reference/
 
 # 测试：回归脚本入库并由 CI 运行（不再忽略）
 
-# 内部文档（不提交）
-docs/2026-09-05-execution-log.md
-docs/doudou-memory-analysis.md
-docs/embody-value-case-2026-09-04.md
-docs/handoff-2026-09-03-t10.md
-docs/handoff-2026-09-04-t07.md
-docs/migration-neko-port-plan.md
-docs/optimization-plan.md
-docs/pet-creation-mouth-frames.md
-docs/playmate-direction-prd.md
-docs/playmate-gap-analysis.md
-docs/poc-silero-vad-onnx-2026-09-04.md
-docs/refactor-2026-09-03-incremental-design.md
-docs/SILENT-EXCEPTIONS.md
-docs/SPIKE-BORROW-SHELL.md
-docs/upgrade-a-g-design.md
-
-# 内部计划（不提交）：工作计划、改动方案、评审记录
-# 2026-09-14：voice-expression-plan.md 已删除，其调研结论转存至 voice-interop-plan.md（同属内部）
-docs/voice-interop-plan.md
-docs/STATUS.md
-docs/voice-skyrimnet-integration-plan.md
-docs/architecture-flowchart.png
-
-# 内部产物（不提交）：竞品分析、改动方案、迁移图
-docs/为什么存在.md
-docs/桌宠主动对话改动方案.md
-docs/migration-class-diagram.mermaid
-docs/migration-sequence-diagram.mermaid
-
-# 评审产物（内部，不提交；与上面"内部文档"同规）
-docs/review-*/
+# docs/ 整目录不入库（本地保留，不随仓库分发）
+# 2026-09-21：文档分类维护成本高于收益，已从 git 跟踪中移除（历史仍在提交记录里）
+docs/
 
 # 提交信息临时文件
 _commit_msg.txt
