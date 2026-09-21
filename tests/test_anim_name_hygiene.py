@@ -103,6 +103,11 @@ class _Pet:
             self.renderer_calls.append(anim)
         return bool(player(anim)) if callable(player) else False
 
+    def _idle_if_not_already(self):
+        if self._anim_seq == "idle":
+            return
+        self._set_anim_seq("idle")
+
     def set_anim(self, anim):
         # 与 pet.py:set_anim 同逻辑
         if anim == "walk":
@@ -113,7 +118,8 @@ class _Pet:
                 mf = self._renderer._motion_files or []
                 if not any("walk" in str(f).lower() for f in mf):
                     anim = "idle"
-        if anim == "idle" and self._anim_seq == "idle":
+        if anim == "idle":
+            self._idle_if_not_already()
             return
         self._set_anim_seq(anim)
 
@@ -263,6 +269,37 @@ class TestNoIdleReplayChurn:
         for _ in range(3):
             p.set_anim("walk")
         assert p.seq == ["running-right"] * 3
+
+    def test_walk_finished_door_is_also_covered(self):
+        """★ 第二个入口：`on_walk_finished` 也直接回 idle。
+
+        第一版只堵了 `set_anim`，探针显示 5/12 条 idle 重播是从这扇门上来的 ——
+        「同一个形状的入口有多少个，就得有多少个待修的洞」，所以后来收成
+        `_idle_if_not_already()` 一个定义。
+        """
+        p = _Pet(_l2d())
+        p.set_anim("walk")            # 降级 → idle
+        for _ in range(4):
+            p._idle_if_not_already()  # 复刻 on_walk_finished
+        assert p.seq == ["idle"], f"散步结束又重播了：{p.seq}"
+
+    def test_walk_finished_still_settles_from_walk_motion(self):
+        """有 walk motion 的模型：走完必须真的回 idle，不能一起拦掉。"""
+        p = _Pet(_l2d(MIKU_MOTIONS + ["motions/walk.motion3.json"]))
+        p.set_anim("walk")
+        p._idle_if_not_already()
+        assert p.seq == ["walk", "idle"]
+
+    def test_walk_finished_uses_the_shared_helper(self):
+        """源码守卫：散步结束不得再直接 `_set_anim_seq('idle')`。"""
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "pet_mixins" / "animation_mixin.py").read_text(encoding="utf-8")
+        i = src.index("def on_walk_finished")
+        window = src[i:i + 700]
+        assert "_idle_if_not_already()" in window, "散步结束应走统一入口"
+        assert "_set_anim_seq('idle')" not in window, "又直接调了，会重播"
 
 
 class TestNoAnimSentinel:

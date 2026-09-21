@@ -131,7 +131,7 @@ class AnimationMixin:
         from config import async_config_saver
 
         self._is_walking = False
-        self._set_anim_seq('idle')
+        self._idle_if_not_already()
         self._store_label_pos()
         pos = self.pos()
         self.config.setdefault("window", {})["x"] = pos.x()
@@ -162,6 +162,25 @@ class AnimationMixin:
         """朝向变化：同步给渲染器（atlas 方向动画靠它决定左右）。"""
         self._facing_right = facing_right
         self._renderer.set_facing(facing_right)
+
+    def _idle_if_not_already(self):
+        """回 idle，但**已经在 idle 就不重播**。
+
+        2026-09-21。背景：没有 walk motion 的模型（miku 这类），多个**状态驱动**
+        的入口"让桌宠走路/走完了"时都会要一次 idle —— 而每次触发都是真重播：
+        把 idle 循环从头打断，还打一行 INFO。实测：53 分钟 761 行，占日志 25%。
+
+        为什么必须收成一个方法：第一次我只堵了 `set_anim` 那一扇门，
+        漏了 `on_walk_finished`（它也直接调 `_set_anim_seq('idle')`）——
+        探针里 5/12 条就从那扇门上来。**同一个形状的入口有多少个，
+        就得有多少个待修的洞；所以改成从源头定义一次。**
+
+        只认「当前序列」不认模型名：有 walk motion 的模型此刻的序列是 'walk'，
+        不会被拦，正常回 idle。
+        """
+        if getattr(self, "_anim_seq", None) == "idle":
+            return
+        self._set_anim_seq("idle")
 
     def set_anim(self, anim: str):
         """物理/行为层的动作请求入口（MotionStateMachine 的 set_anim 回调）。
@@ -212,17 +231,11 @@ class AnimationMixin:
                 motion_files = self._renderer._motion_files or []
                 if not any('walk' in str(f).lower() for f in motion_files):
                     anim = 'idle'
-        # 2026-09-21：**已经在 idle 就别再触发**。
-        #
-        # 物理层每次状态变化都会回调 set_anim('walk')；没有 walk motion 的模型
-        # 上面会把它降级成 idle —— 于是每 ~4 秒重播一次 idle motion 并打一行 INFO
-        # （实测 53 分钟 761 行，占日志 25%），idle 循环也被从头打断。
-        # 位移本来就由 physics 驱动，"再播一次 idle" 并不能表达走路。
-        #
-        # 通用性：判断依据是 **anim 与当前序列**，不认模型名。
-        # 有 walk motion 的模型不受影响（anim 仍是 'walk'，重复触发由渲染器的
-        # 「同 idx 已在播」去重守卫挡住）；sprite/atlas 走 running-left/right，
-        # 也到不了这里。
-        if anim == "idle" and getattr(self, "_anim_seq", None) == "idle":
+        # 2026-09-21：状态驱动的"回 idle"统一走 `_idle_if_not_already` ——
+        # 已经在 idle 就不再触发（物理层每步都会回调 set_anim('walk')）。
+        # 注意：**故意重播**（菜单手动点同一个动作）不走这条路，
+        # 它们带 emotion/style 或走后端 force_restart。
+        if anim == "idle":
+            self._idle_if_not_already()
             return
         self._set_anim_seq(anim)
