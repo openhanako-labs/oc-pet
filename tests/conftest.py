@@ -33,6 +33,7 @@
 """
 from __future__ import annotations
 
+import pathlib
 import sys
 
 import pytest
@@ -74,10 +75,64 @@ def _block_real_config_writes(monkeypatch):
                 monkeypatch.setattr(mod, "save_config", spy, raising=False)
 
     # 异步保存器（窗口位置等高频写入路径）
+    #
+    # 2026-09-21：这里原先只拦 submit/save/flush/shutdown，**漏了 schedule** ——
+    # 而 settings_dialog._switch_pet 走的正是 schedule()。schedule 会启动一个
+    # 防抖线程（150ms 后调模块级 save_config），线程醒来时测试往往已经结束、
+    # monkeypatch 已撤销，于是用**原函数**把用户的 config.json 写了。
+    # 症状极隐蔽：落不落盘取决于时序运气，跑十次可能只中一次（本文件的自检
+    # 用例查的是 config.save_config 是否被替换，根本查不出跨测试边界的落盘）。
+    # 因此 schedule 必须一并拦掉（不让线程被创建），再用 _run 做双保险。
     saver = getattr(config_mod, "async_config_saver", None)
     if saver is not None:
-        for name in ("submit", "save", "flush", "shutdown"):
+        for name in ("schedule", "submit", "save", "flush", "shutdown"):
             if hasattr(saver, name):
                 monkeypatch.setattr(saver, name, lambda *a, **k: None, raising=False)
+        if hasattr(saver, "_run"):
+            monkeypatch.setattr(saver, "_run", lambda *a, **k: None, raising=False)
 
     return spy
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _workspace_config_snapshot_guard():
+    """会话级兜底：整个会话期间 workspace 的 config.json 不得被改写。
+
+    为什么还要这一层（2026-09-21）：`_block_real_config_writes` 是**函数级**
+    守卫，测试一结束就撤销；而 `_AsyncConfigSaver` 的防抖线程是**跨测试边界**
+    醒来的——它能正好落在这条缝里用原函数落盘。这类“守卫看起来在、实际有洞”
+    的问题靠逐个堵入口防不住，所以再加一道与文件对账的兜底：
+    会话结束若发现 config.json 被改 → 恢复原内容，并让本次会话报错。
+
+    CI 上没有 config.json（被 .gitignore 排除）→ 自动跳过。
+    """
+    cfg_path = pathlib.Path(__file__).resolve().parent.parent / "config.json"
+    original: bytes | None = None
+    try:
+        if cfg_path.is_file():
+            original = cfg_path.read_bytes()
+    except OSError:
+        original = None
+
+    yield
+
+    if original is None:
+        return
+    try:
+        current = cfg_path.read_bytes()
+    except OSError:
+        return
+    if current == original:
+        return
+
+    note = "未恢复"
+    try:
+        cfg_path.write_bytes(original)
+        note = "已自动恢复原内容"
+    except OSError as e:
+        note = f"恢复失败：{e}"
+    raise AssertionError(
+        f"测试改写了 workspace 的 config.json（{note}）——说明有写盘路径绕过了 "
+        "conftest 的 _block_real_config_writes 守卫。请检查是否又出现新的落盘入口"
+        "（尤其是会跨测试边界的后台线程/定时器）。"
+    )

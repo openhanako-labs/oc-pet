@@ -164,3 +164,60 @@ def test_real_config_file_is_untouched_by_this_test():
     after = tuple((a["id"], a["enabled"])
                   for a in json.loads(cfg.read_text(encoding="utf-8")).get("agents", []))
     assert before == after, "测试写到了真实 config.json"
+
+
+# ══════════════════════════════════════════════════════════
+#  2026-09-21 事故回归：防抖线程跨测试边界落盘
+# ══════════════════════════════════════════════════════════
+
+def test_async_saver_schedule_is_blocked_by_guard():
+    """守卫必须拦掉 ``async_config_saver.schedule``。
+
+    原 bug：守卫只拦了 submit/save/flush/shutdown，**漏了 schedule**，而
+    ``settings_dialog._switch_pet`` 走的正是 schedule()。它会启动一个 150ms
+    防抖线程，线程醒来时测试往往已结束、monkeypatch 已撤销，于是用**原函数**
+    save_config 把用户的 config.json 写了（合并式写：45 个键还在，只有
+    agents/character/character_package 被覆盖，症状像"自己改过"）。
+
+    为什么旧自检没抓到：``test_conftest_guard_blocks_real_config_write`` 查的是
+    "调用 config.save_config 会不会落盘"，而这条路径的落盘发生在**测试边界之外**、
+    用的是**原函数**，与 spy 无关。所以这里改查修复点本身：schedule 不得生效。
+    """
+    import config as config_mod
+
+    saver = config_mod.async_config_saver
+    before_thread = saver._thread
+
+    saver.schedule({"agents": [{"id": "__race_probe__", "enabled": True}]})
+
+    assert saver._pending is None, (
+        "守卫未拦下 schedule：_pending 已被写入，防抖线程将会在测试边界外落盘"
+    )
+    assert saver._thread is before_thread, "守卫未拦下 schedule：防抖线程被创建了"
+
+
+def test_schedule_then_wait_does_not_touch_config_json():
+    """复现原事故条件：调度一次 + 等过防抖窗口 → 文件必须原封不动。
+
+    防抖窗口是 150ms（``config._AsyncConfigSaver`` 默认），这里等 4 倍。
+    """
+    import time
+    from pathlib import Path
+
+    import config as config_mod
+
+    cfg = Path(__file__).resolve().parent.parent / "config.json"
+    if not cfg.exists():
+        pytest.skip("无 config.json")
+    before = cfg.read_bytes()
+
+    config_mod.async_config_saver.schedule({
+        "agents": [{"id": "__race_probe__", "enabled": True}],
+        "character": "__race_probe__",
+    })
+
+    time.sleep(0.6)  # 4× debounce：线程若存在，一定已经醒来写过盘
+
+    assert cfg.read_bytes() == before, (
+        "async_config_saver 在等待窗口后写了真实 config.json"
+    )
